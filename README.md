@@ -1,4 +1,4 @@
-# Mini-OpenClaw
+# Ragclaw
 
 本项目是一个面向本地运行、文件优先、可审计的 Agent 工作台。
 
