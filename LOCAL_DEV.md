@@ -56,6 +56,17 @@ start-dev.cmd
 .\start-dev.ps1 -InstallIfMissing
 ```
 
+脚本行为：
+- 如果前后端已经在本项目端口上运行，会直接复用，不重复启动
+- 启动后会打印前端地址
+- 当前端可访问时，会自动打开默认浏览器跳转到前端页面
+
+如果你怀疑前端或后端卡在旧状态里，可以强制重启：
+
+```powershell
+.\start-dev.ps1 -Restart
+```
+
 ## 启动方式
 
 ### 启动后端
@@ -103,7 +114,7 @@ EMBEDDING_BASE_URL=
 ```
 
 说明：
-- 这会把聊天模型切到 Kimi。
+- 这会把聊天模型切到 Moonshot 官方开放平台上的 Kimi 模型。
 - 当前项目的向量检索依赖单独的 embedding provider；如果先不填 embedding，BM25 检索仍可用。
 - 如果你后面要做完整向量检索，可以再单独补一个 embedding 服务。
 
