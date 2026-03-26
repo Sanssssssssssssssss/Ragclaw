@@ -1,7 +1,7 @@
 # ARCHITECTURE
 
 ## 架构状态
-当前为初始化版本，基于参考仓库公开说明建立第一版架构约束，后续在代码入库后细化。
+当前为基线导入后的第一版，已结合实际代码结构补充本地运行与检索实现要点。
 
 ## 目标架构原则
 - 本地优先
@@ -19,10 +19,12 @@
 - 编排：LangGraph / Agent 工作流
 
 ### 我们的初步分层
-- `docs / *.md`：长期记忆与项目管理层
-- `baseline/` 或上游原始目录结构：参考基线实现层
-- `experiments/`：新 RAG 方向实验层
-- `scripts/`：初始化、同步、验证、评测辅助脚本
+- 根目录 `*.md`：长期记忆与项目管理层
+- `backend/`：FastAPI API、LangGraph agent、memory、knowledge、skills、tools
+- `frontend/`：Next.js 前端工作台
+- `docs/`：补充设计与学习材料
+- `.vscode/`：本地 demo / 学习用编辑器配置
+- 未来预留 `experiments/`：新 RAG 方向实验层
 
 ## 模块设计草案
 
@@ -33,11 +35,18 @@
 ### 2. 基线应用模块
 - 负责复现参考仓库中的最小可运行系统
 - 目标包括前端、后端、知识目录、技能目录与配置文件
+- 当前已确认的运行方式：
+  - 后端使用 `backend/.venv` + `uvicorn app:app --port 8004`
+  - 前端使用 `frontend` 下 `npm run dev`，默认访问 `http://127.0.0.1:3000`
 
 ### 3. 检索编排模块
 - 保留 Skill-first 主链路
 - 在证据不足时触发混合检索兜底
 - 后续在此处挂接多模态与图结构扩展
+- 当前已确认的实现细节：
+  - `knowledge_retrieval/indexer.py` 会同时准备 BM25 与向量索引
+  - 没有 embedding key 时，BM25 仍可用，向量索引会关闭
+  - 知识问答最终回答仍依赖 LLM，因此“完整知识问答”需要可用 API Key
 
 ### 4. 实验扩展模块
 - 用于隔离多模态 RAG、GraphRAG / RAGGraph、评测实验
@@ -56,4 +65,4 @@
 ## 当前未决架构问题
 - 是否严格保留上游目录结构
 - 是否需要在初始化阶段就引入 `experiments/` 分层
-- 上游同步方式使用 `upstream remote` 还是定期手工同步
+- 默认采用哪家模型供应商作为开发与 demo 标配

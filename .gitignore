@@ -19,7 +19,11 @@ backend/storage/knowledge/*
 frontend/.next/
 frontend/node_modules/
 frontend/.npm-cache/
-.vscode/
+.vscode/*
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/extensions.json
 .idea/
 *.log
 AGENTS.md

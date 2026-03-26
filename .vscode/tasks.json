@@ -1,0 +1,78 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Backend: Create venv",
+      "type": "shell",
+      "command": "py -3.13 -m venv .venv",
+      "options": {
+        "cwd": "${workspaceFolder}/backend"
+      }
+    },
+    {
+      "label": "Backend: Install deps",
+      "type": "shell",
+      "command": ".\\.venv\\Scripts\\python.exe -m pip install -r requirements.txt",
+      "options": {
+        "cwd": "${workspaceFolder}/backend"
+      },
+      "dependsOn": "Backend: Create venv"
+    },
+    {
+      "label": "Backend: Run dev server",
+      "type": "shell",
+      "command": ".\\.venv\\Scripts\\python.exe -m uvicorn app:app --host 127.0.0.1 --port 8004 --reload",
+      "options": {
+        "cwd": "${workspaceFolder}/backend"
+      },
+      "isBackground": true,
+      "problemMatcher": {
+        "owner": "custom",
+        "pattern": {
+          "regexp": "."
+        },
+        "background": {
+          "activeOnStart": true,
+          "beginsPattern": ".*Started reloader process.*|.*Uvicorn running on.*",
+          "endsPattern": ".*Application startup complete.*"
+        }
+      }
+    },
+    {
+      "label": "Frontend: Install deps",
+      "type": "shell",
+      "command": "npm install",
+      "options": {
+        "cwd": "${workspaceFolder}/frontend"
+      }
+    },
+    {
+      "label": "Frontend: Run dev server",
+      "type": "shell",
+      "command": "npm run dev",
+      "options": {
+        "cwd": "${workspaceFolder}/frontend"
+      },
+      "isBackground": true,
+      "problemMatcher": {
+        "owner": "custom",
+        "pattern": {
+          "regexp": "."
+        },
+        "background": {
+          "activeOnStart": true,
+          "beginsPattern": ".*next dev.*|.*Starting.*",
+          "endsPattern": ".*Ready in.*|.*Local:.*"
+        }
+      }
+    },
+    {
+      "label": "App: Install all",
+      "dependsOrder": "sequence",
+      "dependsOn": [
+        "Backend: Install deps",
+        "Frontend: Install deps"
+      ]
+    }
+  ]
+}

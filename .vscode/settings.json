@@ -1,0 +1,21 @@
+{
+  "files.encoding": "utf8",
+  "files.eol": "\n",
+  "editor.formatOnSave": true,
+  "python.defaultInterpreterPath": "${workspaceFolder}/backend/.venv/Scripts/python.exe",
+  "python.terminal.activateEnvironment": true,
+  "python.analysis.extraPaths": [
+    "${workspaceFolder}/backend"
+  ],
+  "typescript.tsdk": "${workspaceFolder}/frontend/node_modules/typescript/lib",
+  "search.exclude": {
+    "**/backend/.venv": true,
+    "**/frontend/.next": true,
+    "**/frontend/node_modules": true
+  },
+  "files.watcherExclude": {
+    "**/backend/.venv/**": true,
+    "**/frontend/.next/**": true,
+    "**/frontend/node_modules/**": true
+  }
+}
