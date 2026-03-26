@@ -127,13 +127,11 @@ cd backend
 ```
 
 如果配置正确，会返回一条简短回复。
-如果返回 `401 Invalid Authentication`，说明请求已经到达 Moonshot，但当前 key 无效，或不是开放平台可用的 API key。
-
-## 原因
-- 当前机器没有可用的 `OPENAI_API_KEY`、`DEEPSEEK_API_KEY`、`ZHIPU_API_KEY`、`BAILIAN_API_KEY`
-- 在无 Key 情况下，流式聊天接口会返回 `Missing API key for provider zhipu`
+如果返回 `401 Invalid Authentication`，说明你走的是 Moonshot 开放平台接口，但当前 key 不是这个接口可用的开放平台 key。
+如果返回 `403` 且提示 `Kimi For Coding is currently only available for Coding Agents`，说明这把 key 属于 Kimi Code 体系，只能用于官方文档列出的 coding agents，而不能直接用于当前这个通用 Web 项目。
 
 ## 下一步
-1. 选定默认模型供应商
-2. 在 `backend/.env` 中写入对应 Key
-3. 重新验证聊天与知识问答完整链路
+1. 选择接入方向：
+   - 更换为 Moonshot 开放平台可用的 Kimi API Key，继续走当前 Web 项目架构
+   - 或者单独接入官方支持的 Kimi Code agent 体系
+2. 重新验证聊天与知识问答完整链路

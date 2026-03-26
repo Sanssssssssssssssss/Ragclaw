@@ -31,7 +31,7 @@
 - T-014 “知识检索 + LLM 回答”的完整链路验证
 
 ## 当前阻塞原因
-- 当前提供的 Kimi key 触发 `401 Invalid Authentication`
+- 当前提供的 Kimi Code key 与本项目现有 Web 接法不兼容
 - 在认证通过前，真实聊天与真实知识问答都无法完成
 
 ## 任务说明
