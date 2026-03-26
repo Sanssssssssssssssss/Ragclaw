@@ -66,3 +66,15 @@
 - 是否严格保留上游目录结构
 - 是否需要在初始化阶段就引入 `experiments/` 分层
 - 默认采用哪家模型供应商作为开发与 demo 标配
+## 2026-03-26 架构补充
+- 主回答链路与工具调用链路已拆分：
+  - 主回答模型继续使用 `LLM_*` 配置
+  - 工具调用型 agent 使用独立的 `TOOL_LLM_*` 配置
+- 当前 Kimi 接入的默认运行方式：
+  - 回答模型：`kimi-k2.5`
+  - 工具模型：`moonshot-v1-8k`
+  - Base URL：`https://api.moonshot.cn/v1`
+- 向量检索支持两类 embedding 路径：
+  - OpenAI-compatible 远程 embedding provider
+  - 本地 HuggingFace embedding provider
+- 当前 demo 默认采用本地 embedding provider，以便在没有额外商业 embedding key 时也能完成向量检索验证。

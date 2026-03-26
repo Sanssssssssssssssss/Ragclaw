@@ -10,6 +10,10 @@ from pathlib import Path
 from typing import Any
 
 from llama_index.core import Document, Settings as LlamaSettings, StorageContext, VectorStoreIndex, load_index_from_storage
+try:
+    from llama_index.embeddings.huggingface import HuggingFaceEmbedding
+except ImportError:  # pragma: no cover - optional dependency at runtime
+    HuggingFaceEmbedding = None
 from llama_index.embeddings.openai import OpenAIEmbedding
 
 from config import get_settings
@@ -72,10 +76,17 @@ class KnowledgeIndexer:
         return self._storage_dir / "derived"
 
     def _supports_embeddings(self) -> bool:
-        return bool(get_settings().embedding_api_key)
-
-    def _build_embed_model(self) -> OpenAIEmbedding:
         settings = get_settings()
+        if settings.embedding_provider == "local":
+            return True
+        return bool(settings.embedding_api_key)
+
+    def _build_embed_model(self):
+        settings = get_settings()
+        if settings.embedding_provider == "local":
+            if HuggingFaceEmbedding is None:
+                raise RuntimeError("llama-index-embeddings-huggingface is not installed")
+            return HuggingFaceEmbedding(model_name=settings.embedding_model)
         return OpenAIEmbedding(
             api_key=settings.embedding_api_key,
             api_base=settings.embedding_base_url,

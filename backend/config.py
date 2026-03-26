@@ -15,7 +15,7 @@ ENV_FILE_NAME = ".env"
 LLM_PROVIDER_DEFAULTS: dict[str, dict[str, str]] = {
     "kimi": {
         "model": "kimi-k2.5",
-        "base_url": "https://api.moonshot.ai/v1",
+        "base_url": "https://api.moonshot.cn/v1",
     },
     "zhipu": {
         "model": "glm-5",
@@ -36,6 +36,10 @@ LLM_PROVIDER_DEFAULTS: dict[str, dict[str, str]] = {
 }
 
 EMBEDDING_PROVIDER_DEFAULTS: dict[str, dict[str, str]] = {
+    "local": {
+        "model": "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2",
+        "base_url": "",
+    },
     "zhipu": {
         "model": "embedding-3",
         "base_url": "https://open.bigmodel.cn/api/paas/v4/",
@@ -59,6 +63,8 @@ PROVIDER_ALIASES = {
     "aliyun": "bailian",
     "dashscope": "bailian",
     "qwen": "bailian",
+    "huggingface": "local",
+    "local-embedding": "local",
     "openai-compatible": "openai",
     "compatible": "openai",
 }
@@ -73,6 +79,11 @@ class Settings:
     llm_api_key: str | None
     llm_base_url: str
     llm_temperature: float
+    tool_llm_provider: str
+    tool_llm_model: str
+    tool_llm_api_key: str | None
+    tool_llm_base_url: str
+    tool_llm_temperature: float
     embedding_provider: str
     embedding_model: str
     embedding_api_key: str | None
@@ -204,7 +215,63 @@ def _resolve_llm_temperature(provider: str, model: str) -> float:
     return 0.0
 
 
+def _resolve_tool_llm_provider(default_provider: str) -> str:
+    return _normalize_provider(
+        _first_config_value("TOOL_LLM_PROVIDER"),
+        default=default_provider,
+        defaults=LLM_PROVIDER_DEFAULTS,
+    )
+
+
+def _resolve_tool_llm_model(tool_provider: str, llm_provider: str, llm_model: str) -> str:
+    configured = _first_config_value("TOOL_LLM_MODEL")
+    if configured:
+        return configured
+    if tool_provider == "kimi":
+        return "moonshot-v1-8k"
+    if tool_provider == llm_provider:
+        return llm_model
+    return LLM_PROVIDER_DEFAULTS[tool_provider]["model"]
+
+
+def _resolve_tool_llm_api_key(
+    tool_provider: str,
+    llm_provider: str,
+    llm_api_key: str | None,
+) -> str | None:
+    configured = _first_api_key("TOOL_LLM_API_KEY")
+    if configured:
+        return configured
+    if tool_provider == llm_provider and llm_api_key:
+        return llm_api_key
+    return _resolve_llm_api_key(tool_provider)
+
+
+def _resolve_tool_llm_base_url(
+    tool_provider: str,
+    llm_provider: str,
+    llm_base_url: str,
+) -> str:
+    configured = _first_config_value("TOOL_LLM_BASE_URL")
+    if configured:
+        return configured
+    if tool_provider == llm_provider and llm_base_url:
+        return llm_base_url
+    return _resolve_llm_base_url(tool_provider)
+
+
+def _resolve_tool_llm_temperature(tool_provider: str, tool_model: str) -> float:
+    configured = _parse_float(_first_config_value("TOOL_LLM_TEMPERATURE"))
+    if configured is not None:
+        return configured
+    if tool_provider == "kimi":
+        return 0.0
+    return _resolve_llm_temperature(tool_provider, tool_model)
+
+
 def _resolve_embedding_api_key(provider: str) -> str | None:
+    if provider == "local":
+        return None
     if provider == "zhipu":
         return _first_api_key("EMBEDDING_API_KEY", "ZHIPU_API_KEY", "ZHIPUAI_API_KEY")
     if provider == "bailian":
@@ -213,6 +280,11 @@ def _resolve_embedding_api_key(provider: str) -> str | None:
 
 
 def _resolve_embedding_model(provider: str) -> str:
+    if provider == "local":
+        return (
+            _first_config_value("EMBEDDING_MODEL", "LOCAL_EMBEDDING_MODEL")
+            or EMBEDDING_PROVIDER_DEFAULTS[provider]["model"]
+        )
     if provider == "zhipu":
         return (
             _first_config_value("EMBEDDING_MODEL", "ZHIPU_EMBEDDING_MODEL", "ZHIPU_MODEL")
@@ -227,6 +299,8 @@ def _resolve_embedding_model(provider: str) -> str:
 
 
 def _resolve_embedding_base_url(provider: str) -> str:
+    if provider == "local":
+        return _first_config_value("EMBEDDING_BASE_URL", "LOCAL_EMBEDDING_BASE_URL") or ""
     if provider == "zhipu":
         return (
             _first_config_value("EMBEDDING_BASE_URL", "ZHIPU_EMBEDDING_BASE_URL", "ZHIPU_BASE_URL")
@@ -259,15 +333,25 @@ def get_settings() -> Settings:
         defaults=EMBEDDING_PROVIDER_DEFAULTS,
     )
     llm_model = _resolve_llm_model(llm_provider)
+    llm_api_key = _resolve_llm_api_key(llm_provider)
+    llm_base_url = _resolve_llm_base_url(llm_provider)
+    llm_temperature = _resolve_llm_temperature(llm_provider, llm_model)
+    tool_llm_provider = _resolve_tool_llm_provider(llm_provider)
+    tool_llm_model = _resolve_tool_llm_model(tool_llm_provider, llm_provider, llm_model)
 
     return Settings(
         backend_dir=backend_dir,
         project_root=project_root,
         llm_provider=llm_provider,
         llm_model=llm_model,
-        llm_api_key=_resolve_llm_api_key(llm_provider),
-        llm_base_url=_resolve_llm_base_url(llm_provider),
-        llm_temperature=_resolve_llm_temperature(llm_provider, llm_model),
+        llm_api_key=llm_api_key,
+        llm_base_url=llm_base_url,
+        llm_temperature=llm_temperature,
+        tool_llm_provider=tool_llm_provider,
+        tool_llm_model=tool_llm_model,
+        tool_llm_api_key=_resolve_tool_llm_api_key(tool_llm_provider, llm_provider, llm_api_key),
+        tool_llm_base_url=_resolve_tool_llm_base_url(tool_llm_provider, llm_provider, llm_base_url),
+        tool_llm_temperature=_resolve_tool_llm_temperature(tool_llm_provider, tool_llm_model),
         embedding_provider=embedding_provider,
         embedding_model=_resolve_embedding_model(embedding_provider),
         embedding_api_key=_resolve_embedding_api_key(embedding_provider),

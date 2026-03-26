@@ -97,3 +97,28 @@
   - 启动脚本在启动前端时自动写入 `NEXT_PUBLIC_API_BASE_URL=http://127.0.0.1:8014/api`
 - 原因：
   - 当前机器上的 `8004` 存在异常监听占用，影响稳定启动；切换端口能保证脚本即开即用
+## D-013 聊天模型与工具模型分离
+- 状态：Accepted
+- 日期：2026-03-26
+- 决策：
+  - 主回答链路继续使用 `kimi-k2.5`
+  - 所有依赖 LangChain `create_agent` 的工具调用型 agent 默认改用 `moonshot-v1-8k`
+- 原因：
+  - 实测 `kimi-k2.5` 在多轮工具调用时会触发 `reasoning_content is missing` 错误，而 `moonshot-v1-8k` 可稳定完成工具调用
+
+## D-014 向量检索默认补齐方案
+- 状态：Accepted
+- 日期：2026-03-26
+- 决策：
+  - 为知识索引增加本地 HuggingFace embedding provider
+  - demo 默认使用本地 embedding provider 补齐向量检索能力
+- 原因：
+  - 在 Moonshot embedding 能力未完成官方文档核实前，本地方案更稳、更符合当前学习和演示目标
+
+## D-015 上下文建立必须经过 Markdown 记忆文件
+- 状态：Accepted
+- 日期：2026-03-26
+- 决策：
+  - 每一轮开始任务前，必须先基于 `PROJECT_BRIEF.md`、`REQUIREMENTS.md`、`ARCHITECTURE.md`、`DECISIONS.md`、`TASKS.md`、`STATE.md` 重建上下文
+- 原因：
+  - 避免把聊天上下文当作唯一记忆来源，确保项目可以跨多轮、跨会话稳定延续

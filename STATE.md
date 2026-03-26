@@ -61,3 +61,17 @@
 ## 当前风险补充
 - `kimi-k2.5` 对 LangChain 工具调用消息格式更严格，知识链路中的 `SkillRetrieverAgent` 目前采用“失败后自动降级到 hybrid retrieval”的方式保证可用
 - 纯工具调用型 agent 未来若要深度依赖 Kimi，还需要再做一轮专门兼容性改造
+## 2026-03-26 第二次进展
+- 已按项目约束在本轮开始前基于 Markdown 记忆文件重建上下文
+- 主回答模型仍为 `kimi-k2.5`
+- 工具调用型 agent 已切换到 `moonshot-v1-8k`，并已通过真实工具调用验证
+- 本地 embedding provider 已接入，当前配置为 `sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2`
+- 知识索引当前状态已补齐为 `vector_ready=true` 且 `bm25_ready=true`
+- 新增验证脚本：
+  - `backend/scripts/verify_kimi_connection.py`
+  - `backend/scripts/verify_tool_agent_connection.py`
+  - `backend/scripts/verify_vector_retrieval.py`
+
+## 当前补充风险
+- 本地 embedding 首次运行会下载模型，首次构建耗时会明显高于后续增量运行
+- `SkillRetrieverAgent` 当前仍保留降级保护；虽然工具模型已可用，但是否完全移除降级逻辑需要下一轮再评估

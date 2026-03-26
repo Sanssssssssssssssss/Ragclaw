@@ -136,3 +136,32 @@ cd backend
    - 更换为 Moonshot 开放平台可用的 Kimi API Key，继续走当前 Web 项目架构
    - 或者单独接入官方支持的 Kimi Code agent 体系
 2. 重新验证聊天与知识问答完整链路
+## 2026-03-26 补充说明
+
+### 工具模型
+- 主回答模型默认使用 `kimi-k2.5`
+- 工具调用型 agent 默认使用 `moonshot-v1-8k`
+- 对应配置写在 `backend/.env`：
+
+```env
+TOOL_LLM_PROVIDER=kimi
+TOOL_LLM_MODEL=moonshot-v1-8k
+TOOL_LLM_TEMPERATURE=0
+```
+
+### 本地向量检索
+- 当前 demo 默认支持本地 embedding provider
+- 对应配置写在 `backend/.env`：
+
+```env
+EMBEDDING_PROVIDER=local
+EMBEDDING_MODEL=sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2
+```
+
+### 独立验证脚本
+```powershell
+cd backend
+.\.venv\Scripts\python.exe scripts\verify_kimi_connection.py
+.\.venv\Scripts\python.exe scripts\verify_tool_agent_connection.py
+.\.venv\Scripts\python.exe scripts\verify_vector_retrieval.py
+```

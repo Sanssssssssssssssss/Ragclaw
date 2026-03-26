@@ -51,31 +51,57 @@ class AgentManager:
         self.base_dir = base_dir
         self.session_manager = SessionManager(base_dir)
         self.tools = get_all_tools(base_dir)
-        knowledge_orchestrator.configure(base_dir, self._build_chat_model)
+        knowledge_orchestrator.configure(base_dir, self._build_tool_model)
+
+    def _build_model(
+        self,
+        *,
+        provider: str,
+        model: str,
+        api_key: str | None,
+        base_url: str,
+        temperature: float,
+    ):
+        if provider == "deepseek":
+            if ChatDeepSeek is None:
+                raise RuntimeError("langchain-deepseek is not installed")
+            if not api_key:
+                raise RuntimeError("Missing API key for provider deepseek")
+            return ChatDeepSeek(
+                model=model,
+                api_key=api_key,
+                base_url=base_url,
+                temperature=temperature,
+            )
+
+        if not api_key:
+            raise RuntimeError(f"Missing API key for provider {provider}")
+
+        return ChatOpenAI(
+            model=model,
+            api_key=api_key,
+            base_url=base_url,
+            temperature=temperature,
+        )
 
     def _build_chat_model(self):
         settings = get_settings()
-
-        if settings.llm_provider == "deepseek":
-            if ChatDeepSeek is None:
-                raise RuntimeError("langchain-deepseek is not installed")
-            if not settings.llm_api_key:
-                raise RuntimeError("Missing API key for provider deepseek")
-            return ChatDeepSeek(
-                model=settings.llm_model,
-                api_key=settings.llm_api_key,
-                base_url=settings.llm_base_url,
-                temperature=settings.llm_temperature,
-            )
-
-        if not settings.llm_api_key:
-            raise RuntimeError(f"Missing API key for provider {settings.llm_provider}")
-
-        return ChatOpenAI(
+        return self._build_model(
+            provider=settings.llm_provider,
             model=settings.llm_model,
             api_key=settings.llm_api_key,
             base_url=settings.llm_base_url,
             temperature=settings.llm_temperature,
+        )
+
+    def _build_tool_model(self):
+        settings = get_settings()
+        return self._build_model(
+            provider=settings.tool_llm_provider,
+            model=settings.tool_llm_model,
+            api_key=settings.tool_llm_api_key,
+            base_url=settings.tool_llm_base_url,
+            temperature=settings.tool_llm_temperature,
         )
 
     def _build_agent(
@@ -90,7 +116,7 @@ class AgentManager:
         if extra_instructions:
             system_prompt = f"{system_prompt}\n\n" + "\n\n".join(extra_instructions)
         return create_agent(
-            model=self._build_chat_model(),
+            model=self._build_tool_model(),
             tools=self.tools if tools_override is None else tools_override,
             system_prompt=system_prompt,
         )
