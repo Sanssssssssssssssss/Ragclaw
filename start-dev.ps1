@@ -14,8 +14,8 @@ $backendPython = Join-Path $backendDir ".venv\\Scripts\\python.exe"
 $frontendNodeModules = Join-Path $frontendDir "node_modules"
 $backendEnvFile = Join-Path $backendDir ".env"
 $frontendUrl = "http://127.0.0.1:3000"
-$backendUrl = "http://127.0.0.1:8004"
-$healthUrl = "http://127.0.0.1:8004/health"
+$backendUrl = "http://127.0.0.1:8014"
+$healthUrl = "http://127.0.0.1:8014/health"
 
 function Get-ListeningProcessDetails {
     param(
@@ -114,12 +114,12 @@ Ensure-BackendEnvironment
 Ensure-FrontendEnvironment
 
 $frontendProcess = Get-ListeningProcessDetails -Port 3000
-$backendProcess = Get-ListeningProcessDetails -Port 8004
+$backendProcess = Get-ListeningProcessDetails -Port 8014
 
 if ($Restart -and -not $DryRun) {
     if ($backendProcess -and $backendProcess.IsProjectProcess) {
         Stop-Process -Id $backendProcess.ProcessId -Force
-        Write-Host "Stopped existing backend process on 8004 (PID $($backendProcess.ProcessId))." -ForegroundColor Yellow
+        Write-Host "Stopped existing backend process on 8014 (PID $($backendProcess.ProcessId))." -ForegroundColor Yellow
         Start-Sleep -Milliseconds 500
         $backendProcess = $null
     }
@@ -137,11 +137,12 @@ Set-Location '$backendDir'
 if (-not (Test-Path '.env')) {
   Write-Host '[tip] backend/.env is missing. Copy .env.example to .env and add your Kimi API key.' -ForegroundColor Yellow
 }
-.\.venv\Scripts\python.exe -m uvicorn app:app --host 127.0.0.1 --port 8004 --reload
+.\.venv\Scripts\python.exe -m uvicorn app:app --host 127.0.0.1 --port 8014 --reload
 "@
 
 $frontendCommand = @"
 Set-Location '$frontendDir'
+$env:NEXT_PUBLIC_API_BASE_URL = '$backendUrl/api'
 npm run dev
 "@
 
@@ -153,10 +154,10 @@ if ($DryRun) {
         Write-Host "[dry-run] Frontend will be restarted if a project process is detected on 3000."
     }
     if ($backendProcess) {
-        Write-Host "[dry-run] Existing backend listener on 8004: PID $($backendProcess.ProcessId) ($($backendProcess.Name))"
+        Write-Host "[dry-run] Existing backend listener on 8014: PID $($backendProcess.ProcessId) ($($backendProcess.Name))"
     }
     elseif ($Restart) {
-        Write-Host "[dry-run] Backend will be restarted if a project process is detected on 8004."
+        Write-Host "[dry-run] Backend will be restarted if a project process is detected on 8014."
     }
     Write-Host "[dry-run] Backend command:" -ForegroundColor Green
     Write-Host $backendCommand
@@ -167,13 +168,13 @@ if ($DryRun) {
 
 if ($backendProcess) {
     if ($backendProcess.IsProjectProcess) {
-        Write-Host "Backend already running on 8004 (PID $($backendProcess.ProcessId)). Reusing it." -ForegroundColor Yellow
+        Write-Host "Backend already running on 8014 (PID $($backendProcess.ProcessId)). Reusing it." -ForegroundColor Yellow
     }
     elseif (Wait-ForHttpEndpoint -Url $healthUrl -TimeoutSeconds 3) {
-        Write-Host "Backend is reachable on 8004. Reusing the existing listener." -ForegroundColor Yellow
+        Write-Host "Backend is reachable on 8014. Reusing the existing listener." -ForegroundColor Yellow
     }
     else {
-        throw "Port 8004 is already in use by PID $($backendProcess.ProcessId) ($($backendProcess.Name)). Please stop it first."
+        throw "Port 8014 is already in use by PID $($backendProcess.ProcessId) ($($backendProcess.Name)). Please stop it first."
     }
 }
 else {

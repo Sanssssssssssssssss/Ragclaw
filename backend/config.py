@@ -72,6 +72,7 @@ class Settings:
     llm_model: str
     llm_api_key: str | None
     llm_base_url: str
+    llm_temperature: float
     embedding_provider: str
     embedding_model: str
     embedding_api_key: str | None
@@ -130,6 +131,15 @@ def _first_api_key(*names: str) -> str | None:
     return _first_config_value(*names)
 
 
+def _parse_float(value: str | None) -> float | None:
+    if value is None:
+        return None
+    try:
+        return float(value.strip())
+    except (TypeError, ValueError):
+        return None
+
+
 def _normalize_provider(
     value: str | None,
     *,
@@ -183,6 +193,15 @@ def _resolve_llm_base_url(provider: str) -> str:
     if provider == "deepseek":
         return _first_config_value("LLM_BASE_URL", "DEEPSEEK_BASE_URL") or LLM_PROVIDER_DEFAULTS[provider]["base_url"]
     return _first_config_value("LLM_BASE_URL", "OPENAI_BASE_URL") or LLM_PROVIDER_DEFAULTS[provider]["base_url"]
+
+
+def _resolve_llm_temperature(provider: str, model: str) -> float:
+    configured = _parse_float(_first_config_value("LLM_TEMPERATURE"))
+    if configured is not None:
+        return configured
+    if provider == "kimi" and model.strip().lower() == "kimi-k2.5":
+        return 1.0
+    return 0.0
 
 
 def _resolve_embedding_api_key(provider: str) -> str | None:
@@ -239,14 +258,16 @@ def get_settings() -> Settings:
         default="bailian",
         defaults=EMBEDDING_PROVIDER_DEFAULTS,
     )
+    llm_model = _resolve_llm_model(llm_provider)
 
     return Settings(
         backend_dir=backend_dir,
         project_root=project_root,
         llm_provider=llm_provider,
-        llm_model=_resolve_llm_model(llm_provider),
+        llm_model=llm_model,
         llm_api_key=_resolve_llm_api_key(llm_provider),
         llm_base_url=_resolve_llm_base_url(llm_provider),
+        llm_temperature=_resolve_llm_temperature(llm_provider, llm_model),
         embedding_provider=embedding_provider,
         embedding_model=_resolve_embedding_model(embedding_provider),
         embedding_api_key=_resolve_embedding_api_key(embedding_provider),

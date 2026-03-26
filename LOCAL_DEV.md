@@ -72,7 +72,7 @@ start-dev.cmd
 ### 启动后端
 ```powershell
 cd backend
-.\.venv\Scripts\python.exe -m uvicorn app:app --host 127.0.0.1 --port 8004 --reload
+.\.venv\Scripts\python.exe -m uvicorn app:app --host 127.0.0.1 --port 8014 --reload
 ```
 
 ### 启动前端
@@ -83,8 +83,8 @@ npm run dev
 
 ## 访问地址
 - 前端：http://127.0.0.1:3000
-- 后端健康检查：http://127.0.0.1:8004/health
-- 知识索引状态：http://127.0.0.1:8004/api/knowledge/index/status
+- 后端健康检查：http://127.0.0.1:8014/health
+- 知识索引状态：http://127.0.0.1:8014/api/knowledge/index/status
 
 ## 当前已验证项
 - 后端可启动，`/health` 返回 `{"status":"ok"}`
@@ -105,7 +105,8 @@ npm run dev
 LLM_PROVIDER=kimi
 LLM_MODEL=kimi-k2.5
 LLM_API_KEY=你的_kimi_api_key
-LLM_BASE_URL=https://api.moonshot.ai/v1
+LLM_BASE_URL=https://api.moonshot.cn/v1
+LLM_TEMPERATURE=1
 
 EMBEDDING_PROVIDER=
 EMBEDDING_MODEL=

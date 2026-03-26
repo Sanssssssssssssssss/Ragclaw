@@ -27,7 +27,7 @@ def main() -> None:
         model=settings.llm_model,
         api_key=settings.llm_api_key,
         base_url=settings.llm_base_url,
-        temperature=0,
+        temperature=settings.llm_temperature,
     )
     response = client.invoke(
         [
@@ -53,6 +53,7 @@ def main() -> None:
                 "provider": settings.llm_provider,
                 "model": settings.llm_model,
                 "base_url": settings.llm_base_url,
+                "temperature": settings.llm_temperature,
                 "reply": str(content).strip(),
             },
             ensure_ascii=False,

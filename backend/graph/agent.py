@@ -65,7 +65,7 @@ class AgentManager:
                 model=settings.llm_model,
                 api_key=settings.llm_api_key,
                 base_url=settings.llm_base_url,
-                temperature=0,
+                temperature=settings.llm_temperature,
             )
 
         if not settings.llm_api_key:
@@ -75,7 +75,7 @@ class AgentManager:
             model=settings.llm_model,
             api_key=settings.llm_api_key,
             base_url=settings.llm_base_url,
-            temperature=0,
+            temperature=settings.llm_temperature,
         )
 
     def _build_agent(

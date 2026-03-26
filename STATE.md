@@ -47,3 +47,17 @@
   5. `TASKS.md`
   6. `STATE.md`
 - 若聊天内容与文档冲突，以最新确认的文档为准，并在本文件记录冲突处理结果
+
+## 2026-03-26 新进展
+- 已换用新的 Kimi API key，本地真实配置位于 `backend/.env`，当前可用模型为 `kimi-k2.5`
+- 实测可用接法为 `LLM_BASE_URL=https://api.moonshot.cn/v1`
+- `kimi-k2.5` 在当前账号下需要 `LLM_TEMPERATURE=1`
+- `backend/scripts/verify_kimi_connection.py` 已验证通过，返回 `Kimi connection ok`
+- 项目真实聊天链路已验证通过：`/api/chat` 可返回正常回答
+- 项目真实知识问答链路已验证通过：`/api/chat` 可走检索并返回带文件路径的回答
+- 当前开发后端默认端口已切换到 `8014`，前端默认仍为 `3000`
+- 根目录启动脚本会在启动前端时自动注入 `NEXT_PUBLIC_API_BASE_URL=http://127.0.0.1:8014/api`
+
+## 当前风险补充
+- `kimi-k2.5` 对 LangChain 工具调用消息格式更严格，知识链路中的 `SkillRetrieverAgent` 目前采用“失败后自动降级到 hybrid retrieval”的方式保证可用
+- 纯工具调用型 agent 未来若要深度依赖 Kimi，还需要再做一轮专门兼容性改造

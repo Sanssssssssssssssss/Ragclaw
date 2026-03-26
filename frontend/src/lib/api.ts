@@ -57,7 +57,7 @@ export type StreamHandlers = {
   onEvent: (event: string, data: Record<string, unknown>) => void;
 };
 
-const DEFAULT_API_PORT = "8004";
+const DEFAULT_API_PORT = "8014";
 
 function normalizeApiBase(base: string) {
   return base.endsWith("/") ? base.slice(0, -1) : base;
