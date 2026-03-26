@@ -87,7 +87,8 @@ npm run dev
 - 向量检索效果
 
 ## Kimi 配置
-请在 [backend/.env](D:/GPT_Project/RAG_Model/backend/.env) 中填写，最小可用配置如下：
+不要写在 `.env.example` 里。  
+请写在真实运行文件 [backend/.env](D:/GPT_Project/RAG_Model/backend/.env) 中，最小可用配置如下：
 
 ```env
 LLM_PROVIDER=kimi
