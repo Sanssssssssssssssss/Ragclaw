@@ -118,6 +118,17 @@ EMBEDDING_BASE_URL=
 - 当前项目的向量检索依赖单独的 embedding provider；如果先不填 embedding，BM25 检索仍可用。
 - 如果你后面要做完整向量检索，可以再单独补一个 embedding 服务。
 
+## Kimi 连通性验证
+可以直接运行下面的脚本验证本地配置是否可用：
+
+```powershell
+cd backend
+.\.venv\Scripts\python.exe scripts\verify_kimi_connection.py
+```
+
+如果配置正确，会返回一条简短回复。
+如果返回 `401 Invalid Authentication`，说明请求已经到达 Moonshot，但当前 key 无效，或不是开放平台可用的 API key。
+
 ## 原因
 - 当前机器没有可用的 `OPENAI_API_KEY`、`DEEPSEEK_API_KEY`、`ZHIPU_API_KEY`、`BAILIAN_API_KEY`
 - 在无 Key 情况下，流式聊天接口会返回 `Missing API key for provider zhipu`

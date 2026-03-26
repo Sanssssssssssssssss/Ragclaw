@@ -26,12 +26,13 @@
 - T-018 修正一键启动脚本的端口占用处理逻辑
 
 ## 阻塞 Blocked
+- T-012 在本地写入 Kimi API Key 并完成连通性验证
 - T-013 真实流式聊天回答链路验证
 - T-014 “知识检索 + LLM 回答”的完整链路验证
 
 ## 当前阻塞原因
-- 当前环境没有可用的 LLM / embedding / web search API Key
-- 在无 Key 情况下，流式聊天接口会返回 `Missing API key for provider zhipu`
+- 当前提供的 Kimi key 触发 `401 Invalid Authentication`
+- 在认证通过前，真实聊天与真实知识问答都无法完成
 
 ## 任务说明
 - 所有任务完成后需同步更新 `STATE.md`
