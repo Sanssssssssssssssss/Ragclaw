@@ -37,6 +37,25 @@ npm install
 - `Frontend: Run dev server`
 - `Demo: Backend + Frontend`
 
+## 一键启动
+在仓库根目录执行：
+
+```powershell
+.\start-dev.ps1
+```
+
+或者：
+
+```powershell
+start-dev.cmd
+```
+
+如果依赖还没装完，可以执行：
+
+```powershell
+.\start-dev.ps1 -InstallIfMissing
+```
+
 ## 启动方式
 
 ### 启动后端
@@ -66,6 +85,26 @@ npm run dev
 - 真实流式聊天回答
 - 真实“知识检索 + LLM 回答”闭环
 - 向量检索效果
+
+## Kimi 配置
+请在 [backend/.env](D:/GPT_Project/RAG_Model/backend/.env) 中填写，最小可用配置如下：
+
+```env
+LLM_PROVIDER=kimi
+LLM_MODEL=kimi-k2.5
+LLM_API_KEY=你的_kimi_api_key
+LLM_BASE_URL=https://api.moonshot.ai/v1
+
+EMBEDDING_PROVIDER=
+EMBEDDING_MODEL=
+EMBEDDING_API_KEY=
+EMBEDDING_BASE_URL=
+```
+
+说明：
+- 这会把聊天模型切到 Kimi。
+- 当前项目的向量检索依赖单独的 embedding provider；如果先不填 embedding，BM25 检索仍可用。
+- 如果你后面要做完整向量检索，可以再单独补一个 embedding 服务。
 
 ## 原因
 - 当前机器没有可用的 `OPENAI_API_KEY`、`DEEPSEEK_API_KEY`、`ZHIPU_API_KEY`、`BAILIAN_API_KEY`

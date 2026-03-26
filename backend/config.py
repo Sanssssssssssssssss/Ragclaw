@@ -13,6 +13,10 @@ from dotenv import dotenv_values, load_dotenv
 ENV_FILE_NAME = ".env"
 
 LLM_PROVIDER_DEFAULTS: dict[str, dict[str, str]] = {
+    "kimi": {
+        "model": "kimi-k2.5",
+        "base_url": "https://api.moonshot.ai/v1",
+    },
     "zhipu": {
         "model": "glm-5",
         "base_url": "https://open.bigmodel.cn/api/paas/v4/",
@@ -47,6 +51,8 @@ EMBEDDING_PROVIDER_DEFAULTS: dict[str, dict[str, str]] = {
 }
 
 PROVIDER_ALIASES = {
+    "moonshot": "kimi",
+    "moonshotai": "kimi",
     "glm": "zhipu",
     "zhipuai": "zhipu",
     "bigmodel": "zhipu",
@@ -138,6 +144,8 @@ def _normalize_provider(
 
 
 def _resolve_llm_api_key(provider: str) -> str | None:
+    if provider == "kimi":
+        return _first_api_key("LLM_API_KEY", "KIMI_API_KEY", "MOONSHOT_API_KEY")
     if provider == "zhipu":
         return _first_api_key("LLM_API_KEY", "ZHIPU_API_KEY", "ZHIPUAI_API_KEY")
     if provider == "bailian":
@@ -148,6 +156,11 @@ def _resolve_llm_api_key(provider: str) -> str | None:
 
 
 def _resolve_llm_model(provider: str) -> str:
+    if provider == "kimi":
+        return (
+            _first_config_value("LLM_MODEL", "KIMI_MODEL", "MOONSHOT_MODEL")
+            or LLM_PROVIDER_DEFAULTS[provider]["model"]
+        )
     if provider == "zhipu":
         return _first_config_value("LLM_MODEL", "ZHIPU_MODEL") or LLM_PROVIDER_DEFAULTS[provider]["model"]
     if provider == "bailian":
@@ -158,6 +171,11 @@ def _resolve_llm_model(provider: str) -> str:
 
 
 def _resolve_llm_base_url(provider: str) -> str:
+    if provider == "kimi":
+        return (
+            _first_config_value("LLM_BASE_URL", "KIMI_BASE_URL", "MOONSHOT_BASE_URL")
+            or LLM_PROVIDER_DEFAULTS[provider]["base_url"]
+        )
     if provider == "zhipu":
         return _first_config_value("LLM_BASE_URL", "ZHIPU_BASE_URL") or LLM_PROVIDER_DEFAULTS[provider]["base_url"]
     if provider == "bailian":

@@ -42,17 +42,17 @@ export function ThoughtChain({ toolCalls }: { toolCalls: ToolCall[] }) {
       onToggle={(event) => setIsOpen(event.currentTarget.open)}
       open={isOpen}
     >
-      <summary className="flex cursor-pointer list-none items-start gap-3 text-sm font-medium text-[var(--color-ember)]">
+      <summary className="flex cursor-pointer list-none items-start gap-3 text-base font-medium text-[var(--color-ember)]">
         <TerminalSquare className="mt-0.5 shrink-0" size={16} />
         <div className="min-w-0 flex-1">
           <div>
             {activeTool ? `正在调用 ${activeTool.tool}` : `工具调用 ${toolCalls.length} 次`}
           </div>
-          <div className="truncate text-xs font-normal text-[var(--color-ink-soft)]">
+          <div className="truncate text-sm font-normal text-[var(--color-ink-soft)]">
             {toolNames.join(" -> ")}
           </div>
         </div>
-        <span className="shrink-0 text-xs font-normal text-[var(--color-ink-soft)]">
+        <span className="shrink-0 text-sm font-normal text-[var(--color-ink-soft)]">
           {isOpen ? "收起" : "展开"}
         </span>
       </summary>
@@ -63,10 +63,10 @@ export function ThoughtChain({ toolCalls }: { toolCalls: ToolCall[] }) {
 
           return (
             <div className="rounded-2xl bg-white/70 p-3" key={`${toolCall.tool}-${index}`}>
-              <div className="mb-2 flex items-center justify-between gap-3 text-sm font-medium">
+              <div className="mb-2 flex items-center justify-between gap-3 text-base font-medium">
                 <span>{toolCall.tool}</span>
                 <span
-                  className={`rounded-full px-2 py-1 text-[11px] font-medium ${
+                  className={`rounded-full px-2 py-1 text-xs font-medium ${
                     isFinished
                       ? "bg-[rgba(15,139,141,0.12)] text-[var(--color-ocean)]"
                       : "bg-[rgba(212,106,74,0.12)] text-[var(--color-ember)]"
@@ -76,7 +76,7 @@ export function ThoughtChain({ toolCalls }: { toolCalls: ToolCall[] }) {
                 </span>
               </div>
 
-              <div className="space-y-2 text-xs">
+              <div className="space-y-2 text-sm">
                 <div className="rounded-2xl bg-[rgba(13,37,48,0.06)] p-3">
                   <div className="mb-1 font-medium text-[var(--color-ink-soft)]">输入</div>
                   <pre className="mono whitespace-pre-wrap">{formatBlock(toolCall.input)}</pre>

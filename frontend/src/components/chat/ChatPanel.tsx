@@ -18,12 +18,12 @@ export function ChatPanel() {
     <section className="flex h-full min-w-0 flex-1 flex-col gap-4">
       <div className="panel flex items-center justify-between rounded-[30px] px-5 py-4">
         <div>
-          <p className="text-xs uppercase tracking-[0.28em] text-[var(--color-ink-soft)]">
+          <p className="text-sm uppercase tracking-[0.28em] text-[var(--color-ink-soft)]">
             Conversation
           </p>
-          <h2 className="text-lg font-semibold tracking-[-0.04em]">实时对话与检索轨迹</h2>
+          <h2 className="text-xl font-semibold tracking-[-0.04em]">实时对话与检索轨迹</h2>
         </div>
-        <div className="mono text-sm text-[var(--color-ink-soft)]">
+        <div className="mono text-base text-[var(--color-ink-soft)]">
           {tokenStats ? `${tokenStats.total_tokens} tokens` : "No metrics yet"}
         </div>
       </div>
@@ -32,13 +32,13 @@ export function ChatPanel() {
         <div className="flex-1 space-y-4 overflow-y-auto pr-2">
           {!messages.length && (
             <div className="rounded-[28px] border border-dashed border-[var(--color-line)] bg-white/45 p-8">
-              <p className="text-xs uppercase tracking-[0.28em] text-[var(--color-ink-soft)]">
+              <p className="text-sm uppercase tracking-[0.28em] text-[var(--color-ink-soft)]">
                 Ready
               </p>
-              <h3 className="mt-2 text-3xl font-semibold tracking-[-0.05em]">
+              <h3 className="mt-2 text-4xl font-semibold tracking-[-0.05em]">
                 一个本地、透明、文件驱动的 Agent 工作台
               </h3>
-              <p className="mt-3 max-w-2xl text-[var(--color-ink-soft)]">
+              <p className="mt-3 max-w-2xl text-lg text-[var(--color-ink-soft)]">
                 你可以直接提问，也可以在右侧编辑 Memory、Skills 和 Workspace
                 文件。所有系统提示、会话和工具执行都可以追踪。
               </p>

@@ -73,6 +73,14 @@
         "Backend: Install deps",
         "Frontend: Install deps"
       ]
+    },
+    {
+      "label": "App: Start all (root script)",
+      "type": "shell",
+      "command": "powershell -ExecutionPolicy Bypass -File .\\start-dev.ps1",
+      "options": {
+        "cwd": "${workspaceFolder}"
+      }
     }
   ]
 }

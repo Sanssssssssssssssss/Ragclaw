@@ -29,8 +29,13 @@ body {
   color: var(--color-ink);
 }
 
+html {
+  font-size: 17px;
+}
+
 body {
   font-family: var(--font-display), "Segoe UI", sans-serif;
+  line-height: 1.55;
 }
 
 button,
@@ -56,8 +61,8 @@ a {
 }
 
 .markdown {
-  font-size: 0.96rem;
-  line-height: 1.7;
+  font-size: 1.04rem;
+  line-height: 1.78;
 }
 
 .markdown p {
@@ -70,6 +75,7 @@ a {
   background: rgba(13, 37, 48, 0.9);
   color: #f8f6ee;
   padding: 1rem;
+  font-size: 0.92rem;
 }
 
 .markdown code {
@@ -79,4 +85,8 @@ a {
 .markdown ul,
 .markdown ol {
   padding-left: 1.2rem;
+}
+
+.markdown li + li {
+  margin-top: 0.32rem;
 }

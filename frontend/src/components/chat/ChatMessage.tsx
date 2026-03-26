@@ -30,7 +30,7 @@ export function ChatMessage({
     >
       {!isUser && <RetrievalCard steps={retrievalSteps} />}
       {!isUser && <ThoughtChain toolCalls={toolCalls} />}
-      <div className={isUser ? "whitespace-pre-wrap leading-7" : "markdown"}>
+      <div className={isUser ? "whitespace-pre-wrap text-[1.02rem] leading-8" : "markdown"}>
         {isUser ? (
           content
         ) : (

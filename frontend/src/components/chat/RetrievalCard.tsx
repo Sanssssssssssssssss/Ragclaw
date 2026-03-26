@@ -58,7 +58,7 @@ export function RetrievalCard({ steps }: { steps: RetrievalStep[] }) {
 
   return (
     <div className="mb-4 rounded-3xl border border-[rgba(15,139,141,0.18)] bg-[rgba(15,139,141,0.08)] p-4">
-      <div className="flex items-center gap-2 text-sm font-medium text-ocean">
+      <div className="flex items-center gap-2 text-base font-medium text-ocean">
         <Database size={16} />
         检索轨迹
       </div>
@@ -76,22 +76,22 @@ export function RetrievalCard({ steps }: { steps: RetrievalStep[] }) {
               <div className="flex items-start justify-between gap-3">
                 <div className="min-w-0 flex-1">
                   <div className="flex items-center gap-2">
-                    <span className={`rounded-full px-2 py-1 text-[11px] font-medium ${meta.badge}`}>
+                    <span className={`rounded-full px-2 py-1 text-xs font-medium ${meta.badge}`}>
                       {meta.label}
                     </span>
-                    <div className="flex min-w-0 items-center gap-2 text-sm font-medium text-[var(--color-ink)]">
+                    <div className="flex min-w-0 items-center gap-2 text-base font-medium text-[var(--color-ink)]">
                       <Icon className="shrink-0" size={14} />
                       <span className="truncate">{step.title}</span>
                     </div>
                   </div>
                   {step.message ? (
-                    <p className="mt-2 text-sm leading-6 text-[var(--color-ink-soft)]">
+                    <p className="mt-2 text-base leading-7 text-[var(--color-ink-soft)]">
                       {step.message}
                     </p>
                   ) : null}
                 </div>
                 {step.results.length ? (
-                  <span className="shrink-0 rounded-full bg-white/70 px-2 py-1 text-[11px] text-[var(--color-ink-soft)]">
+                  <span className="shrink-0 rounded-full bg-white/70 px-2 py-1 text-xs text-[var(--color-ink-soft)]">
                     {step.results.length} 条
                   </span>
                 ) : null}
@@ -104,14 +104,14 @@ export function RetrievalCard({ steps }: { steps: RetrievalStep[] }) {
                       className="rounded-2xl bg-white/70 p-3"
                       key={`${item.channel}-${item.source_path}-${item.locator}-${resultIndex}`}
                     >
-                      <div className="mb-1 flex items-center justify-between gap-3 text-xs text-[var(--color-ink-soft)]">
+                      <div className="mb-1 flex items-center justify-between gap-3 text-sm text-[var(--color-ink-soft)]">
                         <span className="truncate">{item.source_path}</span>
                         {typeof item.score === "number" ? <span>{item.score.toFixed(3)}</span> : null}
                       </div>
                       {item.locator ? (
-                        <div className="mb-2 text-xs text-[var(--color-ink-soft)]">{item.locator}</div>
+                        <div className="mb-2 text-sm text-[var(--color-ink-soft)]">{item.locator}</div>
                       ) : null}
-                      <p className="text-sm leading-6 text-[var(--color-ink)]">{item.snippet}</p>
+                      <p className="text-base leading-7 text-[var(--color-ink)]">{item.snippet}</p>
                     </div>
                   ))}
                 </div>

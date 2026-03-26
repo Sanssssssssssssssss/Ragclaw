@@ -34,13 +34,13 @@ export function Navbar() {
           <Sparkles size={20} />
         </div>
         <div>
-          <p className="text-xs uppercase tracking-[0.32em] text-[var(--color-ink-soft)]">
+          <p className="text-sm uppercase tracking-[0.32em] text-[var(--color-ink-soft)]">
             skill-rag
           </p>
           <div className="flex items-center gap-3">
-            <h1 className="text-xl font-semibold tracking-[-0.04em]">{currentTitle}</h1>
+            <h1 className="text-2xl font-semibold tracking-[-0.04em]">{currentTitle}</h1>
             <button
-              className="rounded-full border border-[var(--color-line)] px-3 py-1 text-xs text-[var(--color-ink-soft)]"
+              className="rounded-full border border-[var(--color-line)] px-3 py-1 text-sm text-[var(--color-ink-soft)]"
               onClick={() => {
                 const next = window.prompt("重命名当前会话", currentTitle);
                 if (next) {
@@ -57,7 +57,7 @@ export function Navbar() {
 
       <div className="flex flex-wrap items-center justify-end gap-3">
         <button
-          className="flex items-center gap-2 rounded-full border border-[var(--color-line)] bg-white/60 px-4 py-2 text-sm"
+          className="flex items-center gap-2 rounded-full border border-[var(--color-line)] bg-white/60 px-4 py-2 text-base"
           onClick={() => void createNewSession()}
           type="button"
         >
@@ -65,7 +65,7 @@ export function Navbar() {
           新会话
         </button>
         <button
-          className={`flex items-center gap-2 rounded-full px-4 py-2 text-sm ${
+          className={`flex items-center gap-2 rounded-full px-4 py-2 text-base ${
             ragMode
               ? "bg-ocean text-white"
               : "border border-[var(--color-line)] bg-white/60 text-ink"
@@ -77,7 +77,7 @@ export function Navbar() {
           {ragMode ? "RAG 已开" : "RAG 已关"}
         </button>
         <button
-          className="flex items-center gap-2 rounded-full border border-[var(--color-line)] bg-white/60 px-4 py-2 text-sm"
+          className="flex items-center gap-2 rounded-full border border-[var(--color-line)] bg-white/60 px-4 py-2 text-base"
           onClick={() => void compressCurrentSession()}
           type="button"
         >
@@ -85,7 +85,7 @@ export function Navbar() {
           压缩
         </button>
         <button
-          className={`flex items-center gap-2 rounded-full px-4 py-2 text-sm ${
+          className={`flex items-center gap-2 rounded-full px-4 py-2 text-base ${
             isIndexBuilding
               ? "cursor-not-allowed bg-[rgba(15,139,141,0.12)] text-ocean"
               : "border border-[var(--color-line)] bg-white/60"
@@ -97,7 +97,7 @@ export function Navbar() {
           <FileSearch size={16} />
           {knowledgeIndexLabel}
         </button>
-        <div className="hidden items-center gap-2 rounded-full bg-[rgba(212,106,74,0.12)] px-4 py-2 text-sm text-[var(--color-ember)] md:flex">
+        <div className="hidden items-center gap-2 rounded-full bg-[rgba(212,106,74,0.12)] px-4 py-2 text-base text-[var(--color-ember)] md:flex">
           <FileSearch size={16} />
           {knowledgeIndexHint}
         </div>
