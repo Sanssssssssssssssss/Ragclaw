@@ -17,6 +17,8 @@ class Evidence:
     channel: RetrievalChannel
     score: float | None = None
     parent_id: str | None = None
+    query_variant: str | None = None
+    supporting_children: int | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -66,6 +68,8 @@ class SkillRetrievalResult:
 class HybridRetrievalResult:
     vector_evidences: list[Evidence] = field(default_factory=list)
     bm25_evidences: list[Evidence] = field(default_factory=list)
+    query_variants: list[str] = field(default_factory=list)
+    entity_hints: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -75,6 +79,8 @@ class OrchestratedRetrievalResult:
     steps: list[RetrievalStep] = field(default_factory=list)
     fallback_used: bool = False
     reason: str = ""
+    question_type: str = "direct_fact"
+    entity_hints: list[str] = field(default_factory=list)
 
 
 @dataclass

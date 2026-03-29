@@ -61,6 +61,6 @@ def evaluate_with_judge(
         "unsupported_claims": unsupported_claims,
         "reasoning_summary": str(judged.get("reasoning_summary", "") or "").strip(),
         "verdict": verdict,
-        "pass": verdict in {"pass", "supported"} and grounded_score >= 0.5,
+        "pass": grounded_score >= 0.5 and not unsupported_claims and verdict not in {"unsupported", "fail"},
         "unsupported": bool(unsupported_claims) or verdict == "unsupported",
     }

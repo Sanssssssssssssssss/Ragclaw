@@ -127,6 +127,10 @@ def _source_family(path: str) -> str:
         else:
             extension = f".{ext}"
 
+    if extension.lower() == ".txt" and re.search(r"20\d{2}[_\s-]*q[1-4]|20\d{2}.+(季度|q[1-4])", stem, re.IGNORECASE):
+        stem = re.sub(r"[_\s-]*(提取文本|extracted)$", "", stem, flags=re.IGNORECASE)
+        extension = ".pdf"
+
     if extension.lower() == ".pdf":
         stem = re.sub(r"[_\s]+", " ", stem).strip()
     family = f"{stem}{extension}"

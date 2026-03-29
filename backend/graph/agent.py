@@ -40,6 +40,9 @@ STABLE_KNOWLEDGE_QUERY_PATTERNS = (
     re.compile(r"\bknowledge\b", re.IGNORECASE),
     re.compile(r"\b(retrieval|rag)\b", re.IGNORECASE),
     re.compile(r"\.(md|json|txt|pdf|xlsx|xls)\b", re.IGNORECASE),
+    re.compile(r"(哪份|哪个|哪张|那个).{0,30}(文档|文件|报告|财报|路径|来源)"),
+    re.compile(r"(给出|返回).{0,12}(路径|来源)"),
+    re.compile(r"\b(which|what)\b.{0,24}\b(file|document|report|path|source)\b", re.IGNORECASE),
 )
 STABLE_WORKSPACE_OPERATION_PATTERNS = (
     re.compile(r"(?:读取|打开|列出|查看|统计|提取|分析|显示).{0,40}(?:knowledge/|workspace/|memory/|storage/)", re.IGNORECASE),
@@ -206,20 +209,162 @@ class AgentManager:
 
     def _format_knowledge_context(self, retrieval_result) -> str:
         lines = ["[Knowledge retrieval evidence]"]
-        lines.append(f"Status: {retrieval_result.status}")
-        if retrieval_result.reason:
-            lines.append(f"Reason: {retrieval_result.reason}")
-        if retrieval_result.fallback_used:
-            lines.append("Fallback: skill evidence was insufficient, so vector/BM25 retrieval was used.")
         if not retrieval_result.evidences:
             lines.append("No direct evidence was found.")
             return "\n".join(lines)
 
         for index, evidence in enumerate(retrieval_result.evidences, start=1):
+            support_note = ""
+            if getattr(evidence, "supporting_children", None):
+                support_note = f" / merged children: {evidence.supporting_children}"
             lines.append(
-                f"{index}. [{evidence.channel}] {evidence.source_path} ({evidence.locator})\n{evidence.snippet}"
+                f"{index}. [{evidence.channel}] {evidence.source_path} ({evidence.locator}){support_note}\n{evidence.snippet}"
             )
         return "\n\n".join(lines)
+
+    def _knowledge_question_type(self, retrieval_result) -> str:
+        return str(getattr(retrieval_result, "question_type", "") or "direct_fact").strip().lower()
+
+    def _metric_terms_from_query(self, message: str) -> tuple[str, list[str]]:
+        lowered = str(message or "").lower()
+        if "净利润" in message or "profit" in lowered:
+            return "净利润", ["净利润", "归属于上市公司股东的净利润", "归母净利润", "扣非净利润"]
+        if "营业收入" in message or "营收" in message or "revenue" in lowered:
+            return "营业收入", ["营业收入", "营业总收入", "营收", "收入"]
+        return "关键指标", ["净利润", "营业收入", "利润总额", "同比", "增长", "下降"]
+
+    def _evidence_text_for_entity(self, entity: str, retrieval_result) -> str:
+        blocks: list[str] = []
+        for evidence in getattr(retrieval_result, "evidences", []) or []:
+            blob = " ".join(
+                [
+                    str(getattr(evidence, "source_path", "") or ""),
+                    str(getattr(evidence, "locator", "") or ""),
+                    str(getattr(evidence, "snippet", "") or ""),
+                ]
+            )
+            if entity.lower() in blob.lower():
+                blocks.append(blob)
+        return "\n".join(blocks)
+
+    def _metric_focused_text(self, text: str, metric_terms: list[str]) -> str:
+        lines = [line.strip() for line in re.split(r"[\n\r]+", str(text or "")) if line.strip()]
+        focused = [line for line in lines if any(term.lower() in line.lower() for term in metric_terms)]
+        return "\n".join(focused) if focused else str(text or "")
+
+    def _extract_first_metric_amount(self, text: str) -> str:
+        matches = re.findall(r"-?\d[\d,]*(?:\.\d+)?\s*(?:亿元|万元|元)", str(text or ""))
+        return matches[0].strip() if matches else "当前证据未显示"
+
+    def _extract_first_percentage(self, text: str) -> str:
+        matches = re.findall(r"-?\d[\d,]*(?:\.\d+)?\s*%", str(text or ""))
+        return matches[0].strip() if matches else "当前证据未显示"
+
+    def _extract_missing_compare_fields(self, value: str, yoy: str) -> list[str]:
+        missing: list[str] = []
+        if value == "当前证据未显示":
+            missing.append("绝对数值")
+        if yoy == "当前证据未显示":
+            missing.append("同比变化")
+        return missing
+
+    def _build_compare_scaffold(self, message: str, retrieval_result) -> str:
+        entities = [item for item in getattr(retrieval_result, "entity_hints", []) or [] if len(str(item).strip()) >= 2][:2]
+        if len(entities) < 2:
+            return ""
+
+        metric_label, metric_terms = self._metric_terms_from_query(message)
+        period = "2025 Q3"
+        if "年初至报告期末" in message:
+            period = "年初至报告期末"
+        elif "本报告期" in message or "单季" in message:
+            period = "本报告期"
+
+        slots: list[str] = ["[Compare answer scaffold]"]
+        slots.append(f"metric: {metric_label}")
+        slots.append(f"period: {period}")
+        for index, entity in enumerate(entities, start=1):
+            entity_text = self._metric_focused_text(self._evidence_text_for_entity(entity, retrieval_result), metric_terms)
+            value = self._extract_first_metric_amount(entity_text)
+            yoy = self._extract_first_percentage(entity_text)
+            missing_fields = ", ".join(self._extract_missing_compare_fields(value, yoy)) or "无"
+            slots.extend(
+                [
+                    f"company_{'a' if index == 1 else 'b'}: {entity}",
+                    f"value_{'a' if index == 1 else 'b'}: {value}",
+                    f"yoy_{'a' if index == 1 else 'b'}: {yoy}",
+                    f"missing_fields_{'a' if index == 1 else 'b'}: {missing_fields}",
+                ]
+            )
+        slots.append("Rules: compare company by company; if one company lacks a field, write 当前证据未显示 for that company only.")
+        return "\n".join(slots)
+
+    def _build_multi_hop_scaffold(self, message: str, retrieval_result) -> str:
+        support_corpus = self._knowledge_support_corpus(retrieval_result)
+        lowered = str(message or "").lower()
+        constraints: list[tuple[str, list[str]]] = []
+        if any(term in message for term in ("业绩情况", "净利润", "营收", "营业收入")):
+            constraints.append(("constraint_1", ["净利润", "营业收入", "利润总额", "同比", "增长", "下降"]))
+        if any(term in message for term in ("原因", "所致", "损失", "既", "又")) or "reason" in lowered:
+            constraints.append(("constraint_2", ["原因", "所致", "损失", "影响", "导致", "索赔"]))
+        if not constraints:
+            return ""
+
+        lines = ["[Multi-hop answer scaffold]"]
+        missing: list[str] = []
+        for label, terms in constraints[:2]:
+            matched_lines = [
+                raw.strip()
+                for raw in re.split(r"[\n\r]+", support_corpus)
+                if raw.strip() and any(term.lower() in raw.lower() for term in terms)
+            ]
+            if matched_lines:
+                lines.append(f"{label}: covered")
+                lines.append(f"{label}_evidence: {' | '.join(matched_lines[:3])}")
+            else:
+                lines.append(f"{label}: missing")
+                missing.append(label)
+        if missing:
+            lines.append(f"missing_constraints: {', '.join(missing)}")
+        else:
+            lines.append("missing_constraints: none")
+        lines.append("Rules: cover each constraint separately; if any constraint is missing, keep the answer partial and say 当前证据未显示 for that missing part.")
+        lines.append("Rules: stay within the explicitly requested products, entities, and evidence; do not add extra examples, companies, or products.")
+        return "\n".join(lines)
+
+    def _build_negation_scaffold(self, message: str, retrieval_result) -> str:
+        support_corpus = self._knowledge_support_corpus(retrieval_result)
+        evidence_lines = [
+            raw.strip()
+            for raw in re.split(r"[\n\r]+", support_corpus)
+            if raw.strip()
+        ]
+        numeric_lines = [
+            line
+            for line in evidence_lines
+            if any(token in line for token in ("-", "%", "元", "亿元", "万元"))
+            or any(term in line for term in ("净利润", "利润总额", "营业收入", "亏损", "为负"))
+        ]
+        lines = ["[Negation answer scaffold]"]
+        if numeric_lines:
+            lines.append("direct_negative_evidence: present")
+            lines.append(f"evidence_lines: {' | '.join(numeric_lines[:4])}")
+        else:
+            lines.append("direct_negative_evidence: missing")
+            lines.append("evidence_lines: 当前证据未显示直接的亏损或负值条目")
+        lines.append("Rules: do not mention retrieval status, internal pipeline notes, or hidden system reasons.")
+        lines.append("Rules: if direct negative evidence is missing, say only that the current evidence is insufficient to confirm the negative conclusion.")
+        return "\n".join(lines)
+
+    def _build_knowledge_scaffold(self, message: str, retrieval_result) -> str:
+        question_type = self._knowledge_question_type(retrieval_result)
+        if question_type == "compare":
+            return self._build_compare_scaffold(message, retrieval_result)
+        if question_type == "multi_hop":
+            return self._build_multi_hop_scaffold(message, retrieval_result)
+        if question_type == "negation":
+            return self._build_negation_scaffold(message, retrieval_result)
+        return ""
 
     def _knowledge_answer_instructions(self, retrieval_result) -> list[str]:
         instructions = [
@@ -228,12 +373,237 @@ class AgentManager:
             "Do not perform additional knowledge-base inspection with tools.",
             "If the evidence is incomplete, explicitly say the current knowledge base only supports a partial answer or no direct answer.",
             "Do not fabricate facts.",
-            "When evidence is insufficient, suggest narrowing the scope by directory, file, keyword, field name, or time range.",
             "Cite the file paths you relied on.",
+            "Only mention numeric values, percentages, amounts, page numbers, paragraph numbers, section identifiers, or table/row/column locations when those details appear directly in the retrieval evidence.",
+            "If the retrieval evidence does not directly support a numeric or locator detail, say the current knowledge base does not contain enough evidence for that level of specificity.",
+            "Do not infer numbers or locator details from file names, prior knowledge, or guesswork.",
+            "Do not infer profitability, losses, negative values, growth rates, or trends from headings, dashes, placeholders, blank cells, or table structure alone.",
+            "If the evidence only shows document structure or incomplete fragments, answer conservatively and stop at what is directly supported.",
+            "Do not mention internal pipeline details such as vector retrieval, BM25, fusion, fallback logic, or retrieval stages in the final answer.",
         ]
-        if retrieval_result.reason:
-            instructions.append(f"Current retrieval note: {retrieval_result.reason}")
+        if getattr(retrieval_result, "status", "") == "partial":
+            instructions.extend(
+                [
+                    "The retrieval status is partial.",
+                    "Answer in a conservative style: first state the supported findings, then state what the current evidence still does not support.",
+                    "Do not complete comparisons, negation claims, or cross-file aggregation beyond the cited evidence.",
+                ]
+            )
+        question_type = self._knowledge_question_type(retrieval_result)
+        if question_type == "compare":
+            instructions.extend(
+                [
+                    "For compare questions, organize the answer by company and field before writing prose.",
+                    "Do not generalize one company's missing field into a statement about both companies or the whole knowledge base.",
+                    "Keep period and scope precise: do not mix 本报告期 with 年初至报告期末.",
+                ]
+            )
+        if question_type == "multi_hop":
+            instructions.extend(
+                [
+                    "For multi-hop questions, cover each requested constraint separately before writing the final summary.",
+                    "If one required constraint is not directly supported, keep the answer partial and explicitly mark that missing piece as 当前证据未显示.",
+                    "Do not replace a missing cause with a generic business explanation.",
+                    "Do not add extra products, companies, or examples beyond the requested scope.",
+                ]
+            )
+        if question_type == "negation":
+            instructions.extend(
+                [
+                    "For negation questions, only conclude loss, non-profitability, or negative values when the retrieved evidence shows those facts directly.",
+                    "Do not quote or paraphrase hidden retrieval notes, status labels, or internal reasoning.",
+                ]
+            )
         return instructions
+
+    def _knowledge_support_corpus(self, retrieval_result) -> str:
+        if retrieval_result is None or not getattr(retrieval_result, "evidences", None):
+            return ""
+        blocks: list[str] = []
+        for evidence in retrieval_result.evidences:
+            parts = [str(getattr(evidence, "source_path", "")).strip()]
+            locator = str(getattr(evidence, "locator", "")).strip()
+            snippet = str(getattr(evidence, "snippet", "")).strip()
+            if locator:
+                parts.append(locator)
+            if snippet:
+                parts.append(snippet)
+            blocks.append("\n".join(part for part in parts if part))
+        return "\n\n".join(blocks)
+
+    def _dedupe_preserve_order(self, values: list[str]) -> list[str]:
+        seen: set[str] = set()
+        deduped: list[str] = []
+        for value in values:
+            candidate = str(value).strip()
+            if candidate and candidate not in seen:
+                seen.add(candidate)
+                deduped.append(candidate)
+        return deduped
+
+    def _extract_sensitive_numeric_tokens(self, answer: str) -> list[str]:
+        pattern = re.compile(
+            r"(?:¥|￥|\$)?-?\d[\d,]*(?:\.\d+)?(?:%|％|元|万元|亿元|万亿|亿|万|百万元|千万元|million|billion)?",
+            re.IGNORECASE,
+        )
+        tokens: list[str] = []
+        for match in pattern.finditer(str(answer or "")):
+            token = str(match.group(0)).strip()
+            if not token:
+                continue
+            has_unit = bool(re.search(r"[%％元亿万美元¥￥$]|million|billion", token, re.IGNORECASE))
+            has_precision = any(marker in token for marker in [",", "."])
+            digit_count = len(re.sub(r"\D+", "", token))
+            if has_unit or has_precision or digit_count >= 4:
+                tokens.append(token)
+        return self._dedupe_preserve_order(tokens)
+
+    def _extract_locator_tokens(self, answer: str) -> list[str]:
+        patterns = (
+            r"第\s*\d+\s*页",
+            r"页\s*\d+",
+            r"第\s*\d+\s*段",
+            r"段落\s*\d+",
+            r"section\s*[a-z0-9.\-]+",
+            r"page\s*\d+",
+            r"paragraph\s*\d+",
+            r"table\s*\d+",
+            r"row\s*\d+",
+            r"column\s*\d+",
+            r"表\s*\d+",
+            r"行\s*\d+",
+            r"列\s*\d+",
+        )
+        tokens: list[str] = []
+        answer_text = str(answer or "")
+        for pattern in patterns:
+            tokens.extend(match.group(0).strip() for match in re.finditer(pattern, answer_text, re.IGNORECASE))
+        return self._dedupe_preserve_order(tokens)
+
+    def _unsupported_high_risk_inference_terms(self, answer: str, support_corpus: str) -> list[str]:
+        terms = (
+            "亏损",
+            "未盈利",
+            "不盈利",
+            "负值",
+            "负数",
+            "净利润为负",
+            "利润为负",
+            "盈利为负",
+        )
+        answer_text = str(answer or "")
+        unsupported: list[str] = []
+        for term in terms:
+            if term in answer_text and not self._detail_supported_by_corpus(term, support_corpus):
+                unsupported.append(term)
+        return self._dedupe_preserve_order(unsupported)
+
+    def _detail_supported_by_corpus(self, token: str, support_corpus: str) -> bool:
+        raw_token = str(token).strip()
+        raw_corpus = str(support_corpus or "")
+        if not raw_token:
+            return True
+        if raw_token in raw_corpus:
+            return True
+        canonical_token = _canonical_guard_text(raw_token)
+        canonical_corpus = _canonical_guard_text(raw_corpus)
+        if canonical_token and canonical_token in canonical_corpus:
+            return True
+        compact_token = _compact_guard_text(raw_token)
+        compact_corpus = _compact_guard_text(raw_corpus)
+        return bool(compact_token and compact_token in compact_corpus)
+
+    def _unsupported_knowledge_details(self, answer: str, support_corpus: str) -> dict[str, list[str]]:
+        numeric_tokens = self._extract_sensitive_numeric_tokens(answer)
+        locator_tokens = self._extract_locator_tokens(answer)
+        unsupported_numbers = [
+            token for token in numeric_tokens if not self._detail_supported_by_corpus(token, support_corpus)
+        ]
+        unsupported_locators = [
+            token for token in locator_tokens if not self._detail_supported_by_corpus(token, support_corpus)
+        ]
+        return {
+            "numbers": self._dedupe_preserve_order(unsupported_numbers),
+            "locators": self._dedupe_preserve_order(unsupported_locators),
+        }
+
+    def _all_sources_are_directory_guides(self, retrieval_result) -> bool:
+        evidences = list(getattr(retrieval_result, "evidences", []) or [])
+        if not evidences:
+            return False
+        source_paths = [str(getattr(item, "source_path", "")).replace("\\", "/").lower() for item in evidences]
+        return all(path.endswith("data_structure.md") for path in source_paths if path)
+
+    def _build_conservative_knowledge_answer(
+        self,
+        retrieval_result,
+        *,
+        unsupported_numbers: list[str] | None = None,
+        unsupported_locators: list[str] | None = None,
+    ) -> str:
+        unsupported_numbers = unsupported_numbers or []
+        unsupported_locators = unsupported_locators or []
+        source_paths = self._dedupe_preserve_order(
+            [str(getattr(item, "source_path", "")).strip() for item in getattr(retrieval_result, "evidences", []) or []]
+        )
+
+        lines: list[str] = []
+        status = str(getattr(retrieval_result, "status", "") or "").strip().lower()
+        if status == "success":
+            lines.append("当前知识库命中了相关来源，但现有证据片段不足以支持更具体的数字或定位信息。")
+        elif status == "partial":
+            lines.append("当前知识库仅支持部分回答。")
+        else:
+            lines.append("当前知识库未检到足够证据。")
+
+        if unsupported_numbers or unsupported_locators:
+            lines.append("当前未检到可直接支持具体财务数字、百分比、金额或页码/段落号等定位信息的证据。")
+
+        reason = str(getattr(retrieval_result, "reason", "") or "").strip()
+        if reason:
+            lines.append(reason)
+
+        if source_paths:
+            lines.append("已命中的来源路径：")
+            lines.extend(f"- {path}" for path in source_paths[:6])
+        else:
+            lines.append("当前没有可引用的直接来源路径。")
+
+        return "\n".join(lines).strip()
+
+    async def _collect_model_answer(
+        self,
+        messages: list[dict[str, str]],
+        extra_instructions: list[str] | None = None,
+    ) -> str:
+        final_content = ""
+        async for event in self._astream_model_answer(messages, extra_instructions=extra_instructions):
+            if event.get("type") == "done":
+                final_content = str(event.get("content", "") or "").strip()
+        return final_content
+
+    def _guard_knowledge_answer(self, answer: str, retrieval_result) -> str:
+        if not str(answer or "").strip():
+            return self._build_conservative_knowledge_answer(retrieval_result)
+        support_corpus = self._knowledge_support_corpus(retrieval_result)
+        unsupported = self._unsupported_knowledge_details(answer, support_corpus)
+        unsupported_numbers = unsupported["numbers"]
+        unsupported_locators = unsupported["locators"]
+        if unsupported_numbers or unsupported_locators:
+            return self._build_conservative_knowledge_answer(
+                retrieval_result,
+                unsupported_numbers=unsupported_numbers,
+                unsupported_locators=unsupported_locators,
+            )
+
+        unsupported_inference_terms = self._unsupported_high_risk_inference_terms(answer, support_corpus)
+        if unsupported_inference_terms:
+            return self._build_conservative_knowledge_answer(retrieval_result)
+
+        if getattr(retrieval_result, "status", "") in {"partial", "not_found"} and self._all_sources_are_directory_guides(retrieval_result):
+            return self._build_conservative_knowledge_answer(retrieval_result)
+
+        return answer
 
     def _tool_agent_instructions(self, strategy: ExecutionStrategy) -> list[str]:
         """Return tool-agent instructions from one execution strategy input."""
@@ -392,6 +762,14 @@ class AgentManager:
                         "content": self._format_knowledge_context(knowledge_result),
                     }
                 )
+                scaffold = self._build_knowledge_scaffold(message, knowledge_result)
+                if scaffold:
+                    augmented_history.append(
+                        {
+                            "role": "assistant",
+                            "content": scaffold,
+                        }
+                    )
 
             messages = self._build_messages(augmented_history)
             messages.append({"role": "user", "content": message})

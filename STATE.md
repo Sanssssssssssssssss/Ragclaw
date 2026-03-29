@@ -140,6 +140,29 @@
   - assistant token usage labels
   - top-nav knowledge index status label
 - Static validation only was used for this pass, per the latest user instruction.
+## 2026-03-29 Retrieval Constraint Update
+- Context for this round was rebuilt from the Markdown memory files before implementation, per project rule.
+- The runtime answer-guard step is no longer on the knowledge QA path.
+- Knowledge QA now relies on stronger prompt constraints only:
+  - do not infer unsupported numeric or locator details
+  - do not infer loss/profit/trend conclusions from placeholders or table structure alone
+  - answer conservatively when evidence is incomplete
+- Current back-end verification result:
+  - weak-evidence probe: `根据知识库，说明航天动力 2025 Q3 并未盈利的证据，并给出来源。`
+    - route stayed on formal knowledge retrieval
+    - no `skill` / `read_file` / `terminal` / `python_repl`
+    - answer stayed conservative instead of inventing unsupported figures
+    - judge result: `pass`
+  - strong-evidence probe: `根据知识库，说明上汽集团 2025 年前三季度营业总收入是多少，并给出来源。`
+    - route stayed on formal knowledge retrieval
+    - supported concrete revenue number and locator details were still returned
+    - judge result: `pass`
+- Current risk:
+  - prompt-only constraints reduce hallucination in the current probes, but they may still be weaker than a true post-answer guard on harder edge cases.
+- Startup vector restore is now synchronous within app lifespan:
+  - the backend loads the persisted vector index before startup completes
+  - local verification with `TestClient(app)` now reports `vector_ready=true` and `bm25_ready=true` immediately after startup
+- Benchmark runner now treats vector readiness as required when embeddings are configured, instead of silently accepting BM25-only status.
 
 ## Current Risks
 - Historical Markdown records still contain mojibake and mixed-language status notes, which makes the memory files harder to scan than the live code.
@@ -569,3 +592,48 @@
 - This is an evaluator-only normalization:
   - retrieval traces still preserve the real source paths
   - benchmark source hit and coverage scoring no longer penalize a correct hit just because the indexed evidence came from the extracted text companion instead of the original PDF path
+## 2026-03-29 Thirty-Fifth Update
+- Context for this round was rebuilt from the Markdown memory files before implementation, per project rule.
+- The formal indexed retrieval path now has a lightweight middle layer instead of a heavier guard stack:
+  - a small query-rewrite module produces a few retrieval-oriented rewrites plus entity/keyword hints
+  - hybrid retrieval now fans out across the original query and rewrites, then fuses the candidates
+  - a deterministic heuristic reranker, parent merge step, and source-family diversification pass now organize evidence before answer generation
+- This was intentionally kept retrieval-side and reversible:
+  - no new agent workflow
+  - no skill fallback restoration
+  - no PDF parser or chunking upgrade
+  - no heavyweight answer guard
+- Fresh targeted PDF benchmark reruns were executed against a backend that reported `vector_ready=true` and `bm25_ready=true` at startup.
+- Current targeted deltas on the rerun:
+  - `pdf fuzzy` retrieval moved from route/hit/coverage all `0.0` to `1.0 / 1.0 / 1.0`
+  - `pdf compare` retrieval improved from hit `0.5` / coverage `0.25` to hit `1.0` / coverage `0.5`
+  - `pdf multi_hop` grounding improved at the judge layer from grounded pass `0.0` to `1.0`
+  - `pdf cross_file_aggregation` retrieval is still weak at source coverage `0.333...`, so that slice remains the next diagnosis target
+
+## Current Risks
+- The fresh rerun confirms the old `pdf fuzzy` tool-route benchmark output was stale, but `cross_file_aggregation` is still under-covering sources and likely needs a cheaper entity-decomposition or evidence-pick tweak next.
+- Judge `correctness_score` values are not yet on a stable shared scale across all cases, so correctness averages are still directionally useful rather than final-grade quality signals.
+## 2026-03-29 Thirty-Sixth Update
+- Focus of this round: finish the formal-RAG cleanup by targeting the three remaining weak spots with minimal changes:
+  - `cross_file_aggregation` retrieval
+  - `compare` grounding
+  - `multi_hop` grounding
+- Additional retrieval-side cleanup landed:
+  - cross-file retrieval now adds an entity-targeted supplement and preserves one candidate per target entity before final ranking
+  - benchmark trace ordering now starts from the last knowledge step with results, so `top_k` retrieval metrics reflect the final diversified evidence instead of early vector/BM25 candidates
+- Additional answer-side cleanup stayed lightweight:
+  - raw retrieval `Status/Reason` strings are no longer injected into the hidden knowledge context
+  - a small negation scaffold now tells the model not to echo internal retrieval notes
+  - multi-hop instructions now explicitly forbid adding extra products or examples outside the requested scope
+- Fresh targeted PDF rerun saved to `backend/storage/benchmarks/pdf_targeted_after_focus.json` shows:
+  - `cross_file_aggregation` retrieval: source hit `0.0 -> 1.0`, source coverage `0.3333 -> 1.0`
+  - `compare` grounding: judge grounded pass `1.0 -> 1.0` while retrieval side also improved to hit/coverage `1.0 / 1.0`
+  - `multi_hop` grounding: judge grounded pass `0.0 -> 1.0`
+  - regression protections held:
+    - `fuzzy` retrieval remains `1.0 / 1.0 / 1.0`
+    - `compare` retrieval is now `1.0 / 1.0`
+    - `negation` grounding judge pass recovered to `1.0` with unsupported-claim rate back to `0.0`
+
+## Current Risks
+- Rule-based groundedness is still much harsher than judge-based groundedness on some compare / multi-hop PDF cases, so overall `groundedness_pass_rate` remains pessimistic even after answer quality improved.
+- The benchmark result above was produced by reusing a backend whose knowledge index already reported `vector_ready=true` and `bm25_ready=true`; the manual targeted runner skipped a fresh rebuild because an async rebuild on this machine can remain stuck in `building=true` even after both retrieval channels are already ready.

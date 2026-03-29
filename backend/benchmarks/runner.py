@@ -12,6 +12,8 @@ from typing import Any
 
 import httpx
 
+from config import get_settings
+
 try:
     from .case_loader import (
         BenchmarkSelection,
@@ -78,6 +80,10 @@ class BenchmarkRunner:
         self.client = httpx.Client(base_url=self.base_url, timeout=httpx.Timeout(timeout_seconds))
         self.judge_client = load_judge_client()
 
+    def _embeddings_expected(self) -> bool:
+        settings = get_settings()
+        return settings.embedding_provider == "local" or bool(settings.embedding_api_key)
+
     def close(self) -> None:
         self.client.close()
         if self.judge_client is not None:
@@ -105,14 +111,24 @@ class BenchmarkRunner:
 
         deadline = time.time() + timeout_seconds
         last_status: dict[str, Any] = {}
+        require_vector = self._embeddings_expected()
         while time.time() < deadline:
             status_response = self.client.get("/api/knowledge/index/status")
             status_response.raise_for_status()
             last_status = status_response.json()
+            if require_vector and not last_status.get("building") and last_status.get("vector_error"):
+                raise RuntimeError(
+                    "knowledge index rebuild finished without vector readiness: "
+                    f"{last_status.get('vector_error')}"
+                )
             if (
                 last_status.get("ready")
                 and not last_status.get("building")
-                and (last_status.get("vector_ready") or last_status.get("bm25_ready"))
+                and (
+                    last_status.get("vector_ready")
+                    if require_vector
+                    else (last_status.get("vector_ready") or last_status.get("bm25_ready"))
+                )
             ):
                 return last_status
             time.sleep(2)
@@ -223,7 +239,17 @@ class BenchmarkRunner:
         retrieval_snippets: list[str] = []
         knowledge_used = False
         memory_used = False
-        for step in retrieval_steps:
+        prioritized_steps = list(retrieval_steps)
+        final_knowledge_step_index: int | None = None
+        for index, step in enumerate(retrieval_steps):
+            if str(step.get("kind", "")).strip().lower() == "knowledge" and (step.get("results") or []):
+                final_knowledge_step_index = index
+        if final_knowledge_step_index is not None:
+            prioritized_steps = [retrieval_steps[final_knowledge_step_index]] + [
+                step for index, step in enumerate(retrieval_steps) if index != final_knowledge_step_index
+            ]
+
+        for step in prioritized_steps:
             kind = str(step.get("kind", "")).strip().lower()
             if kind == "knowledge":
                 knowledge_used = True

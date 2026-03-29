@@ -5,9 +5,9 @@ from typing import Iterable
 from knowledge_retrieval.types import Evidence
 
 
-def _dedupe_key(item: Evidence) -> str:
+def evidence_dedupe_key(item: Evidence) -> str:
     normalized_snippet = " ".join(item.snippet.split())
-    return f"{item.source_path}|{item.locator}|{normalized_snippet[:240]}"
+    return f"{item.source_path}|{item.locator}|{item.parent_id}|{normalized_snippet[:240]}"
 
 
 def reciprocal_rank_fusion(
@@ -21,7 +21,7 @@ def reciprocal_rank_fusion(
 
     for evidence_list in evidence_lists:
         for rank, evidence in enumerate(evidence_list, start=1):
-            key = _dedupe_key(evidence)
+            key = evidence_dedupe_key(evidence)
             scores[key] = scores.get(key, 0.0) + (1.0 / (rank_constant + rank))
             if key not in representatives:
                 representatives[key] = evidence
@@ -39,6 +39,8 @@ def reciprocal_rank_fusion(
                 channel="fused",
                 score=score,
                 parent_id=evidence.parent_id,
+                query_variant=evidence.query_variant,
+                supporting_children=evidence.supporting_children,
             )
         )
     return fused

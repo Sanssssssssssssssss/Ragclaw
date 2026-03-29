@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -19,9 +20,14 @@ from graph.memory_indexer import memory_indexer
 from knowledge_retrieval import knowledge_indexer
 from tools.skills_scanner import refresh_snapshot
 
+logger = logging.getLogger(__name__)
+
 
 async def _warm_knowledge_index() -> None:
-    await asyncio.to_thread(knowledge_indexer.warm_start)
+    try:
+        await asyncio.to_thread(knowledge_indexer.warm_start)
+    except Exception:  # pragma: no cover - startup/runtime environment dependent
+        logger.exception("Knowledge index warm start failed")
 
 
 @asynccontextmanager
@@ -32,7 +38,7 @@ async def lifespan(_: FastAPI):
     memory_indexer.configure(settings.backend_dir)
     memory_indexer.rebuild_index()
     knowledge_indexer.configure(settings.backend_dir)
-    asyncio.create_task(_warm_knowledge_index())
+    await _warm_knowledge_index()
     yield
 
 

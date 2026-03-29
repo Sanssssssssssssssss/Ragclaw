@@ -139,6 +139,12 @@
 - Completed: T-082 Remove the `pdftotext` external-binary dependency from the terminal path by routing it through a local Python helper.
 - Completed: T-083 Add PDF compatibility shims in `python_repl` for `pypdf`, `pdfplumber`, and direct `pip` subprocess usage.
 - Next: T-084 Wait for the user's next live run and only fix any remaining file-format-specific command shapes that still surface in the UI.
+## 2026-03-29 Update
+- Completed: T-085 Remove the runtime knowledge answer guard and revert knowledge QA back to prompt-only constraints.
+- Completed: T-086 Re-verify one weak-evidence financial-report query and one strong-evidence numeric query against the live indexed retrieval path.
+- Next: T-087 Keep watching whether prompt-only knowledge constraints are enough, or whether a smaller retrieval-side signal is still needed for stubborn hallucination cases.
+- Completed: T-088 Fix startup vector-index restoration so `vector_ready` is already true when the backend reports ready.
+- Completed: T-089 Tighten benchmark knowledge-index gating so RAG runs no longer silently continue in BM25-only mode when embeddings are configured.
 ## 2026-03-27 Twenty-Fourth Update
 - Completed: T-085 Extend the formal knowledge ingestion path so `.pdf`, `.xlsx`, and `.txt` files are scanned, parsed, chunked, and persisted into the knowledge manifest.
 - Completed: T-086 Restore local embedding support for the knowledge vector index and lazy vector-index reload.
@@ -192,3 +198,13 @@
 ## 2026-03-28 Thirty-Fourth Update
 - Completed: T-118 Treat `pdf` and sibling `*_extracted.txt` benchmark hits as one source family during retrieval scoring.
 - Next: T-119 Re-run focused PDF benchmark slices and compare source hit/coverage deltas after the evaluator-only source-family normalization.
+## 2026-03-29 Thirty-Fifth Update
+- Completed: T-119 Add a lightweight indexed-retrieval expansion layer with query rewrites, entity hints, and multi-query candidate recall for formal RAG.
+- Completed: T-120 Add heuristic reranking, parent merge, and source-family diversification on top of the formal retrieval candidates without changing the index format.
+- Completed: T-121 Re-run targeted PDF retrieval and grounding slices (`fuzzy`, `compare`, `cross_file_aggregation`, `multi_hop`, `negation`) against a clean `vector_ready=true` backend.
+- Next: T-122 Investigate why PDF cross-file aggregation coverage still stalls at one-third and decide whether the next cheapest gain is query-side entity decomposition or evidence-pick tuning.
+## 2026-03-29 Thirty-Sixth Update
+- Completed: T-122 Add a lightweight entity-targeted retrieval supplement for cross-file PDF questions and prioritize final diversified evidence in benchmark trace ordering.
+- Completed: T-123 Add lightweight compare / multi-hop / negation scaffolds so answer generation stays within requested entities and supported evidence without introducing a heavy guard system.
+- Completed: T-124 Re-run the targeted PDF slices after the focused retrieval + grounding cleanup and save the fresh result to `backend/storage/benchmarks/pdf_targeted_after_focus.json`.
+- Next: T-125 Revisit rule-based groundedness criteria for compare / multi-hop PDF cases so the rule-based pass rate better matches the now-clean judge outcomes without hiding real unsupported claims.

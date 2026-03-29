@@ -185,6 +185,15 @@
   - Status: Accepted
   - Decision: The system prompt and terminal tool should steer agent tool use toward Windows PowerShell syntax, backend-relative workspace paths, and `read_file` before shelling out.
   - Reason: The current local environment is Windows, and Linux-style `/workspace` plus GNU `find` commands caused tool failures and stalled responses.
+## 2026-03-29 Retrieval Constraint Update
+- D-030 Keep knowledge hallucination control prompt-first, not guard-heavy
+  - Status: Accepted
+  - Decision: Remove the runtime answer-guard step from the knowledge QA path and keep only stronger knowledge-answer prompt constraints.
+  - Reason: The project needs lighter runtime behavior; the first fix should come from retrieval-path cleanup plus stricter answer instructions, not a heavy post-generation guard.
+- D-031 Startup should restore the persisted vector index before the app reports ready
+  - Status: Accepted
+  - Decision: Run knowledge-index warm start during FastAPI lifespan startup instead of leaving vector restoration entirely in a detached background task.
+  - Reason: Benchmark and live UI need a truthful `vector_ready` state right after startup; otherwise they can observe a false BM25-only window.
 - D-030 Startup knowledge warmup is BM25-first
   - Status: Accepted
   - Decision: App startup should rebuild the knowledge manifest and BM25 state first, while skipping vector construction on the startup path.
@@ -377,3 +386,21 @@
   - Status: Accepted
   - Decision: evaluator path matching now normalizes `knowledge/.../*.pdf` and the sibling `knowledge/.../*_extracted.txt` into the same source family when computing retrieval hit and source coverage.
   - Reason: the persisted index may legitimately retrieve an extracted-text companion for a PDF-backed source, and benchmark scoring should not mark that as a miss just because the file path differs.
+## 2026-03-29 Thirty-Fifth Update
+- D-072 Formal RAG retrieval now uses lightweight multi-query expansion before fusion
+  - Status: Accepted
+  - Decision: the formal knowledge orchestrator now expands each indexed-retrieval query into a small rewrite set plus entity/keyword hints, retrieves candidates across those variants, and then fuses them before answer-time evidence selection.
+  - Reason: PDF fuzzy, compare, multi-hop, and cross-file questions were under-recalled by a single raw query, but the user explicitly wants a lighter-weight retrieval improvement rather than a new heavy agent or guard subsystem.
+- D-073 Parent merge and source diversification happen after retrieval, not inside indexing
+  - Status: Accepted
+  - Decision: retrieval still operates on child chunks, but the orchestrator now merges sibling hits by `parent_id`, tracks supporting locators, and applies a lightweight diversified pick over source families before answer generation.
+  - Reason: this keeps the index and chunker simple while improving evidence completeness and reducing single-source crowding for compare and aggregation questions.
+## 2026-03-29 Thirty-Sixth Update
+- D-074 Cross-file PDF evaluation now prioritizes the final diversified evidence order
+  - Status: Accepted
+  - Decision: benchmark trace construction now lists source paths from the last knowledge step with results before earlier retrieval stages, so `top_k` source-hit and coverage metrics reflect the final evidence actually sent into answer generation.
+  - Reason: cross-file retrieval already selected multiple report families in the final diversified step, but benchmark scoring was still dominated by earlier vector/BM25 candidate order and underreported real coverage.
+- D-075 Knowledge-answer scaffolds now steer negation and multi-hop questions away from internal notes and extra examples
+  - Status: Accepted
+  - Decision: the agent now removes raw retrieval `Status/Reason` strings from the hidden knowledge context, adds a lightweight negation scaffold, and strengthens multi-hop instructions to stay within the explicitly requested entities and supported evidence.
+  - Reason: partial negation answers were leaking internal retrieval notes into user-facing prose, and one multi-hop answer was adding an extra medical product plus an unsupported page citation.
