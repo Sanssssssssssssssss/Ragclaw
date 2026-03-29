@@ -24,7 +24,7 @@ def add_numbers(a: int, b: int) -> int:
 
 async def main() -> None:
     settings = get_settings()
-    model = agent_manager._build_tool_model()
+    model = agent_manager._build_chat_model()
     agent = create_agent(
         model=model,
         tools=[add_numbers],
@@ -59,9 +59,9 @@ async def main() -> None:
     print(
         json.dumps(
             {
-                "tool_provider": settings.tool_llm_provider,
-                "tool_model": settings.tool_llm_model,
-                "tool_base_url": settings.tool_llm_base_url,
+                "provider": settings.llm_provider,
+                "model": settings.llm_model,
+                "base_url": settings.llm_base_url,
                 "reply": "".join(final_parts).strip(),
             },
             ensure_ascii=False,

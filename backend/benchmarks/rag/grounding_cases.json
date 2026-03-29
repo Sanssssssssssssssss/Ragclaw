@@ -1,0 +1,1857 @@
+[
+  {
+    "id": "rag_grounding_df_001",
+    "module": "rag",
+    "subtype": "grounding",
+    "question_type": "direct_fact",
+    "difficulty": 2,
+    "modalities": [
+      "md"
+    ],
+    "input": "根据知识库，简要说明 XSS 有哪些主要类型，并给出来源。",
+    "gold_sources": [
+      "Safety Knowledge/XSS.md"
+    ],
+    "required_source_types": [
+      "md"
+    ],
+    "must_include": [
+      "反射型XSS",
+      "存储型XSS",
+      "DOM Based XSS"
+    ],
+    "must_not_include": [
+      "SQL 注入是 XSS 的一种"
+    ],
+    "should_have_final_answer": true,
+    "retrieval_top_k": 5,
+    "judge_enabled": true,
+    "judge_expectations": {
+      "focus": "答案必须被给定来源中的证据直接支持，并覆盖 must_include 中的关键事实。",
+      "avoid": [
+        "编造字段或文件内容",
+        "把其他来源的事实混入当前答案",
+        "超出证据范围的推断",
+        "遗漏关键数值或关键术语"
+      ]
+    },
+    "notes": "grounding on explicit XSS taxonomy"
+  },
+  {
+    "id": "rag_grounding_df_002",
+    "module": "rag",
+    "subtype": "grounding",
+    "question_type": "direct_fact",
+    "difficulty": 2,
+    "modalities": [
+      "txt"
+    ],
+    "input": "根据知识库，说明 CSRF 的基本含义，并给出来源。",
+    "gold_sources": [
+      "Safety Knowledge/CSRF.txt"
+    ],
+    "required_source_types": [
+      "txt"
+    ],
+    "must_include": [
+      "跨站点请求伪造",
+      "诱使用户访问一个页面",
+      "以该用户身份在第三方站点执行一次操作"
+    ],
+    "must_not_include": [
+      "CSRF 必须依赖 XSS 才能发生"
+    ],
+    "should_have_final_answer": true,
+    "retrieval_top_k": 5,
+    "judge_enabled": true,
+    "judge_expectations": {
+      "focus": "答案必须被给定来源中的证据直接支持，并覆盖 must_include 中的关键事实。",
+      "avoid": [
+        "编造字段或文件内容",
+        "把其他来源的事实混入当前答案",
+        "超出证据范围的推断",
+        "遗漏关键数值或关键术语"
+      ]
+    },
+    "notes": "grounding on CSRF definition and attack mechanism"
+  },
+  {
+    "id": "rag_grounding_df_003",
+    "module": "rag",
+    "subtype": "grounding",
+    "question_type": "direct_fact",
+    "difficulty": 2,
+    "modalities": [
+      "md"
+    ],
+    "input": "根据知识库，概括同源判断的关键因素，并给出来源。",
+    "gold_sources": [
+      "Safety Knowledge/cors.md"
+    ],
+    "required_source_types": [
+      "md"
+    ],
+    "must_include": [
+      "host（域名或IP地址）",
+      "子域名",
+      "端口",
+      "协议"
+    ],
+    "must_not_include": [
+      "路径会影响同源判断"
+    ],
+    "should_have_final_answer": true,
+    "retrieval_top_k": 5,
+    "judge_enabled": true,
+    "judge_expectations": {
+      "focus": "答案必须被给定来源中的证据直接支持，并覆盖 must_include 中的关键事实。",
+      "avoid": [
+        "编造字段或文件内容",
+        "把其他来源的事实混入当前答案",
+        "超出证据范围的推断",
+        "遗漏关键数值或关键术语"
+      ]
+    },
+    "notes": "grounding on same-origin factors"
+  },
+  {
+    "id": "rag_grounding_df_004",
+    "module": "rag",
+    "subtype": "grounding",
+    "question_type": "direct_fact",
+    "difficulty": 2,
+    "modalities": [
+      "json"
+    ],
+    "input": "根据知识库，概括该电商 FAQ 中支持的主要支付方式，并给出来源。",
+    "gold_sources": [
+      "E-commerce Data/faq.json"
+    ],
+    "required_source_types": [
+      "json"
+    ],
+    "must_include": [
+      "PayPal",
+      "信用卡/借记卡",
+      "Klarna"
+    ],
+    "must_not_include": [
+      "只支持货到付款"
+    ],
+    "should_have_final_answer": true,
+    "retrieval_top_k": 5,
+    "judge_enabled": true,
+    "judge_expectations": {
+      "focus": "答案必须被给定来源中的证据直接支持，并覆盖 must_include 中的关键事实。",
+      "avoid": [
+        "编造字段或文件内容",
+        "把其他来源的事实混入当前答案",
+        "超出证据范围的推断",
+        "遗漏关键数值或关键术语"
+      ]
+    },
+    "notes": "grounding on payment methods in FAQ"
+  },
+  {
+    "id": "rag_grounding_df_005",
+    "module": "rag",
+    "subtype": "grounding",
+    "question_type": "direct_fact",
+    "difficulty": 2,
+    "modalities": [
+      "md"
+    ],
+    "input": "根据知识库，概括职业教育报告中学生使用 GenAI 的主要应用场景，并给出来源。",
+    "gold_sources": [
+      "AI Knowledge/#U6e05#U534e#U5927#U5b66#Uff1a#U804c#U4e1a#U6559#U80b2#U4eba#U5de5#U667a#U80fd#U5e94#U7528#U53d1#U5c55#U62a5#U544a#Uff082024-2025#Uff09.md"
+    ],
+    "required_source_types": [
+      "md"
+    ],
+    "must_include": [
+      "知识拓展",
+      "了解行业动态",
+      "提升职业技能"
+    ],
+    "must_not_include": [
+      "学生最主要的 GenAI 场景是游戏娱乐"
+    ],
+    "should_have_final_answer": true,
+    "retrieval_top_k": 5,
+    "judge_enabled": true,
+    "judge_expectations": {
+      "focus": "答案必须被给定来源中的证据直接支持，并覆盖 must_include 中的关键事实。",
+      "avoid": [
+        "编造字段或文件内容",
+        "把其他来源的事实混入当前答案",
+        "超出证据范围的推断",
+        "遗漏关键数值或关键术语"
+      ]
+    },
+    "notes": "grounding on usage scenarios in vocational AI report"
+  },
+  {
+    "id": "rag_grounding_df_006",
+    "module": "rag",
+    "subtype": "grounding",
+    "question_type": "direct_fact",
+    "difficulty": 2,
+    "modalities": [
+      "md"
+    ],
+    "input": "根据知识库，概括 AI Agent 的四个核心模块，并给出来源。",
+    "gold_sources": [
+      "AI Knowledge/2026#U5e74AI_Agent#U667a#U80fd#U4f53#U6280#U672f#U53d1#U5c55#U62a5#U544a.md"
+    ],
+    "required_source_types": [
+      "md"
+    ],
+    "must_include": [
+      "感知模块",
+      "大脑模块",
+      "行动模块",
+      "记忆模块"
+    ],
+    "must_not_include": [
+      "数据库模块"
+    ],
+    "should_have_final_answer": true,
+    "retrieval_top_k": 5,
+    "judge_enabled": true,
+    "judge_expectations": {
+      "focus": "答案必须被给定来源中的证据直接支持，并覆盖 must_include 中的关键事实。",
+      "avoid": [
+        "编造字段或文件内容",
+        "把其他来源的事实混入当前答案",
+        "超出证据范围的推断",
+        "遗漏关键数值或关键术语"
+      ]
+    },
+    "notes": "grounding on four core agent modules"
+  },
+  {
+    "id": "rag_grounding_df_007",
+    "module": "rag",
+    "subtype": "grounding",
+    "question_type": "direct_fact",
+    "difficulty": 2,
+    "modalities": [
+      "pdf"
+    ],
+    "input": "根据知识库，概括上汽集团 2025 Q3 的两个核心财务事实，并给出来源。",
+    "gold_sources": [
+      "Financial Report Data/#U4e0a#U6c7d#U96c6#U56e2 2025 Q3.pdf"
+    ],
+    "required_source_types": [
+      "pdf"
+    ],
+    "must_include": [
+      "营业收入 166,887,589,399.99",
+      "归属于上市公司股东的净利润 2,083,357,266.67",
+      "同比 644.88%"
+    ],
+    "must_not_include": [
+      "上汽集团 2025 Q3 亏损"
+    ],
+    "should_have_final_answer": true,
+    "retrieval_top_k": 5,
+    "judge_enabled": true,
+    "judge_expectations": {
+      "focus": "答案必须被给定来源中的证据直接支持，并覆盖 must_include 中的关键事实。",
+      "avoid": [
+        "编造字段或文件内容",
+        "把其他来源的事实混入当前答案",
+        "超出证据范围的推断",
+        "遗漏关键数值或关键术语"
+      ]
+    },
+    "notes": "grounding on SAIC quarterly report"
+  },
+  {
+    "id": "rag_grounding_df_008",
+    "module": "rag",
+    "subtype": "grounding",
+    "question_type": "direct_fact",
+    "difficulty": 1,
+    "modalities": [
+      "xlsx"
+    ],
+    "input": "根据知识库，说明 customers.xlsx 这张表包含哪些典型字段，并给出来源。",
+    "gold_sources": [
+      "E-commerce Data/customers.xlsx"
+    ],
+    "required_source_types": [
+      "xlsx"
+    ],
+    "must_include": [
+      "customer_id",
+      "segment",
+      "city"
+    ],
+    "must_not_include": [
+      "stock_on_hand"
+    ],
+    "should_have_final_answer": true,
+    "retrieval_top_k": 5,
+    "judge_enabled": true,
+    "judge_expectations": {
+      "focus": "答案必须被给定来源中的证据直接支持，并覆盖 must_include 中的关键事实。",
+      "avoid": [
+        "编造字段或文件内容",
+        "把其他来源的事实混入当前答案",
+        "超出证据范围的推断",
+        "遗漏关键数值或关键术语"
+      ]
+    },
+    "notes": "grounding on customer table fields"
+  },
+  {
+    "id": "rag_grounding_cmp_001",
+    "module": "rag",
+    "subtype": "grounding",
+    "question_type": "compare",
+    "difficulty": 3,
+    "modalities": [
+      "pdf"
+    ],
+    "input": "根据知识库，对比上汽集团与三一重工 2025 Q3 的净利润变化情况，并给出来源。",
+    "gold_sources": [
+      "Financial Report Data/#U4e0a#U6c7d#U96c6#U56e2 2025 Q3.pdf",
+      "Financial Report Data/#U4e09#U4e00#U91cd#U5de5 2025 Q3.pdf"
+    ],
+    "required_source_types": [
+      "pdf"
+    ],
+    "must_include": [
+      "两家公司都盈利",
+      "上汽集团本报告期净利润同比增幅更高",
+      "644.88%",
+      "48.18%"
+    ],
+    "must_not_include": [
+      "两家公司都亏损"
+    ],
+    "should_have_final_answer": true,
+    "retrieval_top_k": 5,
+    "judge_enabled": true,
+    "judge_expectations": {
+      "focus": "答案必须被给定来源中的证据直接支持，并覆盖 must_include 中的关键事实。",
+      "avoid": [
+        "编造字段或文件内容",
+        "把其他来源的事实混入当前答案",
+        "超出证据范围的推断",
+        "遗漏关键数值或关键术语"
+      ]
+    },
+    "notes": "compare two financial reports on profitability and growth"
+  },
+  {
+    "id": "rag_grounding_cmp_002",
+    "module": "rag",
+    "subtype": "grounding",
+    "question_type": "compare",
+    "difficulty": 2,
+    "modalities": [
+      "md"
+    ],
+    "input": "根据知识库，对比高职和中职学生的 GenAI 使用频率，并给出来源。",
+    "gold_sources": [
+      "AI Knowledge/#U6e05#U534e#U5927#U5b66#Uff1a#U804c#U4e1a#U6559#U80b2#U4eba#U5de5#U667a#U80fd#U5e94#U7528#U53d1#U5c55#U62a5#U544a#Uff082024-2025#Uff09.md"
+    ],
+    "required_source_types": [
+      "md"
+    ],
+    "must_include": [
+      "中职学生以每月使用为主",
+      "47.6%",
+      "高职学生以每周使用为主",
+      "48.8%"
+    ],
+    "must_not_include": [
+      "两者都以每天使用为主"
+    ],
+    "should_have_final_answer": true,
+    "retrieval_top_k": 5,
+    "judge_enabled": true,
+    "judge_expectations": {
+      "focus": "答案必须被给定来源中的证据直接支持，并覆盖 must_include 中的关键事实。",
+      "avoid": [
+        "编造字段或文件内容",
+        "把其他来源的事实混入当前答案",
+        "超出证据范围的推断",
+        "遗漏关键数值或关键术语"
+      ]
+    },
+    "notes": "compare student usage frequency"
+  },
+  {
+    "id": "rag_grounding_cmp_003",
+    "module": "rag",
+    "subtype": "grounding",
+    "question_type": "compare",
+    "difficulty": 2,
+    "modalities": [
+      "json"
+    ],
+    "input": "根据知识库，对比奖励和信用余额在提现规则上的差异，并给出来源。",
+    "gold_sources": [
+      "E-commerce Data/faq.json"
+    ],
+    "required_source_types": [
+      "json"
+    ],
+    "must_include": [
+      "奖励无法撤回",
+      "信用额只能提取至原始付款的卡或账户"
+    ],
+    "must_not_include": [
+      "奖励和信用都可以提取到任意账户"
+    ],
+    "should_have_final_answer": true,
+    "retrieval_top_k": 5,
+    "judge_enabled": true,
+    "judge_expectations": {
+      "focus": "答案必须被给定来源中的证据直接支持，并覆盖 must_include 中的关键事实。",
+      "avoid": [
+        "编造字段或文件内容",
+        "把其他来源的事实混入当前答案",
+        "超出证据范围的推断",
+        "遗漏关键数值或关键术语"
+      ]
+    },
+    "notes": "compare rewards vs credit withdrawal policy"
+  },
+  {
+    "id": "rag_grounding_cmp_004",
+    "module": "rag",
+    "subtype": "grounding",
+    "question_type": "compare",
+    "difficulty": 2,
+    "modalities": [
+      "xlsx"
+    ],
+    "input": "根据知识库，对比 inventory.xlsx 中库存总量最高和最低的仓库，并给出来源。",
+    "gold_sources": [
+      "E-commerce Data/inventory.xlsx"
+    ],
+    "required_source_types": [
+      "xlsx"
+    ],
+    "must_include": [
+      "北京仓",
+      "10238",
+      "深圳仓",
+      "9489"
+    ],
+    "must_not_include": [
+      "库存总量最高的是深圳仓"
+    ],
+    "should_have_final_answer": true,
+    "retrieval_top_k": 5,
+    "judge_enabled": true,
+    "judge_expectations": {
+      "focus": "答案必须被给定来源中的证据直接支持，并覆盖 must_include 中的关键事实。",
+      "avoid": [
+        "编造字段或文件内容",
+        "把其他来源的事实混入当前答案",
+        "超出证据范围的推断",
+        "遗漏关键数值或关键术语"
+      ]
+    },
+    "notes": "compare inventory totals by warehouse"
+  },
+  {
+    "id": "rag_grounding_cmp_005",
+    "module": "rag",
+    "subtype": "grounding",
+    "question_type": "compare",
+    "difficulty": 2,
+    "modalities": [
+      "txt"
+    ],
+    "input": "根据知识库，对比 IE 和 Firefox 在第三方 Cookie 发送上的默认策略，并给出来源。",
+    "gold_sources": [
+      "Safety Knowledge/CSRF.txt"
+    ],
+    "required_source_types": [
+      "txt"
+    ],
+    "must_include": [
+      "IE 默认拦截第三方 Cookie",
+      "Firefox 默认允许发送第三方 Cookie"
+    ],
+    "must_not_include": [
+      "两者默认策略完全相同"
+    ],
+    "should_have_final_answer": true,
+    "retrieval_top_k": 5,
+    "judge_enabled": true,
+    "judge_expectations": {
+      "focus": "答案必须被给定来源中的证据直接支持，并覆盖 must_include 中的关键事实。",
+      "avoid": [
+        "编造字段或文件内容",
+        "把其他来源的事实混入当前答案",
+        "超出证据范围的推断",
+        "遗漏关键数值或关键术语"
+      ]
+    },
+    "notes": "compare browser cookie policy in CSRF text"
+  },
+  {
+    "id": "rag_grounding_cmp_006",
+    "module": "rag",
+    "subtype": "grounding",
+    "question_type": "compare",
+    "difficulty": 2,
+    "modalities": [
+      "md"
+    ],
+    "input": "根据知识库，对比 LangChain、LangGraph 和 AutoGen 的定位，并给出来源。",
+    "gold_sources": [
+      "AI Knowledge/2026#U5e74AI_Agent#U667a#U80fd#U4f53#U6280#U672f#U53d1#U5c55#U62a5#U544a.md"
+    ],
+    "required_source_types": [
+      "md"
+    ],
+    "must_include": [
+      "LangChain：事实上的行业标准",
+      "LangGraph：为复杂工作流而生",
+      "AutoGen：为多智能体协作而生"
+    ],
+    "must_not_include": [
+      "LangGraph 主要用于关系型数据库建模"
+    ],
+    "should_have_final_answer": true,
+    "retrieval_top_k": 5,
+    "judge_enabled": true,
+    "judge_expectations": {
+      "focus": "答案必须被给定来源中的证据直接支持，并覆盖 must_include 中的关键事实。",
+      "avoid": [
+        "编造字段或文件内容",
+        "把其他来源的事实混入当前答案",
+        "超出证据范围的推断",
+        "遗漏关键数值或关键术语"
+      ]
+    },
+    "notes": "compare agent frameworks"
+  },
+  {
+    "id": "rag_grounding_cmp_007",
+    "module": "rag",
+    "subtype": "grounding",
+    "question_type": "compare",
+    "difficulty": 2,
+    "modalities": [
+      "pdf"
+    ],
+    "input": "根据知识库，对比航天动力和上汽集团 2025 Q3 净利润正负，并给出来源。",
+    "gold_sources": [
+      "Financial Report Data/#U822a#U5929#U52a8#U529b 2025 Q3.pdf",
+      "Financial Report Data/#U4e0a#U6c7d#U96c6#U56e2 2025 Q3.pdf"
+    ],
+    "required_source_types": [
+      "pdf"
+    ],
+    "must_include": [
+      "航天动力净利润为负",
+      "上汽集团净利润为正"
+    ],
+    "must_not_include": [
+      "两家公司都亏损"
+    ],
+    "should_have_final_answer": true,
+    "retrieval_top_k": 5,
+    "judge_enabled": true,
+    "judge_expectations": {
+      "focus": "答案必须被给定来源中的证据直接支持，并覆盖 must_include 中的关键事实。",
+      "avoid": [
+        "编造字段或文件内容",
+        "把其他来源的事实混入当前答案",
+        "超出证据范围的推断",
+        "遗漏关键数值或关键术语"
+      ]
+    },
+    "notes": "compare profit signs across two financial reports"
+  },
+  {
+    "id": "rag_grounding_cmp_008",
+    "module": "rag",
+    "subtype": "grounding",
+    "question_type": "compare",
+    "difficulty": 1,
+    "modalities": [
+      "xlsx"
+    ],
+    "input": "根据知识库，对比 customers.xlsx 中个人客户和企业客户数量，并给出来源。",
+    "gold_sources": [
+      "E-commerce Data/customers.xlsx"
+    ],
+    "required_source_types": [
+      "xlsx"
+    ],
+    "must_include": [
+      "个人 100",
+      "企业 100",
+      "数量相同"
+    ],
+    "must_not_include": [
+      "企业客户明显多于个人客户"
+    ],
+    "should_have_final_answer": true,
+    "retrieval_top_k": 5,
+    "judge_enabled": true,
+    "judge_expectations": {
+      "focus": "答案必须被给定来源中的证据直接支持，并覆盖 must_include 中的关键事实。",
+      "avoid": [
+        "编造字段或文件内容",
+        "把其他来源的事实混入当前答案",
+        "超出证据范围的推断",
+        "遗漏关键数值或关键术语"
+      ]
+    },
+    "notes": "compare customer segment counts"
+  },
+  {
+    "id": "rag_grounding_neg_001",
+    "module": "rag",
+    "subtype": "grounding",
+    "question_type": "negation",
+    "difficulty": 2,
+    "modalities": [
+      "md"
+    ],
+    "input": "根据知识库，说明为什么 XSS 不要求一定跨域，并给出来源。",
+    "gold_sources": [
+      "Safety Knowledge/XSS.md"
+    ],
+    "required_source_types": [
+      "md"
+    ],
+    "must_include": [
+      "是否跨域已经不再重要",
+      "由于历史原因，XSS 这个名字被保留下来"
+    ],
+    "must_not_include": [
+      "XSS 只有跨域才算成立"
+    ],
+    "should_have_final_answer": true,
+    "retrieval_top_k": 5,
+    "judge_enabled": true,
+    "judge_expectations": {
+      "focus": "答案必须被给定来源中的证据直接支持，并覆盖 must_include 中的关键事实。",
+      "avoid": [
+        "编造字段或文件内容",
+        "把其他来源的事实混入当前答案",
+        "超出证据范围的推断",
+        "遗漏关键数值或关键术语"
+      ]
+    },
+    "notes": "negation grounding on XSS naming/history"
+  },
+  {
+    "id": "rag_grounding_neg_002",
+    "module": "rag",
+    "subtype": "grounding",
+    "question_type": "negation",
+    "difficulty": 2,
+    "modalities": [
+      "json"
+    ],
+    "input": "根据知识库，说明哪些地址类型不被接受用于配送，并给出来源。",
+    "gold_sources": [
+      "E-commerce Data/faq.json"
+    ],
+    "required_source_types": [
+      "json"
+    ],
+    "must_include": [
+      "不接受邮政信箱",
+      "不接受 APO/FPO/私人邮袋地址"
+    ],
+    "must_not_include": [
+      "PO Box 可以正常使用加急服务"
+    ],
+    "should_have_final_answer": true,
+    "retrieval_top_k": 5,
+    "judge_enabled": true,
+    "judge_expectations": {
+      "focus": "答案必须被给定来源中的证据直接支持，并覆盖 must_include 中的关键事实。",
+      "avoid": [
+        "编造字段或文件内容",
+        "把其他来源的事实混入当前答案",
+        "超出证据范围的推断",
+        "遗漏关键数值或关键术语"
+      ]
+    },
+    "notes": "negation grounding on unsupported addresses"
+  },
+  {
+    "id": "rag_grounding_neg_003",
+    "module": "rag",
+    "subtype": "grounding",
+    "question_type": "negation",
+    "difficulty": 3,
+    "modalities": [
+      "txt"
+    ],
+    "input": "根据知识库，说明为什么“只允许 POST 就能防住 CSRF”是错误的，并给出来源。",
+    "gold_sources": [
+      "Safety Knowledge/CSRF.txt"
+    ],
+    "required_source_types": [
+      "txt"
+    ],
+    "must_include": [
+      "这种观点是错误的",
+      "攻击者可以构造自动提交表单",
+      "Flash 也可以发起 POST 请求"
+    ],
+    "must_not_include": [
+      "只要改成 POST 就能彻底防住 CSRF"
+    ],
+    "should_have_final_answer": true,
+    "retrieval_top_k": 5,
+    "judge_enabled": true,
+    "judge_expectations": {
+      "focus": "答案必须被给定来源中的证据直接支持，并覆盖 must_include 中的关键事实。",
+      "avoid": [
+        "编造字段或文件内容",
+        "把其他来源的事实混入当前答案",
+        "超出证据范围的推断",
+        "遗漏关键数值或关键术语"
+      ]
+    },
+    "notes": "negation grounding on CSRF defense misconception"
+  },
+  {
+    "id": "rag_grounding_neg_004",
+    "module": "rag",
+    "subtype": "grounding",
+    "question_type": "negation",
+    "difficulty": 2,
+    "modalities": [
+      "md"
+    ],
+    "input": "根据知识库，说明同源判断不看哪些因素，并给出来源。",
+    "gold_sources": [
+      "Safety Knowledge/cors.md"
+    ],
+    "required_source_types": [
+      "md"
+    ],
+    "must_include": [
+      "host",
+      "子域名",
+      "端口",
+      "协议"
+    ],
+    "must_not_include": [
+      "路径"
+    ],
+    "should_have_final_answer": true,
+    "retrieval_top_k": 5,
+    "judge_enabled": true,
+    "judge_expectations": {
+      "focus": "答案必须被给定来源中的证据直接支持，并覆盖 must_include 中的关键事实。",
+      "avoid": [
+        "编造字段或文件内容",
+        "把其他来源的事实混入当前答案",
+        "超出证据范围的推断",
+        "遗漏关键数值或关键术语"
+      ]
+    },
+    "notes": "negation grounding on same-origin exclusions"
+  },
+  {
+    "id": "rag_grounding_neg_005",
+    "module": "rag",
+    "subtype": "grounding",
+    "question_type": "negation",
+    "difficulty": 2,
+    "modalities": [
+      "pdf"
+    ],
+    "input": "根据知识库，说明航天动力 2025 Q3 并未盈利的证据，并给出来源。",
+    "gold_sources": [
+      "Financial Report Data/#U822a#U5929#U52a8#U529b 2025 Q3.pdf"
+    ],
+    "required_source_types": [
+      "pdf"
+    ],
+    "must_include": [
+      "归属于上市公司股东的净利润 -36,128,235.45",
+      "年初至报告期末 -109,252,544.99"
+    ],
+    "must_not_include": [
+      "航天动力 2025 Q3 净利润为正"
+    ],
+    "should_have_final_answer": true,
+    "retrieval_top_k": 5,
+    "judge_enabled": true,
+    "judge_expectations": {
+      "focus": "答案必须被给定来源中的证据直接支持，并覆盖 must_include 中的关键事实。",
+      "avoid": [
+        "编造字段或文件内容",
+        "把其他来源的事实混入当前答案",
+        "超出证据范围的推断",
+        "遗漏关键数值或关键术语"
+      ]
+    },
+    "notes": "negation grounding on loss-making report"
+  },
+  {
+    "id": "rag_grounding_neg_006",
+    "module": "rag",
+    "subtype": "grounding",
+    "question_type": "negation",
+    "difficulty": 2,
+    "modalities": [
+      "xlsx"
+    ],
+    "input": "根据知识库，说明 inventory.xlsx 里并不是所有 SKU 都低于补货阈值，并给出来源。",
+    "gold_sources": [
+      "E-commerce Data/inventory.xlsx"
+    ],
+    "required_source_types": [
+      "xlsx"
+    ],
+    "must_include": [
+      "不是",
+      "33 个 SKU 低于补货阈值"
+    ],
+    "must_not_include": [
+      "全部 200 个 SKU 都低于阈值"
+    ],
+    "should_have_final_answer": true,
+    "retrieval_top_k": 5,
+    "judge_enabled": true,
+    "judge_expectations": {
+      "focus": "答案必须被给定来源中的证据直接支持，并覆盖 must_include 中的关键事实。",
+      "avoid": [
+        "编造字段或文件内容",
+        "把其他来源的事实混入当前答案",
+        "超出证据范围的推断",
+        "遗漏关键数值或关键术语"
+      ]
+    },
+    "notes": "negation grounding on low stock count"
+  },
+  {
+    "id": "rag_grounding_neg_007",
+    "module": "rag",
+    "subtype": "grounding",
+    "question_type": "negation",
+    "difficulty": 2,
+    "modalities": [
+      "md"
+    ],
+    "input": "根据知识库，说明职业院校学生对 GenAI 并没有形成高频日常使用习惯，并给出来源。",
+    "gold_sources": [
+      "AI Knowledge/#U6e05#U534e#U5927#U5b66#Uff1a#U804c#U4e1a#U6559#U80b2#U4eba#U5de5#U667a#U80fd#U5e94#U7528#U53d1#U5c55#U62a5#U544a#Uff082024-2025#Uff09.md"
+    ],
+    "required_source_types": [
+      "md"
+    ],
+    "must_include": [
+      "并无高频、常态化的使用习惯",
+      "中职以每月使用为主",
+      "高职以每周使用为主"
+    ],
+    "must_not_include": [
+      "大多数学生每天都在使用 GenAI"
+    ],
+    "should_have_final_answer": true,
+    "retrieval_top_k": 5,
+    "judge_enabled": true,
+    "judge_expectations": {
+      "focus": "答案必须被给定来源中的证据直接支持，并覆盖 must_include 中的关键事实。",
+      "avoid": [
+        "编造字段或文件内容",
+        "把其他来源的事实混入当前答案",
+        "超出证据范围的推断",
+        "遗漏关键数值或关键术语"
+      ]
+    },
+    "notes": "negation grounding on usage habit"
+  },
+  {
+    "id": "rag_grounding_neg_008",
+    "module": "rag",
+    "subtype": "grounding",
+    "question_type": "negation",
+    "difficulty": 2,
+    "modalities": [
+      "md"
+    ],
+    "input": "根据知识库，说明 AI Agent 报告并非只讲能力提升，也覆盖哪些风险议题，并给出来源。",
+    "gold_sources": [
+      "AI Knowledge/2026#U5e74AI_Agent#U667a#U80fd#U4f53#U6280#U672f#U53d1#U5c55#U62a5#U544a.md"
+    ],
+    "required_source_types": [
+      "md"
+    ],
+    "must_include": [
+      "AI 幻觉与错误决策",
+      "隐私与数据安全",
+      "责任归属与法律监管"
+    ],
+    "must_not_include": [
+      "报告完全不涉及风险治理"
+    ],
+    "should_have_final_answer": true,
+    "retrieval_top_k": 5,
+    "judge_enabled": true,
+    "judge_expectations": {
+      "focus": "答案必须被给定来源中的证据直接支持，并覆盖 must_include 中的关键事实。",
+      "avoid": [
+        "编造字段或文件内容",
+        "把其他来源的事实混入当前答案",
+        "超出证据范围的推断",
+        "遗漏关键数值或关键术语"
+      ]
+    },
+    "notes": "negation grounding on risk sections in AI Agent report"
+  },
+  {
+    "id": "rag_grounding_fz_001",
+    "module": "rag",
+    "subtype": "grounding",
+    "question_type": "fuzzy",
+    "difficulty": 2,
+    "modalities": [
+      "md"
+    ],
+    "input": "根据知识库，用通俗说法解释“偷 Cookie 直接登录别人账号”的那种 XSS 利用，并给出来源。",
+    "gold_sources": [
+      "Safety Knowledge/XSS.md"
+    ],
+    "required_source_types": [
+      "md"
+    ],
+    "must_include": [
+      "Cookie劫持",
+      "document.cookie",
+      "HttpOnly"
+    ],
+    "must_not_include": [
+      "通过 CSRF token 来窃取 Cookie"
+    ],
+    "should_have_final_answer": true,
+    "retrieval_top_k": 5,
+    "judge_enabled": true,
+    "judge_expectations": {
+      "focus": "答案必须被给定来源中的证据直接支持，并覆盖 must_include 中的关键事实。",
+      "avoid": [
+        "编造字段或文件内容",
+        "把其他来源的事实混入当前答案",
+        "超出证据范围的推断",
+        "遗漏关键数值或关键术语"
+      ]
+    },
+    "notes": "fuzzy wording grounded in XSS payload section"
+  },
+  {
+    "id": "rag_grounding_fz_002",
+    "module": "rag",
+    "subtype": "grounding",
+    "question_type": "fuzzy",
+    "difficulty": 2,
+    "modalities": [
+      "txt"
+    ],
+    "input": "根据知识库，用通俗说法解释“图片标签删别人博客文章”的攻击，并给出来源。",
+    "gold_sources": [
+      "Safety Knowledge/CSRF.txt"
+    ],
+    "required_source_types": [
+      "txt"
+    ],
+    "must_include": [
+      "<img>",
+      "删除博客文章",
+      "跨站点请求伪造"
+    ],
+    "must_not_include": [
+      "这是 SQL 注入"
+    ],
+    "should_have_final_answer": true,
+    "retrieval_top_k": 5,
+    "judge_enabled": true,
+    "judge_expectations": {
+      "focus": "答案必须被给定来源中的证据直接支持，并覆盖 must_include 中的关键事实。",
+      "avoid": [
+        "编造字段或文件内容",
+        "把其他来源的事实混入当前答案",
+        "超出证据范围的推断",
+        "遗漏关键数值或关键术语"
+      ]
+    },
+    "notes": "fuzzy wording grounded in CSRF example"
+  },
+  {
+    "id": "rag_grounding_fz_003",
+    "module": "rag",
+    "subtype": "grounding",
+    "question_type": "fuzzy",
+    "difficulty": 1,
+    "modalities": [
+      "json"
+    ],
+    "input": "根据知识库，回答“不注册能不能买东西”，并给出来源。",
+    "gold_sources": [
+      "E-commerce Data/faq.json"
+    ],
+    "required_source_types": [
+      "json"
+    ],
+    "must_include": [
+      "可以",
+      "使用 PayPal 结账",
+      "PayPal 帐户邮箱会被创建为登录帐户"
+    ],
+    "must_not_include": [
+      "必须先手动注册后才能购买"
+    ],
+    "should_have_final_answer": true,
+    "retrieval_top_k": 5,
+    "judge_enabled": true,
+    "judge_expectations": {
+      "focus": "答案必须被给定来源中的证据直接支持，并覆盖 must_include 中的关键事实。",
+      "avoid": [
+        "编造字段或文件内容",
+        "把其他来源的事实混入当前答案",
+        "超出证据范围的推断",
+        "遗漏关键数值或关键术语"
+      ]
+    },
+    "notes": "fuzzy wording grounded in purchase-without-registration FAQ"
+  },
+  {
+    "id": "rag_grounding_fz_004",
+    "module": "rag",
+    "subtype": "grounding",
+    "question_type": "fuzzy",
+    "difficulty": 2,
+    "modalities": [
+      "md"
+    ],
+    "input": "根据知识库，回答“AI 教师 / AI 学伴”属于哪类 AI Agent 应用场景，并给出来源。",
+    "gold_sources": [
+      "AI Knowledge/2026#U5e74AI_Agent#U667a#U80fd#U4f53#U6280#U672f#U53d1#U5c55#U62a5#U544a.md"
+    ],
+    "required_source_types": [
+      "md"
+    ],
+    "must_include": [
+      "教育",
+      "AI 教师",
+      "AI 学伴"
+    ],
+    "must_not_include": [
+      "只讨论金融行业"
+    ],
+    "should_have_final_answer": true,
+    "retrieval_top_k": 5,
+    "judge_enabled": true,
+    "judge_expectations": {
+      "focus": "答案必须被给定来源中的证据直接支持，并覆盖 must_include 中的关键事实。",
+      "avoid": [
+        "编造字段或文件内容",
+        "把其他来源的事实混入当前答案",
+        "超出证据范围的推断",
+        "遗漏关键数值或关键术语"
+      ]
+    },
+    "notes": "fuzzy wording grounded in AI Agent applications"
+  },
+  {
+    "id": "rag_grounding_fz_005",
+    "module": "rag",
+    "subtype": "grounding",
+    "question_type": "fuzzy",
+    "difficulty": 2,
+    "modalities": [
+      "md"
+    ],
+    "input": "根据知识库，回答“高职学生更常用哪些 GenAI 工具”，并给出来源。",
+    "gold_sources": [
+      "AI Knowledge/#U6e05#U534e#U5927#U5b66#Uff1a#U804c#U4e1a#U6559#U80b2#U4eba#U5de5#U667a#U80fd#U5e94#U7528#U53d1#U5c55#U62a5#U544a#Uff082024-2025#Uff09.md"
+    ],
+    "required_source_types": [
+      "md"
+    ],
+    "must_include": [
+      "DeepSeek",
+      "58.4%",
+      "豆包",
+      "54.5%"
+    ],
+    "must_not_include": [
+      "ChatGPT 是文中最高使用率工具"
+    ],
+    "should_have_final_answer": true,
+    "retrieval_top_k": 5,
+    "judge_enabled": true,
+    "judge_expectations": {
+      "focus": "答案必须被给定来源中的证据直接支持，并覆盖 must_include 中的关键事实。",
+      "avoid": [
+        "编造字段或文件内容",
+        "把其他来源的事实混入当前答案",
+        "超出证据范围的推断",
+        "遗漏关键数值或关键术语"
+      ]
+    },
+    "notes": "fuzzy wording grounded in vocational AI tool usage"
+  },
+  {
+    "id": "rag_grounding_fz_006",
+    "module": "rag",
+    "subtype": "grounding",
+    "question_type": "fuzzy",
+    "difficulty": 3,
+    "modalities": [
+      "pdf"
+    ],
+    "input": "根据知识库，用简洁方式概括 OpenAI 规模与增长，并给出来源。",
+    "gold_sources": [
+      "AI Knowledge/OpenAI#U6df1#U5ea6#U62a5#U544a#Uff1a#U5927#U6a21#U578b#U738b#U8005#Uff0c#U5f15#U9886AGI#U4e4b#U8def.pdf"
+    ],
+    "required_source_types": [
+      "pdf"
+    ],
+    "must_include": [
+      "2015 年成立",
+      "2025 年 4 月员工人数已超过 5000 人",
+      "预计 2025 全年营收 130 亿美元"
+    ],
+    "must_not_include": [
+      "2025 年营收只有 13 亿美元"
+    ],
+    "should_have_final_answer": true,
+    "retrieval_top_k": 5,
+    "judge_enabled": true,
+    "judge_expectations": {
+      "focus": "答案必须被给定来源中的证据直接支持，并覆盖 must_include 中的关键事实。",
+      "avoid": [
+        "编造字段或文件内容",
+        "把其他来源的事实混入当前答案",
+        "超出证据范围的推断",
+        "遗漏关键数值或关键术语"
+      ]
+    },
+    "notes": "fuzzy wording grounded in OpenAI report"
+  },
+  {
+    "id": "rag_grounding_fz_007",
+    "module": "rag",
+    "subtype": "grounding",
+    "question_type": "fuzzy",
+    "difficulty": 1,
+    "modalities": [
+      "xlsx"
+    ],
+    "input": "根据知识库，说明订单明细表里有哪些核心字段，并给出来源。",
+    "gold_sources": [
+      "E-commerce Data/sales_orders.xlsx"
+    ],
+    "required_source_types": [
+      "xlsx"
+    ],
+    "must_include": [
+      "order_id",
+      "customer_id",
+      "product",
+      "total_amount"
+    ],
+    "must_not_include": [
+      "manager_id"
+    ],
+    "should_have_final_answer": true,
+    "retrieval_top_k": 5,
+    "judge_enabled": true,
+    "judge_expectations": {
+      "focus": "答案必须被给定来源中的证据直接支持，并覆盖 must_include 中的关键事实。",
+      "avoid": [
+        "编造字段或文件内容",
+        "把其他来源的事实混入当前答案",
+        "超出证据范围的推断",
+        "遗漏关键数值或关键术语"
+      ]
+    },
+    "notes": "fuzzy wording grounded in sales orders schema"
+  },
+  {
+    "id": "rag_grounding_fz_008",
+    "module": "rag",
+    "subtype": "grounding",
+    "question_type": "fuzzy",
+    "difficulty": 3,
+    "modalities": [
+      "pdf"
+    ],
+    "input": "根据知识库，用通俗方式概括 AI 眼镜现在处于什么阶段、还面临什么挑战，并给出来源。",
+    "gold_sources": [
+      "AI Knowledge/AI#U773c#U955c#U5173#U952e#U6280#U672f#U4e0e#U4ea7#U4e1a#U751f#U6001#U7814#U7a76#U62a5#U544a#Uff082025#U5e74#Uff09.pdf"
+    ],
+    "required_source_types": [
+      "pdf"
+    ],
+    "must_include": [
+      "从概念走向商业化落地",
+      "快速发展期",
+      "技术瓶颈、量产困难、生态薄弱"
+    ],
+    "must_not_include": [
+      "已经完全成熟且没有量产挑战"
+    ],
+    "should_have_final_answer": true,
+    "retrieval_top_k": 5,
+    "judge_enabled": true,
+    "judge_expectations": {
+      "focus": "答案必须被给定来源中的证据直接支持，并覆盖 must_include 中的关键事实。",
+      "avoid": [
+        "编造字段或文件内容",
+        "把其他来源的事实混入当前答案",
+        "超出证据范围的推断",
+        "遗漏关键数值或关键术语"
+      ]
+    },
+    "notes": "fuzzy wording grounded in AI glasses report"
+  },
+  {
+    "id": "rag_grounding_mh_001",
+    "module": "rag",
+    "subtype": "grounding",
+    "question_type": "multi_hop",
+    "difficulty": 3,
+    "modalities": [
+      "md"
+    ],
+    "input": "根据知识库，概括 AI Agent 的认知循环，并至少指出一种决策框架，给出来源。",
+    "gold_sources": [
+      "AI Knowledge/2026#U5e74AI_Agent#U667a#U80fd#U4f53#U6280#U672f#U53d1#U5c55#U62a5#U544a.md"
+    ],
+    "required_source_types": [
+      "md"
+    ],
+    "must_include": [
+      "感知模块",
+      "大脑模块",
+      "行动模块",
+      "ReAct"
+    ],
+    "must_not_include": [
+      "AI Agent 只有感知和行动两个模块"
+    ],
+    "should_have_final_answer": true,
+    "retrieval_top_k": 5,
+    "judge_enabled": true,
+    "judge_expectations": {
+      "focus": "答案必须被给定来源中的证据直接支持，并覆盖 must_include 中的关键事实。",
+      "avoid": [
+        "编造字段或文件内容",
+        "把其他来源的事实混入当前答案",
+        "超出证据范围的推断",
+        "遗漏关键数值或关键术语"
+      ]
+    },
+    "notes": "multi-hop grounding on architecture and decision framework"
+  },
+  {
+    "id": "rag_grounding_mh_002",
+    "module": "rag",
+    "subtype": "grounding",
+    "question_type": "multi_hop",
+    "difficulty": 3,
+    "modalities": [
+      "md"
+    ],
+    "input": "根据知识库，概括职业教育 AI 应用的政策驱动与学生使用趋势，并给出来源。",
+    "gold_sources": [
+      "AI Knowledge/#U6e05#U534e#U5927#U5b66#Uff1a#U804c#U4e1a#U6559#U80b2#U4eba#U5de5#U667a#U80fd#U5e94#U7528#U53d1#U5c55#U62a5#U544a#Uff082024-2025#Uff09.md"
+    ],
+    "required_source_types": [
+      "md"
+    ],
+    "must_include": [
+      "教育强国建设规划纲要（2024-2035年）",
+      "关于加快推进教育数字化的意见（2025年）",
+      "知识拓展",
+      "高职学生应用比例更高"
+    ],
+    "must_not_include": [
+      "政策文件反对 AI 进入职业教育"
+    ],
+    "should_have_final_answer": true,
+    "retrieval_top_k": 5,
+    "judge_enabled": true,
+    "judge_expectations": {
+      "focus": "答案必须被给定来源中的证据直接支持，并覆盖 must_include 中的关键事实。",
+      "avoid": [
+        "编造字段或文件内容",
+        "把其他来源的事实混入当前答案",
+        "超出证据范围的推断",
+        "遗漏关键数值或关键术语"
+      ]
+    },
+    "notes": "multi-hop grounding on policy and usage trends"
+  },
+  {
+    "id": "rag_grounding_mh_003",
+    "module": "rag",
+    "subtype": "grounding",
+    "question_type": "multi_hop",
+    "difficulty": 2,
+    "modalities": [
+      "json"
+    ],
+    "input": "根据知识库，说明总交货时间由哪些部分组成，并给出来源。",
+    "gold_sources": [
+      "E-commerce Data/faq.json"
+    ],
+    "required_source_types": [
+      "json"
+    ],
+    "must_include": [
+      "处理时间",
+      "运输时间",
+      "处理时间显示在产品详细页",
+      "计算预计交货日期时要考虑周末"
+    ],
+    "must_not_include": [
+      "总交货时间只等于物流运输时间"
+    ],
+    "should_have_final_answer": true,
+    "retrieval_top_k": 5,
+    "judge_enabled": true,
+    "judge_expectations": {
+      "focus": "答案必须被给定来源中的证据直接支持，并覆盖 must_include 中的关键事实。",
+      "avoid": [
+        "编造字段或文件内容",
+        "把其他来源的事实混入当前答案",
+        "超出证据范围的推断",
+        "遗漏关键数值或关键术语"
+      ]
+    },
+    "notes": "multi-hop grounding on delivery time composition"
+  },
+  {
+    "id": "rag_grounding_mh_004",
+    "module": "rag",
+    "subtype": "grounding",
+    "question_type": "multi_hop",
+    "difficulty": 3,
+    "modalities": [
+      "pdf"
+    ],
+    "input": "根据知识库，概括航天动力 2025 Q3 的业绩情况及一个关键原因，并给出来源。",
+    "gold_sources": [
+      "Financial Report Data/#U822a#U5929#U52a8#U529b 2025 Q3.pdf"
+    ],
+    "required_source_types": [
+      "pdf"
+    ],
+    "must_include": [
+      "净利润为负",
+      "营业收入同比 -16.45%",
+      "确认中小投资者索赔损失增加"
+    ],
+    "must_not_include": [
+      "利润增长主要来自销量大增"
+    ],
+    "should_have_final_answer": true,
+    "retrieval_top_k": 5,
+    "judge_enabled": true,
+    "judge_expectations": {
+      "focus": "答案必须被给定来源中的证据直接支持，并覆盖 must_include 中的关键事实。",
+      "avoid": [
+        "编造字段或文件内容",
+        "把其他来源的事实混入当前答案",
+        "超出证据范围的推断",
+        "遗漏关键数值或关键术语"
+      ]
+    },
+    "notes": "multi-hop grounding on aero report metrics and cause"
+  },
+  {
+    "id": "rag_grounding_mh_005",
+    "module": "rag",
+    "subtype": "grounding",
+    "question_type": "multi_hop",
+    "difficulty": 2,
+    "modalities": [
+      "xlsx"
+    ],
+    "input": "根据知识库，说明 employees.xlsx 为什么既适合组织结构分析，也适合薪酬统计，并给出来源。",
+    "gold_sources": [
+      "E-commerce Data/employees.xlsx"
+    ],
+    "required_source_types": [
+      "xlsx"
+    ],
+    "must_include": [
+      "manager_id",
+      "base_salary",
+      "department",
+      "title"
+    ],
+    "must_not_include": [
+      "order_id"
+    ],
+    "should_have_final_answer": true,
+    "retrieval_top_k": 5,
+    "judge_enabled": true,
+    "judge_expectations": {
+      "focus": "答案必须被给定来源中的证据直接支持，并覆盖 must_include 中的关键事实。",
+      "avoid": [
+        "编造字段或文件内容",
+        "把其他来源的事实混入当前答案",
+        "超出证据范围的推断",
+        "遗漏关键数值或关键术语"
+      ]
+    },
+    "notes": "multi-hop grounding on employee schema"
+  },
+  {
+    "id": "rag_grounding_mh_006",
+    "module": "rag",
+    "subtype": "grounding",
+    "question_type": "multi_hop",
+    "difficulty": 2,
+    "modalities": [
+      "xlsx"
+    ],
+    "input": "根据知识库，说明 inventory.xlsx 如何同时支持仓库维度分析和补货预警，并给出来源。",
+    "gold_sources": [
+      "E-commerce Data/inventory.xlsx"
+    ],
+    "required_source_types": [
+      "xlsx"
+    ],
+    "must_include": [
+      "warehouse",
+      "stock_on_hand",
+      "reorder_level",
+      "33 个 SKU 低于补货阈值"
+    ],
+    "must_not_include": [
+      "所有仓库都没有低库存"
+    ],
+    "should_have_final_answer": true,
+    "retrieval_top_k": 5,
+    "judge_enabled": true,
+    "judge_expectations": {
+      "focus": "答案必须被给定来源中的证据直接支持，并覆盖 must_include 中的关键事实。",
+      "avoid": [
+        "编造字段或文件内容",
+        "把其他来源的事实混入当前答案",
+        "超出证据范围的推断",
+        "遗漏关键数值或关键术语"
+      ]
+    },
+    "notes": "multi-hop grounding on inventory schema and low-stock analysis"
+  },
+  {
+    "id": "rag_grounding_mh_007",
+    "module": "rag",
+    "subtype": "grounding",
+    "question_type": "multi_hop",
+    "difficulty": 3,
+    "modalities": [
+      "txt"
+    ],
+    "input": "根据知识库，概括人工智能安全治理报告提出的总体框架，并给出来源。",
+    "gold_sources": [
+      "AI Knowledge/#U4eba#U5de5#U667a#U80fd#U5b89#U5168#U6cbb#U7406#U7814#U7a76#U62a5#U544a_#U63d0#U53d6#U6587#U672c.txt"
+    ],
+    "required_source_types": [
+      "txt"
+    ],
+    "must_include": [
+      "两横三纵",
+      "管理与技术",
+      "开发侧、部署侧、应用侧"
+    ],
+    "must_not_include": [
+      "单轴治理框架"
+    ],
+    "should_have_final_answer": true,
+    "retrieval_top_k": 5,
+    "judge_enabled": true,
+    "judge_expectations": {
+      "focus": "答案必须被给定来源中的证据直接支持，并覆盖 must_include 中的关键事实。",
+      "avoid": [
+        "编造字段或文件内容",
+        "把其他来源的事实混入当前答案",
+        "超出证据范围的推断",
+        "遗漏关键数值或关键术语"
+      ]
+    },
+    "notes": "multi-hop grounding on governance framework"
+  },
+  {
+    "id": "rag_grounding_mh_008",
+    "module": "rag",
+    "subtype": "grounding",
+    "question_type": "multi_hop",
+    "difficulty": 3,
+    "modalities": [
+      "pdf"
+    ],
+    "input": "根据知识库，概括 AI 应用专题中两项医疗相关产品，并给出来源。",
+    "gold_sources": [
+      "AI Knowledge/2026AI#U5e94#U7528#U4e13#U9898#Uff1a#U5404#U5927#U5382#U65b0#U6a21#U578b#U6301#U7eed#U8fed#U4ee3#Uff0c#U91cd#U89c6AI#U5e94#U7528#U677f#U5757#U6295#U8d44#U673a#U4f1a.pdf"
+    ],
+    "required_source_types": [
+      "pdf"
+    ],
+    "must_include": [
+      "ChatGPT Health",
+      "Claude for Healthcare",
+      "医疗/健康场景",
+      "合规/隐私"
+    ],
+    "must_not_include": [
+      "两者都面向游戏场景"
+    ],
+    "should_have_final_answer": true,
+    "retrieval_top_k": 5,
+    "judge_enabled": true,
+    "judge_expectations": {
+      "focus": "答案必须被给定来源中的证据直接支持，并覆盖 must_include 中的关键事实。",
+      "avoid": [
+        "编造字段或文件内容",
+        "把其他来源的事实混入当前答案",
+        "超出证据范围的推断",
+        "遗漏关键数值或关键术语"
+      ]
+    },
+    "notes": "multi-hop grounding on medical AI applications"
+  },
+  {
+    "id": "rag_grounding_cfa_001",
+    "module": "rag",
+    "subtype": "grounding",
+    "question_type": "cross_file_aggregation",
+    "difficulty": 4,
+    "modalities": [
+      "mixed"
+    ],
+    "input": "根据知识库，概括电商目录中客户、订单、库存三类结构化文件各自对应什么数据，并给出来源。",
+    "gold_sources": [
+      "E-commerce Data/data_structure.md",
+      "E-commerce Data/customers.xlsx",
+      "E-commerce Data/sales_orders.xlsx",
+      "E-commerce Data/inventory.xlsx"
+    ],
+    "required_source_types": [
+      "md",
+      "xlsx"
+    ],
+    "must_include": [
+      "customers.xlsx",
+      "sales_orders.xlsx",
+      "inventory.xlsx",
+      "客户/订单/库存"
+    ],
+    "must_not_include": [
+      "faq.json 是库存表"
+    ],
+    "should_have_final_answer": true,
+    "retrieval_top_k": 5,
+    "judge_enabled": true,
+    "judge_expectations": {
+      "focus": "答案必须被给定来源中的证据直接支持，并覆盖 must_include 中的关键事实。",
+      "avoid": [
+        "编造字段或文件内容",
+        "把其他来源的事实混入当前答案",
+        "超出证据范围的推断",
+        "遗漏关键数值或关键术语"
+      ]
+    },
+    "notes": "cross-file aggregation across e-commerce catalog and tables"
+  },
+  {
+    "id": "rag_grounding_cfa_002",
+    "module": "rag",
+    "subtype": "grounding",
+    "question_type": "cross_file_aggregation",
+    "difficulty": 4,
+    "modalities": [
+      "mixed"
+    ],
+    "input": "根据知识库，对比 AI Agent 技术报告与 AI 安全治理报告各自关注的重点，并给出来源。",
+    "gold_sources": [
+      "AI Knowledge/2026#U5e74AI_Agent#U667a#U80fd#U4f53#U6280#U672f#U53d1#U5c55#U62a5#U544a.md",
+      "AI Knowledge/#U4eba#U5de5#U667a#U80fd#U5b89#U5168#U6cbb#U7406#U7814#U7a76#U62a5#U544a_#U63d0#U53d6#U6587#U672c.txt"
+    ],
+    "required_source_types": [
+      "md",
+      "txt"
+    ],
+    "must_include": [
+      "AI Agent 报告讲技术架构/开发框架/应用场景",
+      "治理报告讲两横三纵",
+      "开发侧、部署侧、应用侧"
+    ],
+    "must_not_include": [
+      "两个文件都只讨论产品定价"
+    ],
+    "should_have_final_answer": true,
+    "retrieval_top_k": 5,
+    "judge_enabled": true,
+    "judge_expectations": {
+      "focus": "答案必须被给定来源中的证据直接支持，并覆盖 must_include 中的关键事实。",
+      "avoid": [
+        "编造字段或文件内容",
+        "把其他来源的事实混入当前答案",
+        "超出证据范围的推断",
+        "遗漏关键数值或关键术语"
+      ]
+    },
+    "notes": "cross-file aggregation across capability and governance docs"
+  },
+  {
+    "id": "rag_grounding_cfa_003",
+    "module": "rag",
+    "subtype": "grounding",
+    "question_type": "cross_file_aggregation",
+    "difficulty": 4,
+    "modalities": [
+      "pdf"
+    ],
+    "input": "根据知识库，概括三家财报中谁盈利、谁亏损，并给出来源。",
+    "gold_sources": [
+      "Financial Report Data/#U4e09#U4e00#U91cd#U5de5 2025 Q3.pdf",
+      "Financial Report Data/#U4e0a#U6c7d#U96c6#U56e2 2025 Q3.pdf",
+      "Financial Report Data/#U822a#U5929#U52a8#U529b 2025 Q3.pdf"
+    ],
+    "required_source_types": [
+      "pdf"
+    ],
+    "must_include": [
+      "三一重工盈利",
+      "上汽集团盈利",
+      "航天动力亏损"
+    ],
+    "must_not_include": [
+      "三家公司都盈利"
+    ],
+    "should_have_final_answer": true,
+    "retrieval_top_k": 5,
+    "judge_enabled": true,
+    "judge_expectations": {
+      "focus": "答案必须被给定来源中的证据直接支持，并覆盖 must_include 中的关键事实。",
+      "avoid": [
+        "编造字段或文件内容",
+        "把其他来源的事实混入当前答案",
+        "超出证据范围的推断",
+        "遗漏关键数值或关键术语"
+      ]
+    },
+    "notes": "cross-file aggregation across three financial reports"
+  },
+  {
+    "id": "rag_grounding_cfa_004",
+    "module": "rag",
+    "subtype": "grounding",
+    "question_type": "cross_file_aggregation",
+    "difficulty": 4,
+    "modalities": [
+      "xlsx"
+    ],
+    "input": "根据知识库，结合客户表和订单表判断哪类客户贡献的销售额更高，并给出来源。",
+    "gold_sources": [
+      "E-commerce Data/sales_orders.xlsx",
+      "E-commerce Data/customers.xlsx"
+    ],
+    "required_source_types": [
+      "xlsx"
+    ],
+    "must_include": [
+      "企业客户销售额更高",
+      "85,675.8",
+      "66,874.0"
+    ],
+    "must_not_include": [
+      "个人客户销售额更高"
+    ],
+    "should_have_final_answer": true,
+    "retrieval_top_k": 5,
+    "judge_enabled": true,
+    "judge_expectations": {
+      "focus": "答案必须被给定来源中的证据直接支持，并覆盖 must_include 中的关键事实。",
+      "avoid": [
+        "编造字段或文件内容",
+        "把其他来源的事实混入当前答案",
+        "超出证据范围的推断",
+        "遗漏关键数值或关键术语"
+      ]
+    },
+    "notes": "cross-file aggregation across customers and sales tables"
+  },
+  {
+    "id": "rag_grounding_cfa_005",
+    "module": "rag",
+    "subtype": "grounding",
+    "question_type": "cross_file_aggregation",
+    "difficulty": 3,
+    "modalities": [
+      "md"
+    ],
+    "input": "根据知识库，概括总目录与 AI 目录共同展示的 AI 知识范围，并给出来源。",
+    "gold_sources": [
+      "data_structure.md",
+      "AI Knowledge/data_structure.md"
+    ],
+    "required_source_types": [
+      "md"
+    ],
+    "must_include": [
+      "AI Knowledge",
+      "AI 行业发展趋势",
+      "技术路线",
+      "治理规范"
+    ],
+    "must_not_include": [
+      "AI Knowledge 目录只有一个文件"
+    ],
+    "should_have_final_answer": true,
+    "retrieval_top_k": 5,
+    "judge_enabled": true,
+    "judge_expectations": {
+      "focus": "答案必须被给定来源中的证据直接支持，并覆盖 must_include 中的关键事实。",
+      "avoid": [
+        "编造字段或文件内容",
+        "把其他来源的事实混入当前答案",
+        "超出证据范围的推断",
+        "遗漏关键数值或关键术语"
+      ]
+    },
+    "notes": "cross-file aggregation across directory index files"
+  },
+  {
+    "id": "rag_grounding_cfa_006",
+    "module": "rag",
+    "subtype": "grounding",
+    "question_type": "cross_file_aggregation",
+    "difficulty": 4,
+    "modalities": [
+      "mixed"
+    ],
+    "input": "根据知识库，区分 FAQ 文件与订单明细表各自扮演的角色，并给出来源。",
+    "gold_sources": [
+      "E-commerce Data/faq.json",
+      "E-commerce Data/sales_orders.xlsx"
+    ],
+    "required_source_types": [
+      "json",
+      "xlsx"
+    ],
+    "must_include": [
+      "faq.json 是常见问答知识",
+      "sales_orders.xlsx 是销售订单明细",
+      "一个偏客服知识",
+      "一个偏结构化订单数据"
+    ],
+    "must_not_include": [
+      "两者都是非结构化 PDF"
+    ],
+    "should_have_final_answer": true,
+    "retrieval_top_k": 5,
+    "judge_enabled": true,
+    "judge_expectations": {
+      "focus": "答案必须被给定来源中的证据直接支持，并覆盖 must_include 中的关键事实。",
+      "avoid": [
+        "编造字段或文件内容",
+        "把其他来源的事实混入当前答案",
+        "超出证据范围的推断",
+        "遗漏关键数值或关键术语"
+      ]
+    },
+    "notes": "cross-file aggregation across FAQ and orders table"
+  },
+  {
+    "id": "rag_grounding_cfa_007",
+    "module": "rag",
+    "subtype": "grounding",
+    "question_type": "cross_file_aggregation",
+    "difficulty": 4,
+    "modalities": [
+      "mixed"
+    ],
+    "input": "根据知识库，分别指出 AI Agent 报告中的一个国产平台，以及 OpenAI 报告中的一个生态布局事实，并给出来源。",
+    "gold_sources": [
+      "AI Knowledge/2026#U5e74AI_Agent#U667a#U80fd#U4f53#U6280#U672f#U53d1#U5c55#U62a5#U544a.md",
+      "AI Knowledge/OpenAI#U6df1#U5ea6#U62a5#U544a#Uff1a#U5927#U6a21#U578b#U738b#U8005#Uff0c#U5f15#U9886AGI#U4e4b#U8def.pdf"
+    ],
+    "required_source_types": [
+      "md",
+      "pdf"
+    ],
+    "must_include": [
+      "Dify",
+      "FastGPT",
+      "ChatGPT 应用商店",
+      "2025 年 12 月"
+    ],
+    "must_not_include": [
+      "OpenAI 报告把 Dify 列为自家产品"
+    ],
+    "should_have_final_answer": true,
+    "retrieval_top_k": 5,
+    "judge_enabled": true,
+    "judge_expectations": {
+      "focus": "答案必须被给定来源中的证据直接支持，并覆盖 must_include 中的关键事实。",
+      "avoid": [
+        "编造字段或文件内容",
+        "把其他来源的事实混入当前答案",
+        "超出证据范围的推断",
+        "遗漏关键数值或关键术语"
+      ]
+    },
+    "notes": "cross-file aggregation across agent platform and OpenAI ecosystem"
+  },
+  {
+    "id": "rag_grounding_cfa_008",
+    "module": "rag",
+    "subtype": "grounding",
+    "question_type": "cross_file_aggregation",
+    "difficulty": 4,
+    "modalities": [
+      "mixed"
+    ],
+    "input": "根据知识库，结合财报目录和具体报告，概括该目录下覆盖了哪些公司，并给出来源。",
+    "gold_sources": [
+      "Financial Report Data/data_structure.md",
+      "Financial Report Data/#U4e09#U4e00#U91cd#U5de5 2025 Q3.pdf",
+      "Financial Report Data/#U4e0a#U6c7d#U96c6#U56e2 2025 Q3.pdf",
+      "Financial Report Data/#U822a#U5929#U52a8#U529b 2025 Q3.pdf"
+    ],
+    "required_source_types": [
+      "md",
+      "pdf"
+    ],
+    "must_include": [
+      "上汽集团",
+      "三一重工",
+      "航天动力"
+    ],
+    "must_not_include": [
+      "比亚迪在该目录中"
+    ],
+    "should_have_final_answer": true,
+    "retrieval_top_k": 5,
+    "judge_enabled": true,
+    "judge_expectations": {
+      "focus": "答案必须被给定来源中的证据直接支持，并覆盖 must_include 中的关键事实。",
+      "avoid": [
+        "编造字段或文件内容",
+        "把其他来源的事实混入当前答案",
+        "超出证据范围的推断",
+        "遗漏关键数值或关键术语"
+      ]
+    },
+    "notes": "cross-file aggregation across financial index and reports"
+  }
+]

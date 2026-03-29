@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from config import get_settings
+from config import get_settings, runtime_config
 
 SYSTEM_COMPONENTS: tuple[tuple[str, str], ...] = (
     ("Skills Snapshot", "SKILLS_SNAPSHOT.md"),
@@ -13,10 +13,28 @@ SYSTEM_COMPONENTS: tuple[tuple[str, str], ...] = (
     ("Long-term Memory", "memory/MEMORY.md"),
 )
 
-RUNTIME_OVERRIDE = """<!-- Runtime Override -->
-When explicit retrieval evidence is provided for the current request, prioritize that evidence.
-Do not assume missing evidence exists elsewhere.
-"""
+def _build_runtime_override(execution_platform: str) -> str:
+    """Return one runtime guidance block from the configured execution platform."""
+
+    if execution_platform == "linux":
+        terminal_guidance = (
+            "When using terminal, this environment is Linux bash. "
+            "Prefer `pwd`, `ls -la`, `find`, `grep`, `head`, `test -d`, `python -m pip`, and shell chaining such as `&&`."
+        )
+    else:
+        terminal_guidance = (
+            "When using terminal, this environment is Windows PowerShell. "
+            "Prefer `Get-ChildItem`, `Test-Path`, `Select-String`, `Select-Object`, `python -m pip`, and PowerShell control flow "
+            "over bash/cmd syntax such as `ls -la`, `test -d`, `&&`, `||`, or `head -100`."
+        )
+
+    return (
+        "<!-- Runtime Override -->\n"
+        "When explicit retrieval evidence is provided for the current request, prioritize that evidence.\n"
+        "Do not assume missing evidence exists elsewhere.\n"
+        f"{terminal_guidance}\n"
+        "When using python_repl, treat every execution as stateless and include any required imports, dataframe loading, and variable setup in the same snippet.\n"
+    )
 
 
 def _truncate(text: str, limit: int) -> str:
@@ -34,6 +52,7 @@ def _read_component(base_dir: Path, relative_path: str, limit: int) -> str:
 
 def build_system_prompt(base_dir: Path, rag_mode: bool) -> str:
     settings = get_settings()
+    execution_platform = runtime_config.get_execution_platform()
     parts: list[str] = []
 
     for label, relative_path in SYSTEM_COMPONENTS:
@@ -48,5 +67,5 @@ def build_system_prompt(base_dir: Path, rag_mode: bool) -> str:
         content = _read_component(base_dir, relative_path, settings.component_char_limit)
         parts.append(f"<!-- {label} -->\n{content}")
 
-    parts.append(RUNTIME_OVERRIDE)
+    parts.append(_build_runtime_override(execution_platform))
     return "\n\n".join(parts)

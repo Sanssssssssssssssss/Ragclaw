@@ -4,6 +4,13 @@ export type ToolCall = {
   output: string;
 };
 
+export type ExecutionPlatform = "windows" | "linux";
+
+export type MessageUsage = {
+  input_tokens: number;
+  output_tokens: number;
+};
+
 export type Evidence = {
   source_path: string;
   source_type: string;
@@ -50,6 +57,7 @@ export type SessionHistory = {
     content: string;
     tool_calls?: ToolCall[];
     retrieval_steps?: RetrievalStep[];
+    usage?: MessageUsage;
   }>;
 };
 
@@ -57,12 +65,31 @@ export type StreamHandlers = {
   onEvent: (event: string, data: Record<string, unknown>) => void;
 };
 
-const DEFAULT_API_PORT = "8014";
+const DEFAULT_API_PORT = "8015";
 
+export class ApiConnectionError extends Error {
+  /**
+   * Returns one connection-error object from base-url and detail string inputs and describes backend reachability failures.
+   */
+  constructor(
+    public readonly baseUrl: string,
+    public readonly detail: string
+  ) {
+    super(`Could not reach backend at ${baseUrl}. ${detail}`);
+    this.name = "ApiConnectionError";
+  }
+}
+
+/**
+ * Returns one normalized API base string from a base URL input and strips a trailing slash when present.
+ */
 function normalizeApiBase(base: string) {
   return base.endsWith("/") ? base.slice(0, -1) : base;
 }
 
+/**
+ * Returns one API base URL from environment or window inputs and resolves the frontend's backend origin.
+ */
 function getApiBase() {
   const configuredBase = process.env.NEXT_PUBLIC_API_BASE_URL?.trim();
   if (configuredBase) {
@@ -76,14 +103,39 @@ function getApiBase() {
   return `${window.location.protocol}//${window.location.hostname}:${DEFAULT_API_PORT}/api`;
 }
 
+/**
+ * Returns one connection-error object from base-url and unknown error inputs and normalizes network failures.
+ */
+function buildConnectionError(baseUrl: string, error: unknown) {
+  if (error instanceof ApiConnectionError) {
+    return error;
+  }
+
+  const detail =
+    error instanceof Error && error.message.trim()
+      ? error.message.trim()
+      : "Make sure the backend is running, then retry.";
+  return new ApiConnectionError(baseUrl, detail);
+}
+
+/**
+ * Returns one parsed JSON response from path and fetch-init inputs and performs a typed API request.
+ */
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(`${getApiBase()}${path}`, {
-    ...init,
-    headers: {
-      "Content-Type": "application/json",
-      ...(init?.headers ?? {})
-    }
-  });
+  const apiBase = getApiBase();
+  let response: Response;
+
+  try {
+    response = await fetch(`${apiBase}${path}`, {
+      ...init,
+      headers: {
+        "Content-Type": "application/json",
+        ...(init?.headers ?? {})
+      }
+    });
+  } catch (error) {
+    throw buildConnectionError(apiBase, error);
+  }
 
   if (!response.ok) {
     const text = await response.text();
@@ -93,17 +145,26 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return (await response.json()) as T;
 }
 
+/**
+ * Returns a session-summary list from no inputs and fetches all stored chat sessions.
+ */
 export async function listSessions() {
   return request<SessionSummary[]>("/sessions");
 }
 
-export async function createSession(title = "新会话") {
+/**
+ * Returns one created session summary from an optional title input and creates a new chat session.
+ */
+export async function createSession(title = "New Session") {
   return request<SessionSummary>("/sessions", {
     method: "POST",
     body: JSON.stringify({ title })
   });
 }
 
+/**
+ * Returns one updated session summary from session id and title inputs and renames a stored session.
+ */
 export async function renameSession(sessionId: string, title: string) {
   return request<SessionSummary>(`/sessions/${sessionId}`, {
     method: "PUT",
@@ -111,16 +172,25 @@ export async function renameSession(sessionId: string, title: string) {
   });
 }
 
+/**
+ * Returns one deletion result from a session id input and removes a stored session.
+ */
 export async function deleteSession(sessionId: string) {
   return request<{ ok: boolean }>(`/sessions/${sessionId}`, {
     method: "DELETE"
   });
 }
 
+/**
+ * Returns one full session history from a session id input and loads historical chat messages.
+ */
 export async function getSessionHistory(sessionId: string) {
   return request<SessionHistory>(`/sessions/${sessionId}/history`);
 }
 
+/**
+ * Returns one token summary from a session id input and fetches aggregate token counts for a session.
+ */
 export async function getSessionTokens(sessionId: string) {
   return request<{
     system_tokens: number;
@@ -129,16 +199,23 @@ export async function getSessionTokens(sessionId: string) {
   }>(`/tokens/session/${sessionId}`);
 }
 
+/**
+ * Returns a skill summary list from no inputs and fetches editable skills metadata.
+ */
 export async function listSkills() {
   return request<Array<{ name: string; description: string; path: string }>>("/skills");
 }
 
+/**
+ * Returns one file payload from a path input and loads a workspace file through the backend API.
+ */
 export async function loadFile(path: string) {
-  return request<{ path: string; content: string }>(
-    `/files?path=${encodeURIComponent(path)}`
-  );
+  return request<{ path: string; content: string }>(`/files?path=${encodeURIComponent(path)}`);
 }
 
+/**
+ * Returns one save result from path and content inputs and persists a workspace file through the backend API.
+ */
 export async function saveFile(path: string, content: string) {
   return request<{ ok: boolean; path: string }>("/files", {
     method: "POST",
@@ -146,10 +223,16 @@ export async function saveFile(path: string, content: string) {
   });
 }
 
+/**
+ * Returns one rag-mode flag object from no inputs and fetches the current memory-retrieval toggle state.
+ */
 export async function getRagMode() {
   return request<{ enabled: boolean }>("/config/rag-mode");
 }
 
+/**
+ * Returns one rag-mode flag object from a boolean input and updates the memory-retrieval toggle state.
+ */
 export async function setRagMode(enabled: boolean) {
   return request<{ enabled: boolean }>("/config/rag-mode", {
     method: "PUT",
@@ -157,6 +240,43 @@ export async function setRagMode(enabled: boolean) {
   });
 }
 
+/**
+ * Returns one execution-platform object from no inputs and fetches the current shell-platform preference.
+ */
+export async function getExecutionPlatform() {
+  return request<{ platform: ExecutionPlatform }>("/config/execution-platform");
+}
+
+/**
+ * Returns one execution-platform object from a platform input and updates the current shell-platform preference.
+ */
+export async function setExecutionPlatform(platform: ExecutionPlatform) {
+  return request<{ platform: ExecutionPlatform }>("/config/execution-platform", {
+    method: "PUT",
+    body: JSON.stringify({ platform })
+  });
+}
+
+/**
+ * Returns one skill-retrieval flag object from no inputs and fetches the current skill-first retrieval toggle state.
+ */
+export async function getSkillRetrieval() {
+  return request<{ enabled: boolean }>("/config/skill-retrieval");
+}
+
+/**
+ * Returns one skill-retrieval flag object from a boolean input and updates the current skill-first retrieval toggle state.
+ */
+export async function setSkillRetrieval(enabled: boolean) {
+  return request<{ enabled: boolean }>("/config/skill-retrieval", {
+    method: "PUT",
+    body: JSON.stringify({ enabled })
+  });
+}
+
+/**
+ * Returns one compression summary from a session id input and archives older messages into compressed context.
+ */
 export async function compressSession(sessionId: string) {
   return request<{ archived_count: number; remaining_count: number }>(
     `/sessions/${sessionId}/compress`,
@@ -164,16 +284,25 @@ export async function compressSession(sessionId: string) {
   );
 }
 
+/**
+ * Returns one knowledge-index status object from no inputs and fetches current index readiness flags.
+ */
 export async function getKnowledgeIndexStatus() {
   return request<KnowledgeIndexStatus>("/knowledge/index/status");
 }
 
+/**
+ * Returns one rebuild-acceptance result from no inputs and triggers a knowledge index rebuild.
+ */
 export async function rebuildKnowledgeIndex() {
   return request<{ accepted: boolean }>("/knowledge/index/rebuild", {
     method: "POST"
   });
 }
 
+/**
+ * Returns no value from payload and handler inputs and streams SSE chat events to the frontend store.
+ */
 export async function streamChat(
   payload: {
     message: string;
@@ -181,16 +310,23 @@ export async function streamChat(
   },
   handlers: StreamHandlers
 ) {
-  const response = await fetch(`${getApiBase()}/chat`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json"
-    },
-    body: JSON.stringify({
-      ...payload,
-      stream: true
-    })
-  });
+  const apiBase = getApiBase();
+  let response: Response;
+
+  try {
+    response = await fetch(`${apiBase}/chat`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        ...payload,
+        stream: true
+      })
+    });
+  } catch (error) {
+    throw buildConnectionError(apiBase, error);
+  }
 
   if (!response.ok || !response.body) {
     throw new Error(`Chat request failed: ${response.status}`);
@@ -200,6 +336,9 @@ export async function streamChat(
   const decoder = new TextDecoder();
   let buffer = "";
 
+  /**
+   * Returns no value from one SSE block string input and dispatches a parsed event to the caller's handler.
+   */
   const flushBlock = (block: string) => {
     const lines = block.split("\n");
     let event = "message";

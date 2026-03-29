@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -19,6 +20,10 @@ from knowledge_retrieval import knowledge_indexer
 from tools.skills_scanner import refresh_snapshot
 
 
+async def _warm_knowledge_index() -> None:
+    await asyncio.to_thread(knowledge_indexer.warm_start)
+
+
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     settings = get_settings()
@@ -27,7 +32,7 @@ async def lifespan(_: FastAPI):
     memory_indexer.configure(settings.backend_dir)
     memory_indexer.rebuild_index()
     knowledge_indexer.configure(settings.backend_dir)
-    knowledge_indexer.rebuild_index()
+    asyncio.create_task(_warm_knowledge_index())
     yield
 
 

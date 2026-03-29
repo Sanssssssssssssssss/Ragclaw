@@ -1,0 +1,1030 @@
+[
+  {
+    "id": "rag_retrieval_df_001",
+    "module": "rag",
+    "subtype": "retrieval",
+    "question_type": "direct_fact",
+    "difficulty": 1,
+    "modalities": [
+      "md"
+    ],
+    "input": "根据知识库，哪份文件系统介绍了 XSS 的主要类型？请给出来源路径。",
+    "gold_sources": [
+      "Safety Knowledge/XSS.md"
+    ],
+    "required_source_types": [
+      "md"
+    ],
+    "should_have_final_answer": true,
+    "retrieval_top_k": 5,
+    "judge_enabled": false,
+    "notes": "single-source direct fact; source hit only"
+  },
+  {
+    "id": "rag_retrieval_df_002",
+    "module": "rag",
+    "subtype": "retrieval",
+    "question_type": "direct_fact",
+    "difficulty": 1,
+    "modalities": [
+      "txt"
+    ],
+    "input": "根据知识库，哪份文件通过删除博客文章示例解释了 CSRF？请给出来源路径。",
+    "gold_sources": [
+      "Safety Knowledge/CSRF.txt"
+    ],
+    "required_source_types": [
+      "txt"
+    ],
+    "should_have_final_answer": true,
+    "retrieval_top_k": 5,
+    "judge_enabled": false,
+    "notes": "single-source direct fact; source hit only"
+  },
+  {
+    "id": "rag_retrieval_df_003",
+    "module": "rag",
+    "subtype": "retrieval",
+    "question_type": "direct_fact",
+    "difficulty": 1,
+    "modalities": [
+      "md"
+    ],
+    "input": "根据知识库，哪份文件主要讲同源策略与跨域访问限制？请给出来源路径。",
+    "gold_sources": [
+      "Safety Knowledge/cors.md"
+    ],
+    "required_source_types": [
+      "md"
+    ],
+    "should_have_final_answer": true,
+    "retrieval_top_k": 5,
+    "judge_enabled": false,
+    "notes": "single-source direct fact; source hit only"
+  },
+  {
+    "id": "rag_retrieval_df_004",
+    "module": "rag",
+    "subtype": "retrieval",
+    "question_type": "direct_fact",
+    "difficulty": 1,
+    "modalities": [
+      "json"
+    ],
+    "input": "根据知识库，支持查询支付方式和退款规则的 FAQ 文件是哪个？请给出来源路径。",
+    "gold_sources": [
+      "E-commerce Data/faq.json"
+    ],
+    "required_source_types": [
+      "json"
+    ],
+    "should_have_final_answer": true,
+    "retrieval_top_k": 5,
+    "judge_enabled": false,
+    "notes": "single-source direct fact; source hit only"
+  },
+  {
+    "id": "rag_retrieval_df_005",
+    "module": "rag",
+    "subtype": "retrieval",
+    "question_type": "direct_fact",
+    "difficulty": 2,
+    "modalities": [
+      "md"
+    ],
+    "input": "根据知识库，哪份文件集中讲 AI Agent 的技术架构、开发框架和应用场景？请给出来源路径。",
+    "gold_sources": [
+      "AI Knowledge/2026#U5e74AI_Agent#U667a#U80fd#U4f53#U6280#U672f#U53d1#U5c55#U62a5#U544a.md"
+    ],
+    "required_source_types": [
+      "md"
+    ],
+    "should_have_final_answer": true,
+    "retrieval_top_k": 5,
+    "judge_enabled": false,
+    "notes": "single-source direct fact; source hit only"
+  },
+  {
+    "id": "rag_retrieval_df_006",
+    "module": "rag",
+    "subtype": "retrieval",
+    "question_type": "direct_fact",
+    "difficulty": 2,
+    "modalities": [
+      "md"
+    ],
+    "input": "根据知识库，哪份文件讨论职业教育中学生使用 GenAI 的场景和频率？请给出来源路径。",
+    "gold_sources": [
+      "AI Knowledge/#U6e05#U534e#U5927#U5b66#Uff1a#U804c#U4e1a#U6559#U80b2#U4eba#U5de5#U667a#U80fd#U5e94#U7528#U53d1#U5c55#U62a5#U544a#Uff082024-2025#Uff09.md"
+    ],
+    "required_source_types": [
+      "md"
+    ],
+    "should_have_final_answer": true,
+    "retrieval_top_k": 5,
+    "judge_enabled": false,
+    "notes": "single-source direct fact; source hit only"
+  },
+  {
+    "id": "rag_retrieval_df_007",
+    "module": "rag",
+    "subtype": "retrieval",
+    "question_type": "direct_fact",
+    "difficulty": 2,
+    "modalities": [
+      "pdf"
+    ],
+    "input": "根据知识库，哪份财报 PDF 对应上汽集团 2025 年第三季度报告？请给出来源路径。",
+    "gold_sources": [
+      "Financial Report Data/#U4e0a#U6c7d#U96c6#U56e2 2025 Q3.pdf"
+    ],
+    "required_source_types": [
+      "pdf"
+    ],
+    "should_have_final_answer": true,
+    "retrieval_top_k": 5,
+    "judge_enabled": false,
+    "notes": "single-source direct fact; source hit only"
+  },
+  {
+    "id": "rag_retrieval_df_008",
+    "module": "rag",
+    "subtype": "retrieval",
+    "question_type": "direct_fact",
+    "difficulty": 1,
+    "modalities": [
+      "xlsx"
+    ],
+    "input": "根据知识库，哪张表包含 customer_id、segment、city 这些客户字段？请给出来源路径。",
+    "gold_sources": [
+      "E-commerce Data/customers.xlsx"
+    ],
+    "required_source_types": [
+      "xlsx"
+    ],
+    "should_have_final_answer": true,
+    "retrieval_top_k": 5,
+    "judge_enabled": false,
+    "notes": "single-source direct fact; source hit only"
+  },
+  {
+    "id": "rag_retrieval_cmp_001",
+    "module": "rag",
+    "subtype": "retrieval",
+    "question_type": "compare",
+    "difficulty": 2,
+    "modalities": [
+      "pdf"
+    ],
+    "input": "根据知识库，对比上汽集团和三一重工 2025 Q3 的财务表现，应检索哪些来源路径？",
+    "gold_sources": [
+      "Financial Report Data/#U4e0a#U6c7d#U96c6#U56e2 2025 Q3.pdf",
+      "Financial Report Data/#U4e09#U4e00#U91cd#U5de5 2025 Q3.pdf"
+    ],
+    "required_source_types": [
+      "pdf"
+    ],
+    "should_have_final_answer": true,
+    "retrieval_top_k": 5,
+    "judge_enabled": false,
+    "notes": "compare across two financial reports"
+  },
+  {
+    "id": "rag_retrieval_cmp_002",
+    "module": "rag",
+    "subtype": "retrieval",
+    "question_type": "compare",
+    "difficulty": 2,
+    "modalities": [
+      "md"
+    ],
+    "input": "根据知识库，对比高职和中职学生的 GenAI 使用频率，应检索哪份来源？请给出路径。",
+    "gold_sources": [
+      "AI Knowledge/#U6e05#U534e#U5927#U5b66#Uff1a#U804c#U4e1a#U6559#U80b2#U4eba#U5de5#U667a#U80fd#U5e94#U7528#U53d1#U5c55#U62a5#U544a#Uff082024-2025#Uff09.md"
+    ],
+    "required_source_types": [
+      "md"
+    ],
+    "should_have_final_answer": true,
+    "retrieval_top_k": 5,
+    "judge_enabled": false,
+    "notes": "single-source compare inside one report"
+  },
+  {
+    "id": "rag_retrieval_cmp_003",
+    "module": "rag",
+    "subtype": "retrieval",
+    "question_type": "compare",
+    "difficulty": 2,
+    "modalities": [
+      "json"
+    ],
+    "input": "根据知识库，比较奖励和信用余额是否可提现，应命中哪个 FAQ 来源？请给出路径。",
+    "gold_sources": [
+      "E-commerce Data/faq.json"
+    ],
+    "required_source_types": [
+      "json"
+    ],
+    "should_have_final_answer": true,
+    "retrieval_top_k": 5,
+    "judge_enabled": false,
+    "notes": "single-source compare inside one FAQ file"
+  },
+  {
+    "id": "rag_retrieval_cmp_004",
+    "module": "rag",
+    "subtype": "retrieval",
+    "question_type": "compare",
+    "difficulty": 2,
+    "modalities": [
+      "xlsx"
+    ],
+    "input": "根据知识库，比较库存现有量与补货阈值，应检索哪张表？请给出路径。",
+    "gold_sources": [
+      "E-commerce Data/inventory.xlsx"
+    ],
+    "required_source_types": [
+      "xlsx"
+    ],
+    "should_have_final_answer": true,
+    "retrieval_top_k": 5,
+    "judge_enabled": false,
+    "notes": "single-source compare inside inventory table"
+  },
+  {
+    "id": "rag_retrieval_cmp_005",
+    "module": "rag",
+    "subtype": "retrieval",
+    "question_type": "compare",
+    "difficulty": 2,
+    "modalities": [
+      "md"
+    ],
+    "input": "根据知识库，比较 LangGraph 和 AutoGen 的定位，应检索哪份 AI Agent 文档？请给出路径。",
+    "gold_sources": [
+      "AI Knowledge/2026#U5e74AI_Agent#U667a#U80fd#U4f53#U6280#U672f#U53d1#U5c55#U62a5#U544a.md"
+    ],
+    "required_source_types": [
+      "md"
+    ],
+    "should_have_final_answer": true,
+    "retrieval_top_k": 5,
+    "judge_enabled": false,
+    "notes": "single-source compare inside one report"
+  },
+  {
+    "id": "rag_retrieval_cmp_006",
+    "module": "rag",
+    "subtype": "retrieval",
+    "question_type": "compare",
+    "difficulty": 2,
+    "modalities": [
+      "pdf"
+    ],
+    "input": "根据知识库，对比航天动力和上汽集团 2025 Q3 净利润正负，应检索哪些来源路径？",
+    "gold_sources": [
+      "Financial Report Data/#U822a#U5929#U52a8#U529b 2025 Q3.pdf",
+      "Financial Report Data/#U4e0a#U6c7d#U96c6#U56e2 2025 Q3.pdf"
+    ],
+    "required_source_types": [
+      "pdf"
+    ],
+    "should_have_final_answer": true,
+    "retrieval_top_k": 5,
+    "judge_enabled": false,
+    "notes": "compare across two financial reports"
+  },
+  {
+    "id": "rag_retrieval_cmp_007",
+    "module": "rag",
+    "subtype": "retrieval",
+    "question_type": "compare",
+    "difficulty": 1,
+    "modalities": [
+      "xlsx"
+    ],
+    "input": "根据知识库，比较 customers.xlsx 里个人客户和企业客户数量，应检索哪张表？请给出路径。",
+    "gold_sources": [
+      "E-commerce Data/customers.xlsx"
+    ],
+    "required_source_types": [
+      "xlsx"
+    ],
+    "should_have_final_answer": true,
+    "retrieval_top_k": 5,
+    "judge_enabled": false,
+    "notes": "single-source compare inside customers table"
+  },
+  {
+    "id": "rag_retrieval_cmp_008",
+    "module": "rag",
+    "subtype": "retrieval",
+    "question_type": "compare",
+    "difficulty": 2,
+    "modalities": [
+      "md"
+    ],
+    "input": "根据知识库，比较同源策略下能跨域加载资源和不能直接读取内容这两类能力，应检索哪份文档？请给出路径。",
+    "gold_sources": [
+      "Safety Knowledge/cors.md"
+    ],
+    "required_source_types": [
+      "md"
+    ],
+    "should_have_final_answer": true,
+    "retrieval_top_k": 5,
+    "judge_enabled": false,
+    "notes": "single-source compare inside same-origin doc"
+  },
+  {
+    "id": "rag_retrieval_neg_001",
+    "module": "rag",
+    "subtype": "retrieval",
+    "question_type": "negation",
+    "difficulty": 2,
+    "modalities": [
+      "md"
+    ],
+    "input": "根据知识库，哪份文档明确说明 XSS 到今天并不要求一定跨域？请给出来源路径。",
+    "gold_sources": [
+      "Safety Knowledge/XSS.md"
+    ],
+    "required_source_types": [
+      "md"
+    ],
+    "should_have_final_answer": true,
+    "retrieval_top_k": 5,
+    "judge_enabled": false,
+    "notes": "single-source negation; source hit only"
+  },
+  {
+    "id": "rag_retrieval_neg_002",
+    "module": "rag",
+    "subtype": "retrieval",
+    "question_type": "negation",
+    "difficulty": 2,
+    "modalities": [
+      "json"
+    ],
+    "input": "根据知识库，哪份 FAQ 说明不接受邮政信箱和 APO/FPO 地址？请给出来源路径。",
+    "gold_sources": [
+      "E-commerce Data/faq.json"
+    ],
+    "required_source_types": [
+      "json"
+    ],
+    "should_have_final_answer": true,
+    "retrieval_top_k": 5,
+    "judge_enabled": false,
+    "notes": "single-source negation; source hit only"
+  },
+  {
+    "id": "rag_retrieval_neg_003",
+    "module": "rag",
+    "subtype": "retrieval",
+    "question_type": "negation",
+    "difficulty": 2,
+    "modalities": [
+      "txt"
+    ],
+    "input": "根据知识库，哪份文件指出“只允许 POST 不能防住 CSRF”这种看法是错误的？请给出来源路径。",
+    "gold_sources": [
+      "Safety Knowledge/CSRF.txt"
+    ],
+    "required_source_types": [
+      "txt"
+    ],
+    "should_have_final_answer": true,
+    "retrieval_top_k": 5,
+    "judge_enabled": false,
+    "notes": "single-source negation; source hit only"
+  },
+  {
+    "id": "rag_retrieval_neg_004",
+    "module": "rag",
+    "subtype": "retrieval",
+    "question_type": "negation",
+    "difficulty": 2,
+    "modalities": [
+      "md"
+    ],
+    "input": "根据知识库，哪份文件说 XMLHttpRequest 不能直接跨域访问资源？请给出来源路径。",
+    "gold_sources": [
+      "Safety Knowledge/cors.md"
+    ],
+    "required_source_types": [
+      "md"
+    ],
+    "should_have_final_answer": true,
+    "retrieval_top_k": 5,
+    "judge_enabled": false,
+    "notes": "single-source negation; source hit only"
+  },
+  {
+    "id": "rag_retrieval_neg_005",
+    "module": "rag",
+    "subtype": "retrieval",
+    "question_type": "negation",
+    "difficulty": 2,
+    "modalities": [
+      "pdf"
+    ],
+    "input": "根据知识库，哪份财报显示公司并非盈利而是亏损？请给出来源路径。",
+    "gold_sources": [
+      "Financial Report Data/#U822a#U5929#U52a8#U529b 2025 Q3.pdf"
+    ],
+    "required_source_types": [
+      "pdf"
+    ],
+    "should_have_final_answer": true,
+    "retrieval_top_k": 5,
+    "judge_enabled": false,
+    "notes": "single-source negation; source hit only"
+  },
+  {
+    "id": "rag_retrieval_neg_006",
+    "module": "rag",
+    "subtype": "retrieval",
+    "question_type": "negation",
+    "difficulty": 1,
+    "modalities": [
+      "xlsx"
+    ],
+    "input": "根据知识库，哪张表可以判断哪些 SKU 低于补货阈值，而不是客户信息表？请给出来源路径。",
+    "gold_sources": [
+      "E-commerce Data/inventory.xlsx"
+    ],
+    "required_source_types": [
+      "xlsx"
+    ],
+    "should_have_final_answer": true,
+    "retrieval_top_k": 5,
+    "judge_enabled": false,
+    "notes": "single-source negation; source hit only"
+  },
+  {
+    "id": "rag_retrieval_neg_007",
+    "module": "rag",
+    "subtype": "retrieval",
+    "question_type": "negation",
+    "difficulty": 2,
+    "modalities": [
+      "md"
+    ],
+    "input": "根据知识库，哪份职业教育报告表明学生对 GenAI 并没有形成高频日常使用？请给出来源路径。",
+    "gold_sources": [
+      "AI Knowledge/#U6e05#U534e#U5927#U5b66#Uff1a#U804c#U4e1a#U6559#U80b2#U4eba#U5de5#U667a#U80fd#U5e94#U7528#U53d1#U5c55#U62a5#U544a#Uff082024-2025#Uff09.md"
+    ],
+    "required_source_types": [
+      "md"
+    ],
+    "should_have_final_answer": true,
+    "retrieval_top_k": 5,
+    "judge_enabled": false,
+    "notes": "single-source negation; source hit only"
+  },
+  {
+    "id": "rag_retrieval_neg_008",
+    "module": "rag",
+    "subtype": "retrieval",
+    "question_type": "negation",
+    "difficulty": 2,
+    "modalities": [
+      "md"
+    ],
+    "input": "根据知识库，哪份 AI Agent 文档不只讲能力提升，也专门讨论 AI 幻觉和隐私风险？请给出来源路径。",
+    "gold_sources": [
+      "AI Knowledge/2026#U5e74AI_Agent#U667a#U80fd#U4f53#U6280#U672f#U53d1#U5c55#U62a5#U544a.md"
+    ],
+    "required_source_types": [
+      "md"
+    ],
+    "should_have_final_answer": true,
+    "retrieval_top_k": 5,
+    "judge_enabled": false,
+    "notes": "single-source negation; source hit only"
+  },
+  {
+    "id": "rag_retrieval_fz_001",
+    "module": "rag",
+    "subtype": "retrieval",
+    "question_type": "fuzzy",
+    "difficulty": 2,
+    "modalities": [
+      "md"
+    ],
+    "input": "那个讲“偷 Cookie 然后直接登别人账号”的安全文档在哪？给我来源路径。",
+    "gold_sources": [
+      "Safety Knowledge/XSS.md"
+    ],
+    "required_source_types": [
+      "md"
+    ],
+    "should_have_final_answer": true,
+    "retrieval_top_k": 5,
+    "judge_enabled": false,
+    "notes": "fuzzy wording mapped to XSS source"
+  },
+  {
+    "id": "rag_retrieval_fz_002",
+    "module": "rag",
+    "subtype": "retrieval",
+    "question_type": "fuzzy",
+    "difficulty": 2,
+    "modalities": [
+      "txt"
+    ],
+    "input": "那个说“用图片标签也能把别人博客删掉”的文件在哪？给我来源路径。",
+    "gold_sources": [
+      "Safety Knowledge/CSRF.txt"
+    ],
+    "required_source_types": [
+      "txt"
+    ],
+    "should_have_final_answer": true,
+    "retrieval_top_k": 5,
+    "judge_enabled": false,
+    "notes": "fuzzy wording mapped to CSRF source"
+  },
+  {
+    "id": "rag_retrieval_fz_003",
+    "module": "rag",
+    "subtype": "retrieval",
+    "question_type": "fuzzy",
+    "difficulty": 1,
+    "modalities": [
+      "json"
+    ],
+    "input": "不注册也能买东西，这条知识在哪个 FAQ 文件里？给我路径。",
+    "gold_sources": [
+      "E-commerce Data/faq.json"
+    ],
+    "required_source_types": [
+      "json"
+    ],
+    "should_have_final_answer": true,
+    "retrieval_top_k": 5,
+    "judge_enabled": false,
+    "notes": "fuzzy wording mapped to FAQ source"
+  },
+  {
+    "id": "rag_retrieval_fz_004",
+    "module": "rag",
+    "subtype": "retrieval",
+    "question_type": "fuzzy",
+    "difficulty": 2,
+    "modalities": [
+      "md"
+    ],
+    "input": "哪个文件里有“AI 教师”和“AI 学伴”这种场景？给我来源路径。",
+    "gold_sources": [
+      "AI Knowledge/2026#U5e74AI_Agent#U667a#U80fd#U4f53#U6280#U672f#U53d1#U5c55#U62a5#U544a.md"
+    ],
+    "required_source_types": [
+      "md"
+    ],
+    "should_have_final_answer": true,
+    "retrieval_top_k": 5,
+    "judge_enabled": false,
+    "notes": "fuzzy wording mapped to AI Agent report"
+  },
+  {
+    "id": "rag_retrieval_fz_005",
+    "module": "rag",
+    "subtype": "retrieval",
+    "question_type": "fuzzy",
+    "difficulty": 2,
+    "modalities": [
+      "md"
+    ],
+    "input": "那个说高职学生比中职更常用 DeepSeek 的报告在哪？给我路径。",
+    "gold_sources": [
+      "AI Knowledge/#U6e05#U534e#U5927#U5b66#Uff1a#U804c#U4e1a#U6559#U80b2#U4eba#U5de5#U667a#U80fd#U5e94#U7528#U53d1#U5c55#U62a5#U544a#Uff082024-2025#Uff09.md"
+    ],
+    "required_source_types": [
+      "md"
+    ],
+    "should_have_final_answer": true,
+    "retrieval_top_k": 5,
+    "judge_enabled": false,
+    "notes": "fuzzy wording mapped to vocational AI report"
+  },
+  {
+    "id": "rag_retrieval_fz_006",
+    "module": "rag",
+    "subtype": "retrieval",
+    "question_type": "fuzzy",
+    "difficulty": 2,
+    "modalities": [
+      "pdf"
+    ],
+    "input": "哪份文档写了 OpenAI 2025 年营收大概 130 亿美元？请给出路径。",
+    "gold_sources": [
+      "AI Knowledge/OpenAI#U6df1#U5ea6#U62a5#U544a#Uff1a#U5927#U6a21#U578b#U738b#U8005#Uff0c#U5f15#U9886AGI#U4e4b#U8def.pdf"
+    ],
+    "required_source_types": [
+      "pdf"
+    ],
+    "should_have_final_answer": true,
+    "retrieval_top_k": 5,
+    "judge_enabled": false,
+    "notes": "fuzzy wording mapped to OpenAI industry report"
+  },
+  {
+    "id": "rag_retrieval_fz_007",
+    "module": "rag",
+    "subtype": "retrieval",
+    "question_type": "fuzzy",
+    "difficulty": 1,
+    "modalities": [
+      "xlsx"
+    ],
+    "input": "哪个 Excel 才是订单明细表，不是库存也不是员工？给我路径。",
+    "gold_sources": [
+      "E-commerce Data/sales_orders.xlsx"
+    ],
+    "required_source_types": [
+      "xlsx"
+    ],
+    "should_have_final_answer": true,
+    "retrieval_top_k": 5,
+    "judge_enabled": false,
+    "notes": "fuzzy wording mapped to sales orders table"
+  },
+  {
+    "id": "rag_retrieval_fz_008",
+    "module": "rag",
+    "subtype": "retrieval",
+    "question_type": "fuzzy",
+    "difficulty": 2,
+    "modalities": [
+      "pdf"
+    ],
+    "input": "那个说 AI 眼镜会从信息显示工具升级成智能助手的报告在哪？给我路径。",
+    "gold_sources": [
+      "AI Knowledge/AI#U773c#U955c#U5173#U952e#U6280#U672f#U4e0e#U4ea7#U4e1a#U751f#U6001#U7814#U7a76#U62a5#U544a#Uff082025#U5e74#Uff09.pdf"
+    ],
+    "required_source_types": [
+      "pdf"
+    ],
+    "should_have_final_answer": true,
+    "retrieval_top_k": 5,
+    "judge_enabled": false,
+    "notes": "fuzzy wording mapped to AI glasses report"
+  },
+  {
+    "id": "rag_retrieval_mh_001",
+    "module": "rag",
+    "subtype": "retrieval",
+    "question_type": "multi_hop",
+    "difficulty": 3,
+    "modalities": [
+      "md"
+    ],
+    "input": "根据知识库，哪份文件既介绍 Agent 的四大核心模块，又提到 ReAct 和函数调用？请给出来源路径。",
+    "gold_sources": [
+      "AI Knowledge/2026#U5e74AI_Agent#U667a#U80fd#U4f53#U6280#U672f#U53d1#U5c55#U62a5#U544a.md"
+    ],
+    "required_source_types": [
+      "md"
+    ],
+    "should_have_final_answer": true,
+    "retrieval_top_k": 5,
+    "judge_enabled": false,
+    "notes": "multi-hop within single AI Agent report"
+  },
+  {
+    "id": "rag_retrieval_mh_002",
+    "module": "rag",
+    "subtype": "retrieval",
+    "question_type": "multi_hop",
+    "difficulty": 3,
+    "modalities": [
+      "md"
+    ],
+    "input": "根据知识库，哪份文件同时包含职业教育 AI 的政策驱动和学生使用场景数据？请给出来源路径。",
+    "gold_sources": [
+      "AI Knowledge/#U6e05#U534e#U5927#U5b66#Uff1a#U804c#U4e1a#U6559#U80b2#U4eba#U5de5#U667a#U80fd#U5e94#U7528#U53d1#U5c55#U62a5#U544a#Uff082024-2025#Uff09.md"
+    ],
+    "required_source_types": [
+      "md"
+    ],
+    "should_have_final_answer": true,
+    "retrieval_top_k": 5,
+    "judge_enabled": false,
+    "notes": "multi-hop within single vocational AI report"
+  },
+  {
+    "id": "rag_retrieval_mh_003",
+    "module": "rag",
+    "subtype": "retrieval",
+    "question_type": "multi_hop",
+    "difficulty": 2,
+    "modalities": [
+      "json"
+    ],
+    "input": "根据知识库，哪份 FAQ 文件既解释总交货时间构成，也说明处理时间和运输时间的区别？请给出来源路径。",
+    "gold_sources": [
+      "E-commerce Data/faq.json"
+    ],
+    "required_source_types": [
+      "json"
+    ],
+    "should_have_final_answer": true,
+    "retrieval_top_k": 5,
+    "judge_enabled": false,
+    "notes": "multi-hop within FAQ source"
+  },
+  {
+    "id": "rag_retrieval_mh_004",
+    "module": "rag",
+    "subtype": "retrieval",
+    "question_type": "multi_hop",
+    "difficulty": 3,
+    "modalities": [
+      "pdf"
+    ],
+    "input": "根据知识库，哪份财报既显示净利润为负，又解释了业绩变动原因与中小投资者索赔损失有关？请给出来源路径。",
+    "gold_sources": [
+      "Financial Report Data/#U822a#U5929#U52a8#U529b 2025 Q3.pdf"
+    ],
+    "required_source_types": [
+      "pdf"
+    ],
+    "should_have_final_answer": true,
+    "retrieval_top_k": 5,
+    "judge_enabled": false,
+    "notes": "multi-hop within single financial report"
+  },
+  {
+    "id": "rag_retrieval_mh_005",
+    "module": "rag",
+    "subtype": "retrieval",
+    "question_type": "multi_hop",
+    "difficulty": 2,
+    "modalities": [
+      "xlsx"
+    ],
+    "input": "根据知识库，哪张员工表既有组织管理字段 manager_id，也有薪酬字段 base_salary？请给出来源路径。",
+    "gold_sources": [
+      "E-commerce Data/employees.xlsx"
+    ],
+    "required_source_types": [
+      "xlsx"
+    ],
+    "should_have_final_answer": true,
+    "retrieval_top_k": 5,
+    "judge_enabled": false,
+    "notes": "multi-hop within employees table"
+  },
+  {
+    "id": "rag_retrieval_mh_006",
+    "module": "rag",
+    "subtype": "retrieval",
+    "question_type": "multi_hop",
+    "difficulty": 2,
+    "modalities": [
+      "xlsx"
+    ],
+    "input": "根据知识库，哪张库存表既能查仓库信息，也能判断是否低于补货阈值？请给出来源路径。",
+    "gold_sources": [
+      "E-commerce Data/inventory.xlsx"
+    ],
+    "required_source_types": [
+      "xlsx"
+    ],
+    "should_have_final_answer": true,
+    "retrieval_top_k": 5,
+    "judge_enabled": false,
+    "notes": "multi-hop within inventory table"
+  },
+  {
+    "id": "rag_retrieval_mh_007",
+    "module": "rag",
+    "subtype": "retrieval",
+    "question_type": "multi_hop",
+    "difficulty": 3,
+    "modalities": [
+      "txt"
+    ],
+    "input": "根据知识库，哪份治理报告既提出“两横三纵”框架，又说明横轴和纵轴分别是什么？请给出来源路径。",
+    "gold_sources": [
+      "AI Knowledge/#U4eba#U5de5#U667a#U80fd#U5b89#U5168#U6cbb#U7406#U7814#U7a76#U62a5#U544a_#U63d0#U53d6#U6587#U672c.txt"
+    ],
+    "required_source_types": [
+      "txt"
+    ],
+    "should_have_final_answer": true,
+    "retrieval_top_k": 5,
+    "judge_enabled": false,
+    "notes": "multi-hop within governance report"
+  },
+  {
+    "id": "rag_retrieval_mh_008",
+    "module": "rag",
+    "subtype": "retrieval",
+    "question_type": "multi_hop",
+    "difficulty": 3,
+    "modalities": [
+      "pdf"
+    ],
+    "input": "根据知识库，哪份 AI 应用报告同时提到 ChatGPT Health 和 Claude for Healthcare？请给出来源路径。",
+    "gold_sources": [
+      "AI Knowledge/2026AI#U5e94#U7528#U4e13#U9898#Uff1a#U5404#U5927#U5382#U65b0#U6a21#U578b#U6301#U7eed#U8fed#U4ee3#Uff0c#U91cd#U89c6AI#U5e94#U7528#U677f#U5757#U6295#U8d44#U673a#U4f1a.pdf"
+    ],
+    "required_source_types": [
+      "pdf"
+    ],
+    "should_have_final_answer": true,
+    "retrieval_top_k": 5,
+    "judge_enabled": false,
+    "notes": "multi-hop within AI application report"
+  },
+  {
+    "id": "rag_retrieval_cfa_001",
+    "module": "rag",
+    "subtype": "retrieval",
+    "question_type": "cross_file_aggregation",
+    "difficulty": 4,
+    "modalities": [
+      "mixed"
+    ],
+    "input": "根据知识库，客户、订单、库存这三类电商结构化数据分别在哪些文件里？请给出来源路径。",
+    "gold_sources": [
+      "E-commerce Data/customers.xlsx",
+      "E-commerce Data/sales_orders.xlsx",
+      "E-commerce Data/inventory.xlsx",
+      "E-commerce Data/data_structure.md"
+    ],
+    "required_source_types": [
+      "md",
+      "xlsx"
+    ],
+    "should_have_final_answer": true,
+    "retrieval_top_k": 5,
+    "judge_enabled": false,
+    "notes": "cross-file aggregation across e-commerce catalog and tables"
+  },
+  {
+    "id": "rag_retrieval_cfa_002",
+    "module": "rag",
+    "subtype": "retrieval",
+    "question_type": "cross_file_aggregation",
+    "difficulty": 4,
+    "modalities": [
+      "mixed"
+    ],
+    "input": "根据知识库，技术架构和安全治理分别应该查哪两份 AI 文档？请给出来源路径。",
+    "gold_sources": [
+      "AI Knowledge/2026#U5e74AI_Agent#U667a#U80fd#U4f53#U6280#U672f#U53d1#U5c55#U62a5#U544a.md",
+      "AI Knowledge/#U4eba#U5de5#U667a#U80fd#U5b89#U5168#U6cbb#U7406#U7814#U7a76#U62a5#U544a_#U63d0#U53d6#U6587#U672c.txt"
+    ],
+    "required_source_types": [
+      "md",
+      "txt"
+    ],
+    "should_have_final_answer": true,
+    "retrieval_top_k": 5,
+    "judge_enabled": false,
+    "notes": "cross-file aggregation across capability and governance docs"
+  },
+  {
+    "id": "rag_retrieval_cfa_003",
+    "module": "rag",
+    "subtype": "retrieval",
+    "question_type": "cross_file_aggregation",
+    "difficulty": 4,
+    "modalities": [
+      "pdf"
+    ],
+    "input": "根据知识库，如果要横向比较三一重工、上汽集团、航天动力三家公司的 2025 Q3 业绩，应检索哪些财报路径？",
+    "gold_sources": [
+      "Financial Report Data/#U4e09#U4e00#U91cd#U5de5 2025 Q3.pdf",
+      "Financial Report Data/#U4e0a#U6c7d#U96c6#U56e2 2025 Q3.pdf",
+      "Financial Report Data/#U822a#U5929#U52a8#U529b 2025 Q3.pdf"
+    ],
+    "required_source_types": [
+      "pdf"
+    ],
+    "should_have_final_answer": true,
+    "retrieval_top_k": 5,
+    "judge_enabled": false,
+    "notes": "cross-file aggregation across three financial reports"
+  },
+  {
+    "id": "rag_retrieval_cfa_004",
+    "module": "rag",
+    "subtype": "retrieval",
+    "question_type": "cross_file_aggregation",
+    "difficulty": 4,
+    "modalities": [
+      "xlsx"
+    ],
+    "input": "根据知识库，如果要判断华东地区销售表现并关联客户分群，应检索哪些来源路径？",
+    "gold_sources": [
+      "E-commerce Data/sales_orders.xlsx",
+      "E-commerce Data/customers.xlsx"
+    ],
+    "required_source_types": [
+      "xlsx"
+    ],
+    "should_have_final_answer": true,
+    "retrieval_top_k": 5,
+    "judge_enabled": false,
+    "notes": "cross-file aggregation across two tables"
+  },
+  {
+    "id": "rag_retrieval_cfa_005",
+    "module": "rag",
+    "subtype": "retrieval",
+    "question_type": "cross_file_aggregation",
+    "difficulty": 3,
+    "modalities": [
+      "md"
+    ],
+    "input": "根据知识库，若要先看总目录再看 AI 目录索引，应检索哪些来源路径？",
+    "gold_sources": [
+      "data_structure.md",
+      "AI Knowledge/data_structure.md"
+    ],
+    "required_source_types": [
+      "md"
+    ],
+    "should_have_final_answer": true,
+    "retrieval_top_k": 5,
+    "judge_enabled": false,
+    "notes": "cross-file aggregation across directory index files"
+  },
+  {
+    "id": "rag_retrieval_cfa_006",
+    "module": "rag",
+    "subtype": "retrieval",
+    "question_type": "cross_file_aggregation",
+    "difficulty": 4,
+    "modalities": [
+      "mixed"
+    ],
+    "input": "根据知识库，如果要同时参考售后 FAQ 和真实订单明细表，应检索哪些来源路径？",
+    "gold_sources": [
+      "E-commerce Data/faq.json",
+      "E-commerce Data/sales_orders.xlsx"
+    ],
+    "required_source_types": [
+      "json",
+      "xlsx"
+    ],
+    "should_have_final_answer": true,
+    "retrieval_top_k": 5,
+    "judge_enabled": false,
+    "notes": "cross-file aggregation across FAQ and order table"
+  },
+  {
+    "id": "rag_retrieval_cfa_007",
+    "module": "rag",
+    "subtype": "retrieval",
+    "question_type": "cross_file_aggregation",
+    "difficulty": 4,
+    "modalities": [
+      "mixed"
+    ],
+    "input": "根据知识库，如果要同时看 AI Agent 平台选型和 OpenAI 的产品生态布局，应检索哪些来源路径？",
+    "gold_sources": [
+      "AI Knowledge/2026#U5e74AI_Agent#U667a#U80fd#U4f53#U6280#U672f#U53d1#U5c55#U62a5#U544a.md",
+      "AI Knowledge/OpenAI#U6df1#U5ea6#U62a5#U544a#Uff1a#U5927#U6a21#U578b#U738b#U8005#Uff0c#U5f15#U9886AGI#U4e4b#U8def.pdf"
+    ],
+    "required_source_types": [
+      "md",
+      "pdf"
+    ],
+    "should_have_final_answer": true,
+    "retrieval_top_k": 5,
+    "judge_enabled": false,
+    "notes": "cross-file aggregation across agent and OpenAI reports"
+  },
+  {
+    "id": "rag_retrieval_cfa_008",
+    "module": "rag",
+    "subtype": "retrieval",
+    "question_type": "cross_file_aggregation",
+    "difficulty": 4,
+    "modalities": [
+      "mixed"
+    ],
+    "input": "根据知识库，如果要先看财报目录说明，再进入三家公司具体报告，应检索哪些来源路径？",
+    "gold_sources": [
+      "Financial Report Data/data_structure.md",
+      "Financial Report Data/#U4e09#U4e00#U91cd#U5de5 2025 Q3.pdf",
+      "Financial Report Data/#U4e0a#U6c7d#U96c6#U56e2 2025 Q3.pdf",
+      "Financial Report Data/#U822a#U5929#U52a8#U529b 2025 Q3.pdf"
+    ],
+    "required_source_types": [
+      "md",
+      "pdf"
+    ],
+    "should_have_final_answer": true,
+    "retrieval_top_k": 5,
+    "judge_enabled": false,
+    "notes": "cross-file aggregation across financial index and reports"
+  }
+]

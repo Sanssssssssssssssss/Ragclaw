@@ -1,95 +1,126 @@
 "use client";
 
-import { Database, FileSearch, Plus, Sparkles, Wrench } from "lucide-react";
+import { Database, FileSearch, Monitor, Pencil, Plus, Sparkles, Wrench } from "lucide-react";
 
-import { useAppStore } from "@/lib/store";
+import { useRuntimeStore, useSessionStore } from "@/lib/store";
 
+/**
+ * Returns one rendered top navigation bar from no explicit inputs and exposes session, RAG, and index controls.
+ */
 export function Navbar() {
   const {
     createNewSession,
-    ragMode,
-    toggleRagMode,
     compressCurrentSession,
     renameCurrentSession,
-    rebuildKnowledgeIndex,
-    knowledgeIndexStatus,
     sessions,
     currentSessionId
-  } = useAppStore();
+  } = useSessionStore();
+  const {
+    ragMode,
+    toggleRagMode,
+    skillRetrievalEnabled,
+    toggleSkillRetrieval,
+    executionPlatform,
+    updateExecutionPlatform,
+    rebuildKnowledgeIndex,
+    knowledgeIndexStatus
+  } = useRuntimeStore();
 
   const currentTitle =
-    sessions.find((session) => session.id === currentSessionId)?.title ?? "新会话";
+    sessions.find((session) => session.id === currentSessionId)?.title ?? "Fresh thread";
   const isIndexBuilding = Boolean(knowledgeIndexStatus?.building);
-  const knowledgeIndexLabel = isIndexBuilding ? "索引重建中" : "重建索引";
+  const knowledgeIndexLabel = isIndexBuilding ? "Rebuilding index" : "Rebuild index";
   const knowledgeIndexHint = isIndexBuilding
-    ? "知识索引构建中"
+    ? "Index rebuild in progress"
     : knowledgeIndexStatus?.ready
-      ? `知识索引已就绪 · ${knowledgeIndexStatus.indexed_files} 个文件`
-      : "知识索引未就绪";
+      ? `${knowledgeIndexStatus.indexed_files} files indexed`
+      : "Index offline";
 
   return (
-    <header className="panel flex items-center justify-between rounded-[30px] px-5 py-4">
-      <div className="flex items-center gap-4">
-        <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-[rgba(15,139,141,0.14)] text-ocean">
+    <header className="panel flex flex-wrap items-center justify-between gap-4 rounded-[28px] px-5 py-4">
+      <div className="flex min-w-0 items-center gap-4">
+        <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-[var(--color-accent-soft)] text-[var(--color-accent)]">
           <Sparkles size={20} />
         </div>
-        <div>
-          <p className="text-sm uppercase tracking-[0.32em] text-[var(--color-ink-soft)]">
-            skill-rag
+        <div className="min-w-0">
+          <p className="text-xs uppercase tracking-[0.34em] text-[var(--color-ink-muted)]">
+            Onyx Chat
           </p>
-          <div className="flex items-center gap-3">
-            <h1 className="text-2xl font-semibold tracking-[-0.04em]">{currentTitle}</h1>
+          <div className="flex flex-wrap items-center gap-3">
+            <h1 className="truncate text-2xl font-semibold tracking-[-0.04em] text-white">
+              {currentTitle}
+            </h1>
             <button
-              className="rounded-full border border-[var(--color-line)] px-3 py-1 text-sm text-[var(--color-ink-soft)]"
+              className="ui-button px-3 py-1.5 text-xs"
               onClick={() => {
-                const next = window.prompt("重命名当前会话", currentTitle);
+                const next = window.prompt("Rename the current session", currentTitle);
                 if (next) {
                   void renameCurrentSession(next);
                 }
               }}
               type="button"
             >
+              <Pencil size={14} />
               Rename
             </button>
           </div>
+          <p className="mt-1 text-sm text-[var(--color-ink-soft)]">
+            Local knowledge cockpit with live retrieval and file context.
+          </p>
         </div>
       </div>
 
-      <div className="flex flex-wrap items-center justify-end gap-3">
-        <button
-          className="flex items-center gap-2 rounded-full border border-[var(--color-line)] bg-white/60 px-4 py-2 text-base"
-          onClick={() => void createNewSession()}
-          type="button"
-        >
+      <div className="flex flex-wrap items-center justify-end gap-2.5">
+        <button className="ui-button" onClick={() => void createNewSession()} type="button">
           <Plus size={16} />
-          新会话
+          New session
         </button>
         <button
-          className={`flex items-center gap-2 rounded-full px-4 py-2 text-base ${
-            ragMode
-              ? "bg-ocean text-white"
-              : "border border-[var(--color-line)] bg-white/60 text-ink"
-          }`}
+          className={ragMode ? "ui-button ui-button-primary" : "ui-button"}
           onClick={() => void toggleRagMode()}
           type="button"
         >
           <Database size={16} />
-          {ragMode ? "RAG 已开" : "RAG 已关"}
+          {ragMode ? "RAG enabled" : "RAG disabled"}
         </button>
         <button
-          className="flex items-center gap-2 rounded-full border border-[var(--color-line)] bg-white/60 px-4 py-2 text-base"
-          onClick={() => void compressCurrentSession()}
+          className={skillRetrievalEnabled ? "ui-button ui-button-primary" : "ui-button"}
+          onClick={() => void toggleSkillRetrieval()}
           type="button"
         >
+          <FileSearch size={16} />
+          {skillRetrievalEnabled ? "Skill on" : "Skill off"}
+        </button>
+        <div className="flex items-center gap-1 rounded-full border border-[var(--color-line)] bg-[var(--color-bg-soft)] p-1">
+          <div className="flex items-center gap-2 rounded-full px-3 py-1 text-sm text-[var(--color-ink-soft)]">
+            <Monitor size={15} />
+            Shell
+          </div>
+          <button
+            className={
+              executionPlatform === "windows" ? "ui-button ui-button-primary px-3 py-1.5" : "ui-button border-transparent px-3 py-1.5"
+            }
+            onClick={() => void updateExecutionPlatform("windows")}
+            type="button"
+          >
+            Win
+          </button>
+          <button
+            className={
+              executionPlatform === "linux" ? "ui-button ui-button-primary px-3 py-1.5" : "ui-button border-transparent px-3 py-1.5"
+            }
+            onClick={() => void updateExecutionPlatform("linux")}
+            type="button"
+          >
+            Linux
+          </button>
+        </div>
+        <button className="ui-button" onClick={() => void compressCurrentSession()} type="button">
           <Wrench size={16} />
-          压缩
+          Compress
         </button>
         <button
-          className={`flex items-center gap-2 rounded-full px-4 py-2 text-base ${
-            isIndexBuilding
-              ? "cursor-not-allowed bg-[rgba(15,139,141,0.12)] text-ocean"
-              : "border border-[var(--color-line)] bg-white/60"
-          }`}
+          className={isIndexBuilding ? "ui-button" : "ui-button"}
           disabled={isIndexBuilding}
           onClick={() => void rebuildKnowledgeIndex()}
           type="button"
@@ -97,8 +128,8 @@ export function Navbar() {
           <FileSearch size={16} />
           {knowledgeIndexLabel}
         </button>
-        <div className="hidden items-center gap-2 rounded-full bg-[rgba(212,106,74,0.12)] px-4 py-2 text-base text-[var(--color-ember)] md:flex">
-          <FileSearch size={16} />
+        <div className="ui-pill hidden md:inline-flex">
+          <FileSearch size={14} />
           {knowledgeIndexHint}
         </div>
       </div>

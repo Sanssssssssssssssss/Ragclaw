@@ -5,31 +5,100 @@ import math
 import re
 import threading
 import time
+from asyncio import to_thread
 from collections import Counter
 from pathlib import Path
 from typing import Any
 
-from llama_index.core import Document, Settings as LlamaSettings, StorageContext, VectorStoreIndex, load_index_from_storage
-try:
-    from llama_index.embeddings.huggingface import HuggingFaceEmbedding
-except ImportError:  # pragma: no cover - optional dependency at runtime
-    HuggingFaceEmbedding = None
-from llama_index.embeddings.openai import OpenAIEmbedding
-
 from config import get_settings
 from knowledge_retrieval.types import Evidence, IndexStatus
+from pydantic import PrivateAttr
 
 
 HEADING_PATTERN = re.compile(r"^(#{1,6})\s+(.*)$")
 ALNUM_PATTERN = re.compile(r"[A-Za-z0-9_]+")
 CHINESE_BLOCK_PATTERN = re.compile(r"[\u4e00-\u9fff]+")
+SUPPORTED_FILE_SUFFIXES = {".md", ".json", ".txt", ".pdf", ".xlsx", ".xls"}
+TEXT_FILE_ENCODINGS = ("utf-8", "utf-8-sig", "gb18030", "gbk")
+
+
+def _load_llama_index_components():
+    from llama_index.core import (  # pylint: disable=import-outside-toplevel
+        Document,
+        Settings as LlamaSettings,
+        StorageContext,
+        VectorStoreIndex,
+        load_index_from_storage,
+    )
+    from llama_index.core.base.embeddings.base import BaseEmbedding  # pylint: disable=import-outside-toplevel
+    from llama_index.embeddings.openai import OpenAIEmbedding  # pylint: disable=import-outside-toplevel
+    from llama_index.embeddings.huggingface import HuggingFaceEmbedding  # pylint: disable=import-outside-toplevel
+
+    return (
+        Document,
+        LlamaSettings,
+        StorageContext,
+        VectorStoreIndex,
+        load_index_from_storage,
+        BaseEmbedding,
+        OpenAIEmbedding,
+        HuggingFaceEmbedding,
+    )
+
+
+def _build_compatible_openai_embedding(
+    *,
+    model_name: str,
+    api_key: str,
+    api_base: str,
+):
+    from openai import OpenAI  # pylint: disable=import-outside-toplevel
+
+    _, _, _, _, _, BaseEmbedding, _, _ = _load_llama_index_components()
+
+    class CompatibleOpenAIEmbedding(BaseEmbedding):
+        model_name: str
+        api_key: str
+        api_base: str
+
+        _client: OpenAI = PrivateAttr()
+
+        def model_post_init(self, __context: Any) -> None:
+            self._client = OpenAI(api_key=self.api_key, base_url=self.api_base)
+
+        @classmethod
+        def class_name(cls) -> str:
+            return "CompatibleOpenAIEmbedding"
+
+        def _embed(self, inputs: list[str]) -> list[list[float]]:
+            response = self._client.embeddings.create(model=self.model_name, input=inputs)
+            return [list(item.embedding) for item in response.data]
+
+        def _get_query_embedding(self, query: str) -> list[float]:
+            return self._embed([query])[0]
+
+        async def _aget_query_embedding(self, query: str) -> list[float]:
+            return await to_thread(self._get_query_embedding, query)
+
+        def _get_text_embedding(self, text: str) -> list[float]:
+            return self._embed([text])[0]
+
+        def _get_text_embeddings(self, texts: list[str]) -> list[list[float]]:
+            return self._embed(texts)
+
+    return CompatibleOpenAIEmbedding(
+        model_name=model_name,
+        api_key=api_key,
+        api_base=api_base,
+    )
 
 
 class KnowledgeIndexer:
     def __init__(self) -> None:
         self.base_dir: Path | None = None
-        self._vector_index: VectorStoreIndex | None = None
+        self._vector_index: Any | None = None
         self._documents: list[dict[str, Any]] = []
+        self._build_errors: list[dict[str, str]] = []
         self._lock = threading.Lock()
         self._building = False
         self._last_built_at: float | None = None
@@ -37,6 +106,7 @@ class KnowledgeIndexer:
         self._document_frequencies: Counter[str] = Counter()
         self._vector_ready = False
         self._bm25_ready = False
+        self._last_vector_error: str | None = None
 
     def configure(self, base_dir: Path) -> None:
         self.base_dir = base_dir
@@ -44,8 +114,17 @@ class KnowledgeIndexer:
         self._vector_dir.mkdir(parents=True, exist_ok=True)
         self._bm25_dir.mkdir(parents=True, exist_ok=True)
         self._derived_dir.mkdir(parents=True, exist_ok=True)
+        self._vector_index = None
+        self._vector_ready = False
         self._load_manifest()
-        self._load_vector_index()
+
+    def warm_start(self) -> None:
+        if self.base_dir is None:
+            return
+        with self._lock:
+            self._load_manifest()
+            if self._supports_embeddings() and any(self._vector_dir.glob("*")):
+                self._load_vector_index()
 
     @property
     def _knowledge_dir(self) -> Path:
@@ -75,18 +154,25 @@ class KnowledgeIndexer:
     def _derived_dir(self) -> Path:
         return self._storage_dir / "derived"
 
+    @property
+    def _ingestion_errors_path(self) -> Path:
+        return self._derived_dir / "ingestion_errors.json"
+
     def _supports_embeddings(self) -> bool:
         settings = get_settings()
-        if settings.embedding_provider == "local":
-            return True
-        return bool(settings.embedding_api_key)
+        return settings.embedding_provider == "local" or bool(settings.embedding_api_key)
 
     def _build_embed_model(self):
         settings = get_settings()
+        _, _, _, _, _, _, OpenAIEmbedding, HuggingFaceEmbedding = _load_llama_index_components()
         if settings.embedding_provider == "local":
-            if HuggingFaceEmbedding is None:
-                raise RuntimeError("llama-index-embeddings-huggingface is not installed")
             return HuggingFaceEmbedding(model_name=settings.embedding_model)
+        if settings.embedding_provider == "bailian":
+            return _build_compatible_openai_embedding(
+                model_name=settings.embedding_model,
+                api_key=str(settings.embedding_api_key or ""),
+                api_base=settings.embedding_base_url,
+            )
         return OpenAIEmbedding(
             api_key=settings.embedding_api_key,
             api_base=settings.embedding_base_url,
@@ -101,12 +187,13 @@ class KnowledgeIndexer:
             indexed_files=len({item["source_path"] for item in self._documents}),
             vector_ready=self._vector_ready,
             bm25_ready=self._bm25_ready,
+            vector_error=self._last_vector_error,
         )
 
     def is_building(self) -> bool:
         return self._building
 
-    def rebuild_index(self) -> None:
+    def rebuild_index(self, *, build_vector: bool = True) -> None:
         if self.base_dir is None:
             return
 
@@ -116,7 +203,11 @@ class KnowledgeIndexer:
                 self._documents = self._build_documents()
                 self._write_manifest()
                 self._prepare_bm25_stats()
-                self._build_vector_index()
+                if build_vector:
+                    self._build_vector_index()
+                else:
+                    self._vector_index = None
+                    self._vector_ready = False
                 self._last_built_at = time.time()
             finally:
                 self._building = False
@@ -131,18 +222,96 @@ class KnowledgeIndexer:
             return []
 
         documents: list[dict[str, Any]] = []
+        self._build_errors = []
         for path in sorted(self._knowledge_dir.rglob("*")):
             if not path.is_file():
                 continue
             suffix = path.suffix.lower()
-            if suffix == ".md":
-                documents.extend(self._split_markdown(path))
-            elif suffix == ".json":
-                documents.extend(self._split_json(path))
+            if suffix not in SUPPORTED_FILE_SUFFIXES:
+                continue
+            try:
+                if suffix == ".md":
+                    documents.extend(self._split_markdown(path))
+                elif suffix == ".json":
+                    documents.extend(self._split_json(path))
+                elif suffix == ".txt":
+                    documents.extend(self._split_text(path))
+                elif suffix == ".pdf":
+                    documents.extend(self._split_pdf(path))
+                elif suffix == ".xlsx":
+                    documents.extend(self._split_excel(path))
+                elif suffix == ".xls":
+                    self._record_build_error(path, "parse", "Legacy .xls ingestion is not supported; save the workbook as .xlsx.")
+            except Exception as exc:
+                self._record_build_error(path, "parse", str(exc))
+        self._write_ingestion_errors()
         return documents
 
+    def _record_build_error(self, path: Path, stage: str, message: str) -> None:
+        self._build_errors.append(
+            {
+                "source_path": self._relative_path(path),
+                "stage": stage,
+                "message": message,
+            }
+        )
+
+    def _write_ingestion_errors(self) -> None:
+        self._ingestion_errors_path.write_text(
+            json.dumps({"errors": self._build_errors}, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+
+    def _read_text_file(self, path: Path) -> str:
+        for encoding in TEXT_FILE_ENCODINGS:
+            try:
+                return path.read_text(encoding=encoding)
+            except UnicodeDecodeError:
+                continue
+        return path.read_bytes().decode("utf-8", errors="replace")
+
+    def _make_text_chunks(
+        self,
+        *,
+        source_path: str,
+        source_type: str,
+        parent_id: str,
+        locator_prefix: str,
+        text: str,
+        parent_text: str | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> list[dict[str, Any]]:
+        cleaned_text = text.strip()
+        if not cleaned_text:
+            return []
+
+        chunks: list[dict[str, Any]] = []
+        paragraphs = [part.strip() for part in re.split(r"\n\s*\n+", cleaned_text) if part.strip()]
+        if not paragraphs:
+            paragraphs = [cleaned_text]
+
+        for paragraph_index, paragraph in enumerate(paragraphs, start=1):
+            slices = [paragraph[index : index + 1200] for index in range(0, len(paragraph), 1200)] or [paragraph]
+            for slice_index, slice_text in enumerate(slices, start=1):
+                locator = f"{locator_prefix} / 段落 {paragraph_index}"
+                if len(slices) > 1:
+                    locator = f"{locator}.{slice_index}"
+                item = {
+                    "doc_id": f"{parent_id}::child::{paragraph_index}.{slice_index}",
+                    "parent_id": parent_id,
+                    "source_path": source_path,
+                    "source_type": source_type,
+                    "locator": locator,
+                    "text": slice_text,
+                    "parent_text": (parent_text or cleaned_text).strip(),
+                }
+                if metadata:
+                    item.update(metadata)
+                chunks.append(item)
+        return chunks
+
     def _split_markdown(self, path: Path) -> list[dict[str, Any]]:
-        text = path.read_text(encoding="utf-8")
+        text = self._read_text_file(path)
         source_path = self._relative_path(path)
         sections: list[tuple[list[str], list[str]]] = []
         heading_stack: list[str] = []
@@ -206,7 +375,7 @@ class KnowledgeIndexer:
 
     def _split_json(self, path: Path) -> list[dict[str, Any]]:
         source_path = self._relative_path(path)
-        payload = json.loads(path.read_text(encoding="utf-8"))
+        payload = json.loads(self._read_text_file(path))
         if not isinstance(payload, list):
             return []
 
@@ -248,10 +417,176 @@ class KnowledgeIndexer:
             )
         return chunks
 
+    def _split_text(self, path: Path) -> list[dict[str, Any]]:
+        source_path = self._relative_path(path)
+        text = self._read_text_file(path).strip()
+        if not text:
+            return []
+        return self._make_text_chunks(
+            source_path=source_path,
+            source_type="txt",
+            parent_id=f"{source_path}::text",
+            locator_prefix=path.stem,
+            text=text,
+            metadata={"file_type": "txt"},
+        )
+
+    def _split_pdf(self, path: Path) -> list[dict[str, Any]]:
+        try:
+            from pypdf import PdfReader  # pylint: disable=import-outside-toplevel
+        except ImportError:
+            from PyPDF2 import PdfReader  # pylint: disable=import-outside-toplevel
+
+        source_path = self._relative_path(path)
+        reader = PdfReader(str(path))
+        chunks: list[dict[str, Any]] = []
+        extracted_pages = 0
+        total_pages = len(reader.pages)
+
+        for page_number, page in enumerate(reader.pages, start=1):
+            page_text = str(page.extract_text() or "").strip()
+            if not page_text:
+                continue
+            extracted_pages += 1
+            parent_id = f"{source_path}::page::{page_number}"
+            chunks.extend(
+                self._make_text_chunks(
+                    source_path=source_path,
+                    source_type="pdf",
+                    parent_id=parent_id,
+                    locator_prefix=f"页 {page_number}",
+                    text=page_text,
+                    metadata={
+                        "file_type": "pdf",
+                        "page": page_number,
+                        "total_pages": total_pages,
+                    },
+                )
+            )
+
+        if not chunks:
+            self._record_build_error(path, "extract", "No extractable text found in PDF.")
+        elif extracted_pages < total_pages:
+            self._record_build_error(
+                path,
+                "extract",
+                f"Extracted text from {extracted_pages}/{total_pages} PDF pages; some pages returned no text.",
+            )
+        return chunks
+
+    def _normalize_cell_value(self, value: Any) -> str:
+        if value is None:
+            return ""
+        if isinstance(value, float) and value.is_integer():
+            return str(int(value))
+        return str(value).strip()
+
+    def _split_excel(self, path: Path) -> list[dict[str, Any]]:
+        from openpyxl import load_workbook  # pylint: disable=import-outside-toplevel
+
+        source_path = self._relative_path(path)
+        source_type = path.suffix.lower().lstrip(".")
+        workbook = load_workbook(filename=str(path), read_only=True, data_only=True)
+        chunks: list[dict[str, Any]] = []
+
+        for sheet_index, sheet_name in enumerate(workbook.sheetnames, start=1):
+            worksheet = workbook[sheet_name]
+            non_empty_rows: list[tuple[int, list[str]]] = []
+            for row_number, row in enumerate(worksheet.iter_rows(values_only=True), start=1):
+                normalized_row = [self._normalize_cell_value(cell) for cell in row]
+                if any(cell for cell in normalized_row):
+                    non_empty_rows.append((row_number, normalized_row))
+
+            if not non_empty_rows:
+                continue
+
+            header_row_number, header_row = non_empty_rows[0]
+            headers = [value or f"Column {index}" for index, value in enumerate(header_row, start=1)]
+            data_rows = non_empty_rows[1:]
+            sheet_parent_id = f"{source_path}::sheet::{sheet_name}"
+
+            overview_lines = [
+                f"Sheet: {sheet_name}",
+                f"Header row: {header_row_number}",
+                f"Headers: {', '.join(headers)}",
+                f"Data row count: {len(data_rows)}",
+            ]
+            for sample_row_number, sample_row in data_rows[:3]:
+                row_pairs = [
+                    f"{headers[index]}={value}"
+                    for index, value in enumerate(sample_row)
+                    if value and index < len(headers)
+                ]
+                if row_pairs:
+                    overview_lines.append(f"Sample row {sample_row_number}: " + "; ".join(row_pairs))
+
+            chunks.extend(
+                self._make_text_chunks(
+                    source_path=source_path,
+                    source_type=source_type,
+                    parent_id=f"{sheet_parent_id}::overview",
+                    locator_prefix=f"Sheet {sheet_name} 概览",
+                    text="\n".join(overview_lines),
+                    metadata={
+                        "file_type": source_type,
+                        "sheet": sheet_name,
+                        "sheet_index": sheet_index,
+                        "row_start": header_row_number,
+                        "row_end": header_row_number,
+                    },
+                )
+            )
+
+            for group_start in range(0, len(data_rows), 20):
+                group = data_rows[group_start : group_start + 20]
+                if not group:
+                    continue
+                row_start = group[0][0]
+                row_end = group[-1][0]
+                row_lines = [
+                    f"Sheet: {sheet_name}",
+                    f"Headers: {', '.join(headers)}",
+                ]
+                for row_number, row_values in group:
+                    row_pairs = []
+                    for column_index, value in enumerate(row_values):
+                        if not value:
+                            continue
+                        header = headers[column_index] if column_index < len(headers) else f"Column {column_index + 1}"
+                        row_pairs.append(f"{header}={value}")
+                    if row_pairs:
+                        row_lines.append(f"Row {row_number}: " + "; ".join(row_pairs))
+
+                if len(row_lines) <= 2:
+                    continue
+
+                chunks.extend(
+                    self._make_text_chunks(
+                        source_path=source_path,
+                        source_type=source_type,
+                        parent_id=f"{sheet_parent_id}::rows::{row_start}-{row_end}",
+                        locator_prefix=f"Sheet {sheet_name} / 行 {row_start}-{row_end}",
+                        text="\n".join(row_lines),
+                        metadata={
+                            "file_type": source_type,
+                            "sheet": sheet_name,
+                            "sheet_index": sheet_index,
+                            "row_start": row_start,
+                            "row_end": row_end,
+                        },
+                    )
+                )
+
+        workbook.close()
+        if not chunks:
+            self._record_build_error(path, "extract", "No non-empty sheets or rows were extracted from the workbook.")
+        return chunks
+
     def _write_manifest(self) -> None:
         payload = {
             "built_at": time.time(),
             "documents": self._documents,
+            "errors": self._build_errors,
         }
         self._manifest_path.write_text(
             json.dumps(payload, ensure_ascii=False, indent=2),
@@ -267,10 +602,14 @@ class KnowledgeIndexer:
             payload = json.loads(self._manifest_path.read_text(encoding="utf-8"))
         except json.JSONDecodeError:
             self._documents = []
+            self._build_errors = []
             self._bm25_ready = False
             return
         self._documents = list(payload.get("documents", []))
+        raw_errors = payload.get("errors", [])
+        self._build_errors = raw_errors if isinstance(raw_errors, list) else []
         self._last_built_at = payload.get("built_at")
+        self._vector_ready = False
         self._prepare_bm25_stats()
 
     def _prepare_bm25_stats(self) -> None:
@@ -299,16 +638,15 @@ class KnowledgeIndexer:
             return
 
         try:
+            Document, LlamaSettings, _, VectorStoreIndex, _, _, _, _ = _load_llama_index_components()
             LlamaSettings.embed_model = self._build_embed_model()
             documents = [
                 Document(
                     text=str(item["text"]),
                     metadata={
-                        "doc_id": item["doc_id"],
-                        "parent_id": item["parent_id"],
-                        "source_path": item["source_path"],
-                        "source_type": item["source_type"],
-                        "locator": item["locator"],
+                        key: value
+                        for key, value in item.items()
+                        if key not in {"text", "parent_text", "tokens"}
                     },
                 )
                 for item in self._documents
@@ -316,33 +654,38 @@ class KnowledgeIndexer:
             self._vector_index = VectorStoreIndex.from_documents(documents)
             self._vector_index.storage_context.persist(persist_dir=str(self._vector_dir))
             self._vector_ready = True
-        except Exception:
+            self._last_vector_error = None
+        except Exception as exc:
             self._vector_index = None
             self._vector_ready = False
+            self._last_vector_error = str(exc).strip() or exc.__class__.__name__
 
     def _load_vector_index(self) -> None:
         if not self._supports_embeddings():
             self._vector_index = None
             self._vector_ready = False
+            self._last_vector_error = "Embeddings are not configured"
             return
         if not list(self._vector_dir.glob("*")):
             self._vector_index = None
             self._vector_ready = False
+            self._last_vector_error = "Persisted vector directory does not exist"
             return
         try:
+            _, LlamaSettings, StorageContext, _, load_index_from_storage, _, _, _ = _load_llama_index_components()
             LlamaSettings.embed_model = self._build_embed_model()
             storage_context = StorageContext.from_defaults(persist_dir=str(self._vector_dir))
             self._vector_index = load_index_from_storage(storage_context)
             self._vector_ready = True
-        except Exception:
+            self._last_vector_error = None
+        except Exception as exc:
             self._vector_index = None
             self._vector_ready = False
+            self._last_vector_error = str(exc).strip() or exc.__class__.__name__
 
     def _ensure_loaded(self) -> None:
         if not self._documents:
             self._load_manifest()
-        if self._vector_index is None and self._supports_embeddings():
-            self._load_vector_index()
 
     def _matches_path_filters(self, source_path: str, path_filters: list[str] | None) -> bool:
         if not path_filters:
@@ -364,6 +707,8 @@ class KnowledgeIndexer:
         path_filters: list[str] | None = None,
     ) -> list[Evidence]:
         self._ensure_loaded()
+        if self._vector_index is None and self._supports_embeddings() and any(self._vector_dir.glob("*")):
+            self._load_vector_index()
         if self._vector_index is None:
             return []
 

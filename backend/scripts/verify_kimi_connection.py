@@ -15,19 +15,14 @@ from config import get_settings
 
 def main() -> None:
     settings = get_settings()
-    if settings.llm_provider != "kimi":
-        raise SystemExit(
-            f"Expected LLM_PROVIDER=kimi, got {settings.llm_provider!r}. "
-            "Please update backend/.env first."
-        )
     if not settings.llm_api_key:
-        raise SystemExit("Missing Kimi API key in backend/.env.")
+        raise SystemExit("Missing LLM API key in backend/.env.")
 
     client = ChatOpenAI(
         model=settings.llm_model,
         api_key=settings.llm_api_key,
         base_url=settings.llm_base_url,
-        temperature=settings.llm_temperature,
+        temperature=0,
     )
     response = client.invoke(
         [
@@ -53,7 +48,7 @@ def main() -> None:
                 "provider": settings.llm_provider,
                 "model": settings.llm_model,
                 "base_url": settings.llm_base_url,
-                "temperature": settings.llm_temperature,
+                "temperature": 0,
                 "reply": str(content).strip(),
             },
             ensure_ascii=False,

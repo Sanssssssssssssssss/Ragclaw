@@ -3,6 +3,9 @@
 import { SendHorizonal } from "lucide-react";
 import { useState } from "react";
 
+/**
+ * Returns one rendered chat input from disabled state and send handler inputs and captures a user prompt for submission.
+ */
 export function ChatInput({
   disabled,
   onSend
@@ -13,9 +16,9 @@ export function ChatInput({
   const [value, setValue] = useState("");
 
   return (
-    <div className="panel rounded-[28px] p-3">
+    <div className="panel rounded-[28px] px-4 py-3">
       <textarea
-        className="min-h-32 w-full resize-none rounded-[22px] border border-[var(--color-line)] bg-white/70 px-4 py-3 text-lg leading-8 outline-none"
+        className="min-h-36 w-full resize-none rounded-[24px] border border-[var(--color-line)] bg-[rgba(255,255,255,0.03)] px-5 py-4 text-base leading-8 text-white outline-none transition placeholder:text-[var(--color-ink-muted)] focus:border-[var(--color-accent-strong)] focus:bg-[rgba(255,255,255,0.05)]"
         onChange={(event) => setValue(event.target.value)}
         onKeyDown={(event) => {
           if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
@@ -28,15 +31,15 @@ export function ChatInput({
             setValue("");
           }
         }}
-        placeholder="输入你的问题，Cmd/Ctrl + Enter 发送"
+        placeholder="Message Onyx Chat. Press Ctrl/Cmd + Enter to send."
         value={value}
       />
-      <div className="mt-3 flex items-center justify-between">
-        <p className="text-base text-[var(--color-ink-soft)]">
-          支持工具调用、Memory 检索和多段响应。
+      <div className="mt-3 flex flex-wrap items-center justify-between gap-3">
+        <p className="text-sm text-[var(--color-ink-soft)]">
+          Same actions and APIs, refreshed into a calmer dark workspace.
         </p>
         <button
-          className="flex items-center gap-2 rounded-full bg-ocean px-4 py-2 text-base text-white disabled:cursor-not-allowed disabled:bg-[rgba(15,139,141,0.45)]"
+          className="ui-button ui-button-primary"
           disabled={disabled || !value.trim()}
           onClick={() => {
             const nextValue = value.trim();
@@ -49,7 +52,7 @@ export function ChatInput({
           type="button"
         >
           <SendHorizonal size={16} />
-          发送
+          Send
         </button>
       </div>
     </div>

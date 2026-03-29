@@ -36,7 +36,7 @@ export function ResizeHandle({
       className="group flex w-3 cursor-col-resize items-center justify-center"
       onMouseDown={() => setDragging(true)}
     >
-      <div className="h-20 w-[2px] rounded-full bg-[rgba(13,37,48,0.14)] transition group-hover:h-28 group-hover:bg-[rgba(15,139,141,0.45)]" />
+      <div className="h-24 w-px rounded-full bg-[rgba(255,255,255,0.08)] transition-all duration-150 group-hover:h-32 group-hover:bg-[rgba(16,163,127,0.55)]" />
     </div>
   );
 }

@@ -8,7 +8,11 @@ from typing import Any
 
 
 class SessionManager:
+    """Returns persisted session records from filesystem-backed methods and manages chat session storage."""
+
     def __init__(self, base_dir: Path) -> None:
+        """Returns no value from one base directory path input and initializes session storage directories."""
+
         self.base_dir = base_dir
         self.sessions_dir = base_dir / "sessions"
         self.archive_dir = self.sessions_dir / "archive"
@@ -16,9 +20,13 @@ class SessionManager:
         self.archive_dir.mkdir(parents=True, exist_ok=True)
 
     def _session_path(self, session_id: str) -> Path:
+        """Returns one session JSON path from a session id input and resolves the on-disk record location."""
+
         return self.sessions_dir / f"{session_id}.json"
 
-    def _default_record(self, session_id: str, title: str = "新会话") -> dict[str, Any]:
+    def _default_record(self, session_id: str, title: str = "New Session") -> dict[str, Any]:
+        """Returns one default session record from session id and title inputs and creates the initial session payload."""
+
         now = time.time()
         return {
             "id": session_id,
@@ -30,6 +38,8 @@ class SessionManager:
         }
 
     def _read_session_file(self, session_id: str) -> dict[str, Any]:
+        """Returns one session record from a session id input and normalizes legacy or missing session files."""
+
         path = self._session_path(session_id)
         if not path.exists():
             record = self._default_record(session_id)
@@ -44,7 +54,7 @@ class SessionManager:
             return record
 
         raw.setdefault("id", session_id)
-        raw.setdefault("title", "新会话")
+        raw.setdefault("title", "New Session")
         raw.setdefault("created_at", time.time())
         raw.setdefault("updated_at", raw["created_at"])
         raw.setdefault("compressed_context", "")
@@ -52,6 +62,8 @@ class SessionManager:
         return raw
 
     def _write_session(self, record: dict[str, Any]) -> None:
+        """Returns no value from one session record input and writes the normalized record back to disk."""
+
         session_id = str(record["id"])
         record["updated_at"] = time.time()
         self._session_path(session_id).write_text(
@@ -59,13 +71,17 @@ class SessionManager:
             encoding="utf-8",
         )
 
-    def create_session(self, title: str = "新会话") -> dict[str, Any]:
+    def create_session(self, title: str = "New Session") -> dict[str, Any]:
+        """Returns one created session record from an optional title input and persists a brand-new session."""
+
         session_id = uuid.uuid4().hex
         record = self._default_record(session_id, title=title)
         self._write_session(record)
         return record
 
     def list_sessions(self) -> list[dict[str, Any]]:
+        """Returns a list of session summaries from no inputs and enumerates active chat sessions."""
+
         records: list[dict[str, Any]] = []
         for path in self.sessions_dir.glob("*.json"):
             if path.parent == self.archive_dir:
@@ -77,7 +93,7 @@ class SessionManager:
             records.append(
                 {
                     "id": record.get("id", path.stem),
-                    "title": record.get("title", "新会话"),
+                    "title": record.get("title", "New Session"),
                     "created_at": record.get("created_at"),
                     "updated_at": record.get("updated_at"),
                     "message_count": len(record.get("messages", [])),
@@ -86,12 +102,18 @@ class SessionManager:
         return sorted(records, key=lambda item: item.get("updated_at") or 0, reverse=True)
 
     def load_session_record(self, session_id: str) -> dict[str, Any]:
+        """Returns one raw session record from a session id input and loads the stored session payload."""
+
         return self._read_session_file(session_id)
 
     def load_session(self, session_id: str) -> list[dict[str, Any]]:
+        """Returns one message list from a session id input and loads stored session messages."""
+
         return self._read_session_file(session_id)["messages"]
 
     def load_session_for_agent(self, session_id: str) -> list[dict[str, str]]:
+        """Returns normalized chat turns from a session id input and merges compressed context for agent consumption."""
+
         record = self._read_session_file(session_id)
         merged: list[dict[str, str]] = []
 
@@ -100,7 +122,7 @@ class SessionManager:
             merged.append(
                 {
                     "role": "assistant",
-                    "content": f"[以下是之前对话的摘要]\n{compressed_context}",
+                    "content": f"[Conversation summary]\n{compressed_context}",
                 }
             )
 
@@ -126,35 +148,50 @@ class SessionManager:
         content: str,
         tool_calls: list[dict[str, Any]] | None = None,
         retrieval_steps: list[dict[str, Any]] | None = None,
+        usage: dict[str, int] | None = None,
     ) -> dict[str, Any]:
+        """Returns one saved message payload from message fields and appends a chat turn to the session record."""
+
         record = self._read_session_file(session_id)
         message: dict[str, Any] = {"role": role, "content": content}
         if tool_calls:
             message["tool_calls"] = tool_calls
         if retrieval_steps:
             message["retrieval_steps"] = retrieval_steps
+        if usage:
+            message["usage"] = usage
         record["messages"].append(message)
         self._write_session(record)
         return message
 
     def get_history(self, session_id: str) -> dict[str, Any]:
+        """Returns one session history record from a session id input and exposes stored chat history to callers."""
+
         return self._read_session_file(session_id)
 
     def rename_session(self, session_id: str, title: str) -> dict[str, Any]:
+        """Returns one updated session record from session id and title inputs and renames a stored session."""
+
         record = self._read_session_file(session_id)
-        record["title"] = title.strip() or "新会话"
+        record["title"] = title.strip() or "New Session"
         self._write_session(record)
         return record
 
     def set_title(self, session_id: str, title: str) -> dict[str, Any]:
+        """Returns one updated session record from session id and title inputs and applies a generated title."""
+
         return self.rename_session(session_id, title)
 
     def delete_session(self, session_id: str) -> None:
+        """Returns no value from a session id input and removes the stored session file when it exists."""
+
         path = self._session_path(session_id)
         if path.exists():
             path.unlink()
 
     def compress_history(self, session_id: str, summary: str, n_messages: int) -> dict[str, int]:
+        """Returns archive counts from session id, summary, and count inputs and compresses older chat history."""
+
         record = self._read_session_file(session_id)
         messages = record.get("messages", [])
         archived = messages[:n_messages]
@@ -184,4 +221,6 @@ class SessionManager:
         }
 
     def get_compressed_context(self, session_id: str) -> str:
+        """Returns one compressed summary string from a session id input and reads archived conversation context."""
+
         return self._read_session_file(session_id).get("compressed_context", "")

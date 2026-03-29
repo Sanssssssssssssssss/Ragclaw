@@ -2,29 +2,27 @@ from __future__ import annotations
 
 from typing import Any
 
-import tiktoken
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
 from config import runtime_config
 from graph.agent import agent_manager
 from graph.prompt_builder import build_system_prompt
+from token_utils import count_message_usage, count_tokens
 
 router = APIRouter()
 
-ENCODER = tiktoken.get_encoding("cl100k_base")
-
 
 class FileTokensRequest(BaseModel):
+    """Returns a validated file-token request from request JSON and describes the requested file paths."""
+
     paths: list[str] = Field(default_factory=list)
-
-
-def _count_tokens(text: str) -> int:
-    return len(ENCODER.encode(text or ""))
 
 
 @router.get("/tokens/session/{session_id}")
 async def session_tokens(session_id: str) -> dict[str, int]:
+    """Returns aggregate token counts from a session-id input and reports total prompt plus message usage."""
+
     session_manager = agent_manager.session_manager
     if session_manager is None or agent_manager.base_dir is None:
         raise HTTPException(status_code=503, detail="Agent manager is not initialized")
@@ -39,8 +37,8 @@ async def session_tokens(session_id: str) -> dict[str, int]:
         for retrieval_step in item.get("retrieval_steps", []) or []:
             message_text.append(str(retrieval_step))
 
-    system_tokens = _count_tokens(system_prompt)
-    message_tokens = _count_tokens("\n".join(message_text))
+    system_tokens = count_tokens(system_prompt)
+    message_tokens = count_tokens("\n".join(message_text))
     return {
         "system_tokens": system_tokens,
         "message_tokens": message_tokens,
@@ -50,6 +48,8 @@ async def session_tokens(session_id: str) -> dict[str, int]:
 
 @router.post("/tokens/files")
 async def file_tokens(payload: FileTokensRequest) -> dict[str, Any]:
+    """Returns per-file token counts from a file path list input and estimates token usage for local files."""
+
     if agent_manager.base_dir is None:
         raise HTTPException(status_code=503, detail="Agent manager is not initialized")
 
@@ -59,8 +59,43 @@ async def file_tokens(payload: FileTokensRequest) -> dict[str, Any]:
         path = (agent_manager.base_dir / relative_path).resolve()
         if not path.exists() or path.is_dir():
             continue
-        count = _count_tokens(path.read_text(encoding="utf-8"))
+        count = count_tokens(path.read_text(encoding="utf-8"))
         total += count
         files.append({"path": relative_path, "tokens": count})
 
     return {"files": files, "total_tokens": total}
+
+
+@router.get("/tokens/message-usage/{session_id}")
+async def session_message_usage(session_id: str) -> dict[str, Any]:
+    """Returns per-message usage data from a session-id input and exposes input/output token counts for each turn."""
+
+    session_manager = agent_manager.session_manager
+    if session_manager is None:
+        raise HTTPException(status_code=503, detail="Agent manager is not initialized")
+
+    record = session_manager.get_history(session_id)
+    messages = []
+    for index, item in enumerate(record.get("messages", [])):
+        usage = item.get("usage")
+        if not usage:
+            usage = {
+                "input_tokens": count_tokens(str(item.get("content", "")))
+                if item.get("role") == "user"
+                else 0,
+                "output_tokens": count_message_usage(
+                    str(item.get("content", "")),
+                    item.get("tool_calls", []) or [],
+                    item.get("retrieval_steps", []) or [],
+                )
+                if item.get("role") == "assistant"
+                else 0,
+            }
+        messages.append(
+            {
+                "index": index,
+                "role": item.get("role", ""),
+                "usage": usage,
+            }
+        )
+    return {"messages": messages}

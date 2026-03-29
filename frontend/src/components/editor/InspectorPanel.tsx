@@ -3,8 +3,11 @@
 import Editor from "@monaco-editor/react";
 import { Save } from "lucide-react";
 
-import { useAppStore } from "@/lib/store";
+import { useInspectorStore } from "@/lib/store";
 
+/**
+ * Returns one rendered inspector panel from no explicit inputs and provides file browsing plus inline editing.
+ */
 export function InspectorPanel() {
   const {
     editableFiles,
@@ -14,35 +17,31 @@ export function InspectorPanel() {
     loadInspectorFile,
     updateInspectorContent,
     saveInspector
-  } = useAppStore();
+  } = useInspectorStore();
 
   return (
-    <aside className="panel flex h-full flex-col rounded-[30px] p-4">
-      <div className="mb-4 flex items-center justify-between">
+    <aside className="panel flex h-full min-h-0 flex-col rounded-[28px] p-4">
+      <div className="mb-4 flex items-center justify-between gap-3">
         <div>
-          <p className="text-sm uppercase tracking-[0.28em] text-[var(--color-ink-soft)]">
+          <p className="text-xs uppercase tracking-[0.3em] text-[var(--color-ink-muted)]">
             Inspector
           </p>
-          <h2 className="text-xl font-semibold tracking-[-0.04em]">Memory / Skills / Prompt</h2>
+          <h2 className="text-xl font-semibold tracking-[-0.04em] text-white">Workspace files</h2>
         </div>
-        <button
-          className="flex items-center gap-2 rounded-full bg-[rgba(15,139,141,0.12)] px-4 py-2 text-base text-ocean"
-          onClick={() => void saveInspector()}
-          type="button"
-        >
+        <button className="ui-button" onClick={() => void saveInspector()} type="button">
           <Save size={16} />
-          {inspectorDirty ? "保存修改" : "已同步"}
+          {inspectorDirty ? "Save changes" : "Synced"}
         </button>
       </div>
 
       <div className="mb-4 flex flex-wrap gap-2">
         {editableFiles.map((path) => (
           <button
-            className={`rounded-full px-3 py-1 text-sm ${
+            className={
               path === inspectorPath
-                ? "bg-[rgba(13,37,48,0.92)] text-white"
-                : "border border-[var(--color-line)] bg-white/55 text-[var(--color-ink-soft)]"
-            }`}
+                ? "ui-button ui-button-primary px-3 py-1.5 text-xs"
+                : "ui-button px-3 py-1.5 text-xs"
+            }
             key={path}
             onClick={() => void loadInspectorFile(path)}
             type="button"
@@ -52,20 +51,26 @@ export function InspectorPanel() {
         ))}
       </div>
 
-      <div className="overflow-hidden rounded-[26px] border border-[var(--color-line)]">
+      <div className="min-h-0 flex-1 overflow-hidden rounded-[24px] border border-[var(--color-line)] bg-[#050505]">
         <Editor
           defaultLanguage="markdown"
-          height="calc(100vh - 270px)"
+          height="100%"
+          loading={<div className="p-4 text-sm text-[var(--color-ink-soft)]">Loading editor...</div>}
           onChange={(value) => updateInspectorContent(value ?? "")}
           options={{
+            automaticLayout: true,
+            cursorBlinking: "solid",
             fontFamily: "var(--font-mono)",
-            fontSize: 15,
+            fontSize: 14,
             minimap: { enabled: false },
+            overviewRulerBorder: false,
+            renderLineHighlight: "none",
             scrollBeyondLastLine: false,
+            smoothScrolling: true,
             wordWrap: "on"
           }}
           path={inspectorPath}
-          theme="vs-light"
+          theme="vs-dark"
           value={inspectorContent}
         />
       </div>

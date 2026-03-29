@@ -26,6 +26,22 @@ def _new_segment() -> dict[str, Any]:
     return {"content": "", "tool_calls": [], "retrieval_steps": []}
 
 
+_AUTO_TITLE_PLACEHOLDERS = {
+    "",
+    "new session",
+    "新会话",
+    "新对话",
+}
+
+
+def _should_auto_generate_title(history_record: dict[str, Any], is_first_user_message: bool) -> bool:
+    if not is_first_user_message:
+        return False
+
+    current_title = str(history_record.get("title", "") or "").strip().lower()
+    return current_title in _AUTO_TITLE_PLACEHOLDERS
+
+
 @router.post("/chat")
 async def chat(payload: ChatRequest):
     session_manager = agent_manager.session_manager
@@ -120,7 +136,7 @@ async def chat(payload: ChatRequest):
                 data = {key: value for key, value in event.items() if key != "type"}
                 yield _sse(event_type, data)
 
-                if event_type == "done" and is_first_user_message:
+                if event_type == "done" and _should_auto_generate_title(history_record, is_first_user_message):
                     title = await agent_manager.generate_title(payload.message)
                     session_manager.set_title(payload.session_id, title)
                     yield _sse(

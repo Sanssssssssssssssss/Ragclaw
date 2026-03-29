@@ -15,8 +15,8 @@ const monoFont = IBM_Plex_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "skill-rag",
-  description: "A transparent, file-first local AI agent system."
+  title: "Onyx Chat",
+  description: "A dark, local-first workspace for retrieval and agent chat."
 };
 
 export default function RootLayout({

@@ -13,10 +13,6 @@ from dotenv import dotenv_values, load_dotenv
 ENV_FILE_NAME = ".env"
 
 LLM_PROVIDER_DEFAULTS: dict[str, dict[str, str]] = {
-    "kimi": {
-        "model": "kimi-k2.5",
-        "base_url": "https://api.moonshot.cn/v1",
-    },
     "zhipu": {
         "model": "glm-5",
         "base_url": "https://open.bigmodel.cn/api/paas/v4/",
@@ -36,10 +32,6 @@ LLM_PROVIDER_DEFAULTS: dict[str, dict[str, str]] = {
 }
 
 EMBEDDING_PROVIDER_DEFAULTS: dict[str, dict[str, str]] = {
-    "local": {
-        "model": "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2",
-        "base_url": "",
-    },
     "zhipu": {
         "model": "embedding-3",
         "base_url": "https://open.bigmodel.cn/api/paas/v4/",
@@ -52,22 +44,26 @@ EMBEDDING_PROVIDER_DEFAULTS: dict[str, dict[str, str]] = {
         "model": "text-embedding-3-small",
         "base_url": "https://api.openai.com/v1",
     },
+    "local": {
+        "model": "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2",
+        "base_url": "",
+    },
 }
 
 PROVIDER_ALIASES = {
-    "moonshot": "kimi",
-    "moonshotai": "kimi",
     "glm": "zhipu",
     "zhipuai": "zhipu",
     "bigmodel": "zhipu",
     "aliyun": "bailian",
     "dashscope": "bailian",
     "qwen": "bailian",
-    "huggingface": "local",
-    "local-embedding": "local",
     "openai-compatible": "openai",
     "compatible": "openai",
+    "hf": "local",
+    "huggingface": "local",
 }
+
+EXECUTION_PLATFORMS = {"windows", "linux"}
 
 
 @dataclass(frozen=True)
@@ -78,12 +74,7 @@ class Settings:
     llm_model: str
     llm_api_key: str | None
     llm_base_url: str
-    llm_temperature: float
-    tool_llm_provider: str
-    tool_llm_model: str
-    tool_llm_api_key: str | None
-    tool_llm_base_url: str
-    tool_llm_temperature: float
+    llm_thinking_type: str | None
     embedding_provider: str
     embedding_model: str
     embedding_api_key: str | None
@@ -142,15 +133,6 @@ def _first_api_key(*names: str) -> str | None:
     return _first_config_value(*names)
 
 
-def _parse_float(value: str | None) -> float | None:
-    if value is None:
-        return None
-    try:
-        return float(value.strip())
-    except (TypeError, ValueError):
-        return None
-
-
 def _normalize_provider(
     value: str | None,
     *,
@@ -165,8 +147,6 @@ def _normalize_provider(
 
 
 def _resolve_llm_api_key(provider: str) -> str | None:
-    if provider == "kimi":
-        return _first_api_key("LLM_API_KEY", "KIMI_API_KEY", "MOONSHOT_API_KEY")
     if provider == "zhipu":
         return _first_api_key("LLM_API_KEY", "ZHIPU_API_KEY", "ZHIPUAI_API_KEY")
     if provider == "bailian":
@@ -177,11 +157,6 @@ def _resolve_llm_api_key(provider: str) -> str | None:
 
 
 def _resolve_llm_model(provider: str) -> str:
-    if provider == "kimi":
-        return (
-            _first_config_value("LLM_MODEL", "KIMI_MODEL", "MOONSHOT_MODEL")
-            or LLM_PROVIDER_DEFAULTS[provider]["model"]
-        )
     if provider == "zhipu":
         return _first_config_value("LLM_MODEL", "ZHIPU_MODEL") or LLM_PROVIDER_DEFAULTS[provider]["model"]
     if provider == "bailian":
@@ -192,11 +167,6 @@ def _resolve_llm_model(provider: str) -> str:
 
 
 def _resolve_llm_base_url(provider: str) -> str:
-    if provider == "kimi":
-        return (
-            _first_config_value("LLM_BASE_URL", "KIMI_BASE_URL", "MOONSHOT_BASE_URL")
-            or LLM_PROVIDER_DEFAULTS[provider]["base_url"]
-        )
     if provider == "zhipu":
         return _first_config_value("LLM_BASE_URL", "ZHIPU_BASE_URL") or LLM_PROVIDER_DEFAULTS[provider]["base_url"]
     if provider == "bailian":
@@ -206,67 +176,19 @@ def _resolve_llm_base_url(provider: str) -> str:
     return _first_config_value("LLM_BASE_URL", "OPENAI_BASE_URL") or LLM_PROVIDER_DEFAULTS[provider]["base_url"]
 
 
-def _resolve_llm_temperature(provider: str, model: str) -> float:
-    configured = _parse_float(_first_config_value("LLM_TEMPERATURE"))
-    if configured is not None:
-        return configured
-    if provider == "kimi" and model.strip().lower() == "kimi-k2.5":
-        return 1.0
-    return 0.0
+def _normalize_thinking_type(value: str | None) -> str | None:
+    """Return an optional normalized thinking mode string from env input."""
+    if value is None:
+        return None
+    normalized = value.strip().lower()
+    if normalized in {"enabled", "disabled"}:
+        return normalized
+    return None
 
 
-def _resolve_tool_llm_provider(default_provider: str) -> str:
-    return _normalize_provider(
-        _first_config_value("TOOL_LLM_PROVIDER"),
-        default=default_provider,
-        defaults=LLM_PROVIDER_DEFAULTS,
-    )
-
-
-def _resolve_tool_llm_model(tool_provider: str, llm_provider: str, llm_model: str) -> str:
-    configured = _first_config_value("TOOL_LLM_MODEL")
-    if configured:
-        return configured
-    if tool_provider == "kimi":
-        return "moonshot-v1-8k"
-    if tool_provider == llm_provider:
-        return llm_model
-    return LLM_PROVIDER_DEFAULTS[tool_provider]["model"]
-
-
-def _resolve_tool_llm_api_key(
-    tool_provider: str,
-    llm_provider: str,
-    llm_api_key: str | None,
-) -> str | None:
-    configured = _first_api_key("TOOL_LLM_API_KEY")
-    if configured:
-        return configured
-    if tool_provider == llm_provider and llm_api_key:
-        return llm_api_key
-    return _resolve_llm_api_key(tool_provider)
-
-
-def _resolve_tool_llm_base_url(
-    tool_provider: str,
-    llm_provider: str,
-    llm_base_url: str,
-) -> str:
-    configured = _first_config_value("TOOL_LLM_BASE_URL")
-    if configured:
-        return configured
-    if tool_provider == llm_provider and llm_base_url:
-        return llm_base_url
-    return _resolve_llm_base_url(tool_provider)
-
-
-def _resolve_tool_llm_temperature(tool_provider: str, tool_model: str) -> float:
-    configured = _parse_float(_first_config_value("TOOL_LLM_TEMPERATURE"))
-    if configured is not None:
-        return configured
-    if tool_provider == "kimi":
-        return 0.0
-    return _resolve_llm_temperature(tool_provider, tool_model)
+def _resolve_llm_thinking_type() -> str | None:
+    """Read the optional LLM thinking mode override for providers that support it."""
+    return _normalize_thinking_type(_first_config_value("LLM_THINKING_TYPE", "KIMI_THINKING_TYPE"))
 
 
 def _resolve_embedding_api_key(provider: str) -> str | None:
@@ -317,6 +239,23 @@ def _resolve_embedding_base_url(provider: str) -> str:
     )
 
 
+def _detect_host_execution_platform() -> str:
+    """Return one canonical execution-platform label for the current host OS."""
+
+    return "windows" if os.name == "nt" else "linux"
+
+
+def _normalize_execution_platform(value: Any, *, default: str) -> str:
+    """Return one canonical execution-platform label from raw config input."""
+
+    normalized = str(value or "").strip().lower()
+    if normalized in {"win", "windows"}:
+        return "windows"
+    if normalized in {"linux", "bash"}:
+        return "linux"
+    return default
+
+
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:
     backend_dir = _load_env_file()
@@ -329,29 +268,18 @@ def get_settings() -> Settings:
     )
     embedding_provider = _normalize_provider(
         _first_config_value("EMBEDDING_PROVIDER"),
-        default="bailian",
+        default="local",
         defaults=EMBEDDING_PROVIDER_DEFAULTS,
     )
-    llm_model = _resolve_llm_model(llm_provider)
-    llm_api_key = _resolve_llm_api_key(llm_provider)
-    llm_base_url = _resolve_llm_base_url(llm_provider)
-    llm_temperature = _resolve_llm_temperature(llm_provider, llm_model)
-    tool_llm_provider = _resolve_tool_llm_provider(llm_provider)
-    tool_llm_model = _resolve_tool_llm_model(tool_llm_provider, llm_provider, llm_model)
 
     return Settings(
         backend_dir=backend_dir,
         project_root=project_root,
         llm_provider=llm_provider,
-        llm_model=llm_model,
-        llm_api_key=llm_api_key,
-        llm_base_url=llm_base_url,
-        llm_temperature=llm_temperature,
-        tool_llm_provider=tool_llm_provider,
-        tool_llm_model=tool_llm_model,
-        tool_llm_api_key=_resolve_tool_llm_api_key(tool_llm_provider, llm_provider, llm_api_key),
-        tool_llm_base_url=_resolve_tool_llm_base_url(tool_llm_provider, llm_provider, llm_base_url),
-        tool_llm_temperature=_resolve_tool_llm_temperature(tool_llm_provider, tool_llm_model),
+        llm_model=_resolve_llm_model(llm_provider),
+        llm_api_key=_resolve_llm_api_key(llm_provider),
+        llm_base_url=_resolve_llm_base_url(llm_provider),
+        llm_thinking_type=_resolve_llm_thinking_type(),
         embedding_provider=embedding_provider,
         embedding_model=_resolve_embedding_model(embedding_provider),
         embedding_api_key=_resolve_embedding_api_key(embedding_provider),
@@ -363,21 +291,48 @@ class RuntimeConfigManager:
     def __init__(self, config_path: Path) -> None:
         self._config_path = config_path
         self._lock = threading.Lock()
-        self._default_config = {"rag_mode": False}
+        self._default_config = {
+            "rag_mode": False,
+            "execution_platform": _detect_host_execution_platform(),
+            "skill_retrieval_enabled": True,
+        }
+
+    def _merge_payload(self, payload: dict[str, Any] | None) -> dict[str, Any]:
+        """Return one normalized runtime-config object from raw persisted config data."""
+
+        current = payload or {}
+        return {
+            "rag_mode": bool(current.get("rag_mode", self._default_config["rag_mode"])),
+            "execution_platform": _normalize_execution_platform(
+                current.get("execution_platform"),
+                default=str(self._default_config["execution_platform"]),
+            ),
+            "skill_retrieval_enabled": bool(
+                current.get("skill_retrieval_enabled", self._default_config["skill_retrieval_enabled"])
+            ),
+        }
 
     def load(self) -> dict[str, Any]:
         with self._lock:
             if not self._config_path.exists():
                 self.save(self._default_config)
             try:
-                return json.loads(self._config_path.read_text(encoding="utf-8"))
+                raw_payload = json.loads(self._config_path.read_text(encoding="utf-8"))
             except json.JSONDecodeError:
                 self.save(self._default_config)
                 return dict(self._default_config)
 
+            if not isinstance(raw_payload, dict):
+                self.save(self._default_config)
+                return dict(self._default_config)
+
+            merged = self._merge_payload(raw_payload)
+            if merged != raw_payload:
+                self.save(merged)
+            return merged
+
     def save(self, payload: dict[str, Any]) -> dict[str, Any]:
-        merged = dict(self._default_config)
-        merged.update(payload)
+        merged = self._merge_payload(payload)
         self._config_path.write_text(
             json.dumps(merged, ensure_ascii=False, indent=2),
             encoding="utf-8",
@@ -389,6 +344,23 @@ class RuntimeConfigManager:
 
     def set_rag_mode(self, enabled: bool) -> dict[str, Any]:
         return self.save({"rag_mode": enabled})
+
+    def get_execution_platform(self) -> str:
+        return str(self.load().get("execution_platform", self._default_config["execution_platform"]))
+
+    def set_execution_platform(self, platform_name: str) -> dict[str, Any]:
+        return self.save({"execution_platform": platform_name})
+
+    def get_skill_retrieval_enabled(self) -> bool:
+        return bool(
+            self.load().get(
+                "skill_retrieval_enabled",
+                self._default_config["skill_retrieval_enabled"],
+            )
+        )
+
+    def set_skill_retrieval_enabled(self, enabled: bool) -> dict[str, Any]:
+        return self.save({"skill_retrieval_enabled": enabled})
 
 
 runtime_config = RuntimeConfigManager(get_settings().backend_dir / "config.json")

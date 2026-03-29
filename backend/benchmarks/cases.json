@@ -1,0 +1,60 @@
+[
+  {
+    "id": "routing_direct_answer_constraints",
+    "module": "routing",
+    "category": "routing",
+    "categories": ["routing", "constraint_following", "tool_use"],
+    "suites": ["smoke", "full"],
+    "input": "不要调用任何工具，也不要读取知识库。请直接用你自己的常识，简洁解释一下 RAG 和微调的区别，各用一句话说明。",
+    "expected_route": "direct_answer",
+    "expected_tools": [],
+    "blocked_tools": ["terminal", "python_repl", "read_file", "fetch_url"],
+    "allow_knowledge": false,
+    "must_include": ["RAG", "微调"],
+    "must_not_include": ["knowledge/"],
+    "should_have_final_answer": true
+  },
+  {
+    "id": "tool_terminal_directory_listing",
+    "module": "tool",
+    "category": "tool_use",
+    "categories": ["tool_use", "routing", "constraint_following"],
+    "suites": ["smoke", "full"],
+    "input": "请只使用 terminal 工具，不要使用 python_repl、read_file 或知识库检索。列出 knowledge/E-commerce Data 目录下的所有文件名，并告诉我一共多少个文件。",
+    "expected_route": "tool",
+    "expected_tools": ["terminal"],
+    "blocked_tools": ["python_repl", "read_file", "fetch_url"],
+    "allow_knowledge": false,
+    "must_include": ["sales_orders.xlsx", "faq.json", "6"],
+    "should_have_final_answer": true
+  },
+  {
+    "id": "constraints_terminal_only",
+    "module": "constraints",
+    "category": "constraint_following",
+    "categories": ["constraint_following", "tool_use", "routing"],
+    "suites": ["full"],
+    "input": "请只使用 terminal 工具，不要使用 python_repl、read_file 或知识库检索。列出 knowledge/E-commerce Data 目录下的所有文件名，并告诉我一共多少个文件。",
+    "expected_route": "tool",
+    "expected_tools": ["terminal"],
+    "blocked_tools": ["python_repl", "read_file", "fetch_url"],
+    "allow_knowledge": false,
+    "must_include": ["sales_orders.xlsx", "faq.json", "6"],
+    "should_have_final_answer": true
+  },
+  {
+    "id": "groundedness_python_repl_faq_stats",
+    "module": "groundedness",
+    "category": "groundedness",
+    "categories": ["tool_use", "constraint_following", "groundedness"],
+    "suites": ["smoke", "full"],
+    "input": "请只使用 python_repl，不要使用 terminal、read_file 或知识库检索。读取 knowledge/E-commerce Data/faq.json，统计记录数，并给出前 3 条 question。",
+    "expected_route": "tool",
+    "expected_tools": ["python_repl"],
+    "blocked_tools": ["terminal", "read_file", "fetch_url"],
+    "allow_knowledge": false,
+    "must_include": ["120", "如何订购", "我如何查看我的状态", "为什么我在我的帐户中找不到我的订单"],
+    "must_not_include": ["121", "如何退款"],
+    "should_have_final_answer": true
+  }
+]

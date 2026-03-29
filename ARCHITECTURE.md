@@ -78,3 +78,67 @@
   - OpenAI-compatible 远程 embedding provider
   - 本地 HuggingFace embedding provider
 - 当前 demo 默认采用本地 embedding provider，以便在没有额外商业 embedding key 时也能完成向量检索验证。
+## 2026-03-26 第三次补充
+- 前端验证层补充 `Playwright`
+- 当前浏览器级回归入口：
+  - `frontend/scripts/verify-chat-ui.mjs`
+  - `scripts/dev/run-chat-ui-verification.ps1`
+- 目的：
+  - 用真实浏览器验证聊天区滚动稳定性
+  - 验证每轮 assistant 消息下方的 token 用量展示
+  - 验证 knowledge 路由后的前端展示是否包含来源路径
+## 2026-03-26 Fourth Update
+- Frontend layout is now viewport-constrained:
+  - `page.tsx` keeps the full three-panel app inside `h-screen`.
+  - Sidebar, chat panel, and inspector use internal scrolling instead of page-level growth.
+- Chat streaming UX is stabilized through two layers:
+  - internal bottom-stick logic in `ChatPanel.tsx`
+  - CSS scroll stabilization via stable scrollbar gutter and contained overscroll
+- Knowledge routing flow is now regex-only:
+  - regex rules decide whether a request goes to the knowledge route
+  - no extra router-classifier model is called during route selection
+- Verification layers now cover:
+  - API-level routing checks through `backend/scripts/verify_knowledge_routing.py`
+  - browser-level chat checks through `frontend/scripts/verify-chat-ui.mjs`
+## 2026-03-26 Fifth Update
+- Startup architecture now separates service readiness from retrieval warmup:
+  - FastAPI can reach `/health` before the knowledge index finishes rebuilding
+  - knowledge-index warmup runs in the background after app startup
+  - startup warmup is BM25-first and skips vector construction
+- Import-time performance is now protected by lazy loading:
+  - `knowledge_retrieval` package exports are lazy
+  - model SDK imports in `graph/agent.py` are deferred until a model client is built
+- Frontend bootstrap now has an explicit degraded state:
+  - backend-unavailable startup is represented in app state
+  - chat UI renders a retry banner instead of crashing the page on initial fetch failure
+## 2026-03-26 Ninth Update
+- Tool orchestration now assumes the real local environment:
+  - tool prompts describe a Windows PowerShell workspace
+  - common Linux `find /workspace/...` calls are normalized inside the terminal tool
+  - `read_file` is ordered ahead of shell execution for repository inspection tasks
+## 2026-03-27 Twelfth Update
+- Baseline architecture direction has changed back toward upstream compatibility:
+  - the core chat path again centers on one primary chat-model builder
+  - the knowledge path again uses the upstream-style orchestrator wiring
+  - provider-specific branches are no longer part of the intended baseline architecture
+- Local-only conveniences remain outside the core runtime path:
+  - VS Code tasks and launch settings
+  - root startup scripts
+  - frontend readability tweaks
+## 2026-03-27 Thirteenth Update
+- Startup architecture keeps one deliberate local deviation from upstream:
+  - health readiness is separated from heavy orchestration and index warmup imports
+  - lazy imports are used for `langchain` and `llama-index` components on the backend critical path
+- Reason:
+  - the fully restored upstream import path is not viable on this Windows machine because it prevents the backend from reaching `/health` in time for the local demo workflow
+## 2026-03-27 Twenty-Second Update
+- Runtime configuration now includes an explicit execution-platform selector:
+  - `config.json` stores `execution_platform` alongside `rag_mode`
+  - the supported values are `windows` and `linux`
+- Prompt and tool behavior now read from the same runtime setting:
+  - `prompt_builder.py` emits Windows PowerShell guidance when `execution_platform=windows`
+  - `prompt_builder.py` emits Linux bash guidance when `execution_platform=linux`
+  - `terminal_tool.py` launches the matching shell and only applies platform-specific command normalization for that shell
+- Frontend control surface:
+  - the navbar now exposes a visible Win/Linux toggle
+  - the toggle is hydrated from the backend during app initialization and persisted through the config API

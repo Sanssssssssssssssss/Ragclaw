@@ -5,25 +5,28 @@ import { InspectorPanel } from "@/components/editor/InspectorPanel";
 import { Navbar } from "@/components/layout/Navbar";
 import { ResizeHandle } from "@/components/layout/ResizeHandle";
 import { Sidebar } from "@/components/layout/Sidebar";
-import { AppProvider, useAppStore } from "@/lib/store";
+import { AppProvider, useLayoutStore } from "@/lib/store";
 
+/**
+ * Returns one rendered workspace from no explicit inputs and composes the viewport-constrained three-panel layout.
+ */
 function Workspace() {
-  const { sidebarWidth, inspectorWidth, setSidebarWidth, setInspectorWidth } = useAppStore();
+  const { sidebarWidth, inspectorWidth, setSidebarWidth, setInspectorWidth } = useLayoutStore();
 
   return (
-    <main className="min-h-screen p-4 md:p-6">
-      <div className="mx-auto flex max-w-[1800px] flex-col gap-4">
+    <main className="h-screen overflow-hidden px-3 py-3 md:px-4 md:py-4">
+      <div className="mx-auto flex h-full w-full max-w-[1960px] flex-col gap-3">
         <Navbar />
-        <div className="flex min-h-[calc(100vh-146px)] gap-0">
-          <div style={{ width: sidebarWidth }}>
+        <div className="flex min-h-0 flex-1 gap-0 overflow-hidden">
+          <div className="min-h-0" style={{ width: sidebarWidth }}>
             <Sidebar />
           </div>
-          <ResizeHandle onResize={(delta) => setSidebarWidth(Math.max(260, sidebarWidth + delta))} />
+          <ResizeHandle onResize={(delta) => setSidebarWidth(Math.max(240, sidebarWidth + delta))} />
           <ChatPanel />
           <ResizeHandle
-            onResize={(delta) => setInspectorWidth(Math.max(320, inspectorWidth - delta))}
+            onResize={(delta) => setInspectorWidth(Math.max(300, inspectorWidth - delta))}
           />
-          <div style={{ width: inspectorWidth }}>
+          <div className="min-h-0" style={{ width: inspectorWidth }}>
             <InspectorPanel />
           </div>
         </div>
@@ -32,6 +35,9 @@ function Workspace() {
   );
 }
 
+/**
+ * Returns the application root page from no explicit inputs and mounts the shared app store provider.
+ */
 export default function Page() {
   return (
     <AppProvider>

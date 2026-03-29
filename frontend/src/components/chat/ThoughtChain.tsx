@@ -1,14 +1,17 @@
 "use client";
 
 import { TerminalSquare } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { memo, useEffect, useMemo, useState } from "react";
 
 import type { ToolCall } from "@/lib/api";
 
+/**
+ * Returns one formatted text block from a raw string input and prettifies tool inputs or outputs for display.
+ */
 function formatBlock(value: string) {
   const text = value.trim();
   if (!text) {
-    return "暂无";
+    return "Empty";
   }
 
   try {
@@ -18,7 +21,10 @@ function formatBlock(value: string) {
   }
 }
 
-export function ThoughtChain({ toolCalls }: { toolCalls: ToolCall[] }) {
+/**
+ * Returns one rendered tool-call panel from tool-call inputs and visualizes the current tool execution trace.
+ */
+export const ThoughtChain = memo(function ThoughtChain({ toolCalls }: { toolCalls: ToolCall[] }) {
   const activeTool = [...toolCalls].reverse().find((toolCall) => !toolCall.output.trim()) ?? null;
   const toolNames = useMemo(
     () => Array.from(new Set(toolCalls.map((toolCall) => toolCall.tool))),
@@ -38,22 +44,22 @@ export function ThoughtChain({ toolCalls }: { toolCalls: ToolCall[] }) {
 
   return (
     <details
-      className="mb-4 rounded-3xl border border-[rgba(212,106,74,0.18)] bg-[rgba(212,106,74,0.08)] p-4"
+      className="mb-4 rounded-3xl border border-[rgba(255,255,255,0.08)] bg-[rgba(255,255,255,0.03)] p-4"
       onToggle={(event) => setIsOpen(event.currentTarget.open)}
       open={isOpen}
     >
-      <summary className="flex cursor-pointer list-none items-start gap-3 text-base font-medium text-[var(--color-ember)]">
-        <TerminalSquare className="mt-0.5 shrink-0" size={16} />
+      <summary className="flex cursor-pointer list-none items-start gap-3 text-sm font-medium uppercase tracking-[0.18em] text-[var(--color-ink-soft)]">
+        <TerminalSquare className="mt-0.5 shrink-0 text-[var(--color-accent)]" size={16} />
         <div className="min-w-0 flex-1">
-          <div>
-            {activeTool ? `正在调用 ${activeTool.tool}` : `工具调用 ${toolCalls.length} 次`}
+          <div className="text-white">
+            {activeTool ? `Running ${activeTool.tool}` : `${toolCalls.length} tool call(s)`}
           </div>
-          <div className="truncate text-sm font-normal text-[var(--color-ink-soft)]">
+          <div className="truncate pt-1 text-xs font-normal tracking-[0.16em] text-[var(--color-ink-muted)]">
             {toolNames.join(" -> ")}
           </div>
         </div>
-        <span className="shrink-0 text-sm font-normal text-[var(--color-ink-soft)]">
-          {isOpen ? "收起" : "展开"}
+        <span className="shrink-0 text-[11px] font-normal tracking-[0.16em] text-[var(--color-ink-muted)]">
+          {isOpen ? "Collapse" : "Expand"}
         </span>
       </summary>
 
@@ -62,28 +68,39 @@ export function ThoughtChain({ toolCalls }: { toolCalls: ToolCall[] }) {
           const isFinished = Boolean(toolCall.output.trim());
 
           return (
-            <div className="rounded-2xl bg-white/70 p-3" key={`${toolCall.tool}-${index}`}>
-              <div className="mb-2 flex items-center justify-between gap-3 text-base font-medium">
-                <span>{toolCall.tool}</span>
+            <div
+              className="rounded-2xl border border-[rgba(255,255,255,0.06)] bg-[rgba(0,0,0,0.2)] p-3"
+              key={`${toolCall.tool}-${index}`}
+            >
+              <div className="mb-2 flex items-center justify-between gap-3 text-sm font-medium">
+                <span className="text-white">{toolCall.tool}</span>
                 <span
-                  className={`rounded-full px-2 py-1 text-xs font-medium ${
+                  className={`rounded-full px-2 py-1 text-[11px] uppercase tracking-[0.16em] ${
                     isFinished
-                      ? "bg-[rgba(15,139,141,0.12)] text-[var(--color-ocean)]"
-                      : "bg-[rgba(212,106,74,0.12)] text-[var(--color-ember)]"
+                      ? "bg-[rgba(16,163,127,0.14)] text-[#7fe7ca]"
+                      : "bg-[rgba(255,255,255,0.08)] text-[var(--color-ink-soft)]"
                   }`}
                 >
-                  {isFinished ? "已完成" : "运行中"}
+                  {isFinished ? "Completed" : "Running"}
                 </span>
               </div>
 
               <div className="space-y-2 text-sm">
-                <div className="rounded-2xl bg-[rgba(13,37,48,0.06)] p-3">
-                  <div className="mb-1 font-medium text-[var(--color-ink-soft)]">输入</div>
-                  <pre className="mono whitespace-pre-wrap">{formatBlock(toolCall.input)}</pre>
+                <div className="rounded-2xl border border-[rgba(255,255,255,0.06)] bg-[rgba(255,255,255,0.03)] p-3">
+                  <div className="mb-1 font-medium uppercase tracking-[0.14em] text-[var(--color-ink-muted)]">
+                    Input
+                  </div>
+                  <pre className="mono whitespace-pre-wrap text-[var(--color-ink-soft)]">
+                    {formatBlock(toolCall.input)}
+                  </pre>
                 </div>
-                <div className="rounded-2xl bg-[rgba(13,37,48,0.06)] p-3">
-                  <div className="mb-1 font-medium text-[var(--color-ink-soft)]">输出</div>
-                  <pre className="mono whitespace-pre-wrap">{formatBlock(toolCall.output)}</pre>
+                <div className="rounded-2xl border border-[rgba(255,255,255,0.06)] bg-[rgba(255,255,255,0.03)] p-3">
+                  <div className="mb-1 font-medium uppercase tracking-[0.14em] text-[var(--color-ink-muted)]">
+                    Output
+                  </div>
+                  <pre className="mono whitespace-pre-wrap text-[var(--color-ink-soft)]">
+                    {formatBlock(toolCall.output)}
+                  </pre>
                 </div>
               </div>
             </div>
@@ -92,4 +109,4 @@ export function ThoughtChain({ toolCalls }: { toolCalls: ToolCall[] }) {
       </div>
     </details>
   );
-}
+});

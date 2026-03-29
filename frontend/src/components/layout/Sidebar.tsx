@@ -1,34 +1,61 @@
 "use client";
 
+import { memo, useDeferredValue, useMemo } from "react";
 import { MessageSquare, Plus, Trash2 } from "lucide-react";
 
-import { useAppStore } from "@/lib/store";
+import { useChatStore, useSessionStore } from "@/lib/store";
 
+/**
+ * Returns one preview string from a raw text input and truncates long message bodies for the sidebar list.
+ */
 function preview(text: string) {
-  return text.length > 72 ? `${text.slice(0, 72)}...` : text;
+  return text.length > 90 ? `${text.slice(0, 90)}...` : text;
 }
 
+const RawMessagePreview = memo(function RawMessagePreview({
+  role,
+  toolCount,
+  content
+}: {
+  role: "user" | "assistant";
+  toolCount: number;
+  content: string;
+}) {
+  return (
+    <div className="rounded-2xl border border-[var(--color-line)] bg-[rgba(255,255,255,0.03)] px-3 py-3">
+      <div className="mb-1 flex items-center justify-between text-[11px] uppercase tracking-[0.18em] text-[var(--color-ink-muted)]">
+        <span>{role}</span>
+        <span>{toolCount} tools</span>
+      </div>
+      <p className="text-sm leading-6 text-[var(--color-ink-soft)]">{preview(content)}</p>
+    </div>
+  );
+});
+
+/**
+ * Returns one rendered sidebar from no explicit inputs and shows sessions plus raw message previews.
+ */
 export function Sidebar() {
-  const {
-    sessions,
-    currentSessionId,
-    selectSession,
-    createNewSession,
-    removeSession,
-    messages
-  } = useAppStore();
+  const { sessions, currentSessionId, selectSession, createNewSession, removeSession } =
+    useSessionStore();
+  const { messages } = useChatStore();
+  const deferredMessages = useDeferredValue(messages);
+  const previewMessages = useMemo(
+    () => deferredMessages.slice(-8).reverse(),
+    [deferredMessages]
+  );
 
   return (
-    <aside className="panel flex h-full flex-col rounded-[30px] p-4">
+    <aside className="panel flex h-full min-h-0 flex-col rounded-[28px] p-4">
       <div className="mb-4 flex items-center justify-between">
         <div>
-          <p className="text-sm uppercase tracking-[0.28em] text-[var(--color-ink-soft)]">
+          <p className="text-xs uppercase tracking-[0.3em] text-[var(--color-ink-muted)]">
             Sessions
           </p>
-          <h2 className="text-xl font-semibold tracking-[-0.04em]">会话与原始消息</h2>
+          <h2 className="text-xl font-semibold tracking-[-0.04em] text-white">Threads</h2>
         </div>
         <button
-          className="flex h-10 w-10 items-center justify-center rounded-2xl bg-[rgba(15,139,141,0.12)] text-ocean"
+          className="ui-button h-10 w-10 rounded-2xl p-0"
           onClick={() => void createNewSession()}
           type="button"
         >
@@ -36,13 +63,13 @@ export function Sidebar() {
         </button>
       </div>
 
-      <div className="space-y-2 overflow-y-auto pr-1">
+      <div className="min-h-0 space-y-2 overflow-y-auto pr-1">
         {sessions.map((session) => (
           <div
-            className={`rounded-3xl border px-4 py-3 transition ${
+            className={`rounded-[24px] border px-4 py-3 transition ${
               session.id === currentSessionId
-                ? "border-transparent bg-[rgba(15,139,141,0.16)]"
-                : "border-[var(--color-line)] bg-white/45"
+                ? "border-[rgba(16,163,127,0.24)] bg-[rgba(16,163,127,0.12)]"
+                : "border-[var(--color-line)] bg-[rgba(255,255,255,0.02)]"
             }`}
             key={session.id}
           >
@@ -52,43 +79,39 @@ export function Sidebar() {
               type="button"
             >
               <div className="flex items-start justify-between gap-3">
-                <div>
-                  <p className="text-lg font-medium">{session.title}</p>
+                <div className="min-w-0">
+                  <p className="truncate text-base font-medium text-white">{session.title}</p>
                   <p className="mt-1 text-sm text-[var(--color-ink-soft)]">
-                    {session.message_count} 条消息
+                    {session.message_count} messages
                   </p>
                 </div>
-                <MessageSquare className="mt-1 text-[var(--color-ink-soft)]" size={16} />
+                <MessageSquare className="mt-1 shrink-0 text-[var(--color-ink-muted)]" size={16} />
               </div>
             </button>
             <button
-              className="mt-3 flex items-center gap-2 text-sm text-[var(--color-ember)]"
+              className="ui-button ui-button-danger mt-3 w-full justify-center rounded-2xl"
               onClick={() => void removeSession(session.id)}
               type="button"
             >
               <Trash2 size={14} />
-              删除
+              Delete
             </button>
           </div>
         ))}
       </div>
 
-      <div className="mt-4 flex min-h-0 flex-1 flex-col rounded-[24px] border border-[var(--color-line)] bg-white/40 p-3">
-        <p className="text-sm uppercase tracking-[0.28em] text-[var(--color-ink-soft)]">
-          Raw Messages
+      <div className="mt-4 flex min-h-0 flex-1 flex-col rounded-[24px] border border-[var(--color-line)] bg-[rgba(255,255,255,0.02)] p-3">
+        <p className="text-xs uppercase tracking-[0.3em] text-[var(--color-ink-muted)]">
+          Live feed
         </p>
-        <div className="mt-3 space-y-3 overflow-y-auto pr-1">
-          {messages.map((message) => (
-            <div
-              className="rounded-2xl border border-[var(--color-line)] bg-white/60 px-3 py-2"
+        <div className="mt-3 min-h-0 space-y-3 overflow-y-auto pr-1">
+          {previewMessages.map((message) => (
+            <RawMessagePreview
+              content={message.content}
               key={message.id}
-            >
-              <div className="mb-1 flex items-center justify-between text-sm uppercase tracking-[0.2em] text-[var(--color-ink-soft)]">
-                <span>{message.role}</span>
-                <span>{message.toolCalls.length} tools</span>
-              </div>
-              <p className="text-base text-[var(--color-ink-soft)]">{preview(message.content)}</p>
-            </div>
+              role={message.role}
+              toolCount={message.toolCalls.length}
+            />
           ))}
         </div>
       </div>

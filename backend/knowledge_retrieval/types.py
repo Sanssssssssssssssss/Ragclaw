@@ -85,6 +85,7 @@ class IndexStatus:
     indexed_files: int
     vector_ready: bool
     bm25_ready: bool
+    vector_error: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)

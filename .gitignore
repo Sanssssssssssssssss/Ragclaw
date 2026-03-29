@@ -16,9 +16,12 @@ backend/storage/memory_index/*
 !backend/storage/memory_index/.gitkeep
 backend/storage/knowledge/*
 !backend/storage/knowledge/.gitkeep
+backend/storage/benchmarks/*
+!backend/storage/benchmarks/.gitkeep
 frontend/.next/
 frontend/node_modules/
 frontend/.npm-cache/
+frontend/output/
 .vscode/*
 !.vscode/settings.json
 !.vscode/tasks.json

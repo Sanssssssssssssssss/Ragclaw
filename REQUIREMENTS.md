@@ -152,3 +152,48 @@
 
 ### BR-005 上下文建立协议
 - 每一轮开始实际任务前，必须先基于 `PROJECT_BRIEF.md`、`REQUIREMENTS.md`、`ARCHITECTURE.md`、`DECISIONS.md`、`TASKS.md`、`STATE.md` 重建上下文，不得把聊天上下文当作唯一记忆来源。
+## 2026-03-26 Fourth Update
+### FR-012 Stable Chat Viewport
+- Status: Confirmed
+- The chat experience must stay inside a viewport-constrained panel so streaming responses do not make the whole page jump or reflow vertically.
+- Acceptance:
+  - The main app layout keeps sidebar, chat, and inspector inside the viewport.
+  - The chat message list scrolls internally instead of expanding the page height.
+  - Browser verification confirms the chat area stays pinned to the bottom while streaming.
+
+### FR-013 Per-Turn Token Usage Visibility
+- Status: Confirmed
+- Every assistant response must show the input-token and output-token usage for the current exchange directly under the message body.
+- Acceptance:
+  - Backend persists per-message usage for assistant turns.
+  - SSE `done` events include `usage`.
+  - Frontend renders `Input … · Output … tokens` under assistant messages.
+
+### FR-014 Regex-Only Knowledge Routing
+- Status: Confirmed
+- Knowledge routing must use a regex-only strategy for now, without invoking an extra classifier model during routing.
+- Acceptance:
+  - Messages without document or knowledge signals stay on the normal chat route.
+  - Messages that match the regex rules go directly to the knowledge route.
+  - Routing code no longer depends on an extra classifier call.
+
+### FR-015 Function Docstring Baseline For Modified Modules
+- Status: Confirmed
+- Functions touched in this change set must include docstrings or JSDoc comments with one sentence for input/output summary and one sentence for purpose.
+- Acceptance:
+  - Modified backend functions include Python docstrings.
+  - Modified frontend functions include JSDoc-style comments.
+### FR-016 Startup Resilience For Local Demo Workflow
+- Status: Confirmed
+- The local startup flow must tolerate backend cold-start delay without crashing the frontend.
+- Acceptance:
+  - Frontend initialization shows a recoverable connection state when the backend is temporarily unavailable.
+  - Root startup script reports frontend/backend readiness explicitly.
+  - Backend health endpoint becomes reachable without waiting for full knowledge-index warmup to finish.
+### FR-017 Runtime Execution Platform Toggle
+- Status: Confirmed
+- The app must expose a runtime switch for the shell execution platform so the agent can target Windows PowerShell or Linux bash explicitly instead of relying on one hard-coded environment.
+- Acceptance:
+  - Backend runtime config persists an `execution_platform` value.
+  - Frontend shows a visible Win/Linux toggle and hydrates it from the backend.
+  - System prompt and terminal execution both follow the selected platform.

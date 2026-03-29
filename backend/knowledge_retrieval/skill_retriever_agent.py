@@ -4,8 +4,6 @@ import json
 import re
 from typing import Any, AsyncIterator
 
-from langchain.agents import create_agent
-
 from knowledge_retrieval.types import Evidence, SkillRetrievalResult
 from tools.python_repl_tool import PythonReplTool
 from tools.read_file_tool import ReadFileTool
@@ -171,6 +169,8 @@ class SkillRetrieverAgent:
         if self.base_dir is None or self._model_builder is None:
             raise RuntimeError("SkillRetrieverAgent is not configured")
 
+        from langchain.agents import create_agent
+
         system_prompt = (
             "You are a local knowledge retrieval agent. "
             "You are not the user-facing assistant and must not answer the user's question directly. "
@@ -188,103 +188,85 @@ class SkillRetrieverAgent:
             PythonReplTool(root_dir=self.base_dir),
             ReadFileTool(root_dir=self.base_dir),
         ]
+        agent = create_agent(
+            model=self._model_builder(),
+            tools=tools,
+            system_prompt=system_prompt,
+        )
+
         pending_tools: dict[str, dict[str, str]] = {}
         recorded_tools: list[dict[str, str]] = []
         final_parts: list[str] = []
         last_ai_message = ""
 
-        try:
-            agent = create_agent(
-                model=self._model_builder(),
-                tools=tools,
-                system_prompt=system_prompt,
-            )
-
-            async for mode, payload in agent.astream(
-                {"messages": [{"role": "user", "content": query}]},
-                stream_mode=["messages", "updates"],
-            ):
-                if mode == "messages":
-                    chunk, metadata = payload
-                    if metadata.get("langgraph_node") != "model":
-                        continue
-                    text = getattr(chunk, "content", "")
-                    if isinstance(text, str) and text:
-                        final_parts.append(text)
-                    elif isinstance(text, list):
-                        for item in text:
-                            if isinstance(item, dict) and item.get("type") == "text":
-                                final_parts.append(str(item.get("text", "")))
+        async for mode, payload in agent.astream(
+            {"messages": [{"role": "user", "content": query}]},
+            stream_mode=["messages", "updates"],
+        ):
+            if mode == "messages":
+                chunk, metadata = payload
+                if metadata.get("langgraph_node") != "model":
                     continue
+                text = getattr(chunk, "content", "")
+                if isinstance(text, str) and text:
+                    final_parts.append(text)
+                elif isinstance(text, list):
+                    for item in text:
+                        if isinstance(item, dict) and item.get("type") == "text":
+                            final_parts.append(str(item.get("text", "")))
+                continue
 
-                if mode != "updates":
-                    continue
+            if mode != "updates":
+                continue
 
-                for update in payload.values():
-                    for agent_message in update.get("messages", []):
-                        message_type = getattr(agent_message, "type", "")
-                        tool_calls = getattr(agent_message, "tool_calls", []) or []
+            for update in payload.values():
+                for agent_message in update.get("messages", []):
+                    message_type = getattr(agent_message, "type", "")
+                    tool_calls = getattr(agent_message, "tool_calls", []) or []
 
-                        if message_type == "ai" and not tool_calls:
-                            candidate = getattr(agent_message, "content", "")
-                            if isinstance(candidate, str) and candidate:
-                                last_ai_message = candidate
+                    if message_type == "ai" and not tool_calls:
+                        candidate = getattr(agent_message, "content", "")
+                        if isinstance(candidate, str) and candidate:
+                            last_ai_message = candidate
 
-                        if tool_calls:
-                            for tool_call in tool_calls:
-                                call_id = str(tool_call.get("id") or tool_call.get("name"))
-                                tool_name = str(tool_call.get("name", "tool"))
-                                tool_args = tool_call.get("args", "")
-                                if not isinstance(tool_args, str):
-                                    tool_args = json.dumps(tool_args, ensure_ascii=False)
-                                pending_tools[call_id] = {
-                                    "tool": tool_name,
-                                    "input": str(tool_args),
-                                }
-                                yield {
-                                    "type": "tool_start",
-                                    "tool": tool_name,
-                                    "input": str(tool_args),
-                                }
-
-                        if message_type == "tool":
-                            tool_call_id = str(getattr(agent_message, "tool_call_id", ""))
-                            pending = pending_tools.pop(
-                                tool_call_id,
-                                {"tool": getattr(agent_message, "name", "tool"), "input": ""},
-                            )
-                            output = getattr(agent_message, "content", "")
-                            if not isinstance(output, str):
-                                output = str(output or "")
-                            recorded_tools.append(
-                                {
-                                    "tool": pending["tool"],
-                                    "input": pending["input"],
-                                    "output": output,
-                                }
-                            )
+                    if tool_calls:
+                        for tool_call in tool_calls:
+                            call_id = str(tool_call.get("id") or tool_call.get("name"))
+                            tool_name = str(tool_call.get("name", "tool"))
+                            tool_args = tool_call.get("args", "")
+                            if not isinstance(tool_args, str):
+                                tool_args = json.dumps(tool_args, ensure_ascii=False)
+                            pending_tools[call_id] = {
+                                "tool": tool_name,
+                                "input": str(tool_args),
+                            }
                             yield {
-                                "type": "tool_end",
+                                "type": "tool_start",
+                                "tool": tool_name,
+                                "input": str(tool_args),
+                            }
+
+                    if message_type == "tool":
+                        tool_call_id = str(getattr(agent_message, "tool_call_id", ""))
+                        pending = pending_tools.pop(
+                            tool_call_id,
+                            {"tool": getattr(agent_message, "name", "tool"), "input": ""},
+                        )
+                        output = getattr(agent_message, "content", "")
+                        if not isinstance(output, str):
+                            output = str(output or "")
+                        recorded_tools.append(
+                            {
                                 "tool": pending["tool"],
+                                "input": pending["input"],
                                 "output": output,
                             }
-        except Exception as exc:
-            yield {
-                "type": "skill_result",
-                "result": SkillRetrievalResult(
-                    status="uncertain",
-                    evidences=[],
-                    narrowed_paths=[],
-                    narrowed_types=[],
-                    rewritten_queries=[],
-                    searched_paths=[],
-                    reason=(
-                        "Skill retrieval agent is unavailable with the current model; "
-                        f"falling back to hybrid retrieval. Details: {str(exc) or 'unknown error'}"
-                    ),
-                ).to_dict(),
-            }
-            return
+                        )
+                        yield {
+                            "type": "tool_end",
+                            "tool": pending["tool"],
+                            "output": output,
+                        }
 
         final_content = "".join(final_parts).strip() or last_ai_message.strip()
         yield {

@@ -21,7 +21,7 @@
     {
       "label": "Backend: Run dev server",
       "type": "shell",
-      "command": ".\\.venv\\Scripts\\python.exe -m uvicorn app:app --host 127.0.0.1 --port 8014 --reload",
+      "command": ".\\.venv\\Scripts\\python.exe -m uvicorn app:app --host 127.0.0.1 --port 8015",
       "options": {
         "cwd": "${workspaceFolder}/backend"
       },
@@ -33,7 +33,7 @@
         },
         "background": {
           "activeOnStart": true,
-          "beginsPattern": ".*Started reloader process.*|.*Uvicorn running on.*",
+          "beginsPattern": ".*Uvicorn running on.*|.*Started server process.*",
           "endsPattern": ".*Application startup complete.*"
         }
       }
