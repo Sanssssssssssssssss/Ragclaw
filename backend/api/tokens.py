@@ -30,19 +30,31 @@ async def session_tokens(session_id: str) -> dict[str, int]:
     record = session_manager.get_history(session_id)
     system_prompt = build_system_prompt(agent_manager.base_dir, runtime_config.get_rag_mode())
     message_text = []
+    model_call_input_tokens = 0
+    model_call_output_tokens = 0
     for item in record.get("messages", []):
         message_text.append(str(item.get("content", "")))
         for tool_call in item.get("tool_calls", []) or []:
             message_text.append(str(tool_call))
         for retrieval_step in item.get("retrieval_steps", []) or []:
             message_text.append(str(retrieval_step))
+        usage = item.get("usage") or {}
+        if item.get("role") == "assistant":
+            model_call_input_tokens += int(usage.get("input_tokens", 0) or 0)
+            model_call_output_tokens += int(usage.get("output_tokens", 0) or 0)
 
     system_tokens = count_tokens(system_prompt)
     message_tokens = count_tokens("\n".join(message_text))
+    session_trace_tokens = system_tokens + message_tokens
+    model_call_total_tokens = model_call_input_tokens + model_call_output_tokens
     return {
         "system_tokens": system_tokens,
         "message_tokens": message_tokens,
-        "total_tokens": system_tokens + message_tokens,
+        "total_tokens": session_trace_tokens,
+        "session_trace_tokens": session_trace_tokens,
+        "model_call_input_tokens": model_call_input_tokens,
+        "model_call_output_tokens": model_call_output_tokens,
+        "model_call_total_tokens": model_call_total_tokens,
     }
 
 

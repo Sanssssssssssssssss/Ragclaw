@@ -637,3 +637,14 @@
 ## Current Risks
 - Rule-based groundedness is still much harsher than judge-based groundedness on some compare / multi-hop PDF cases, so overall `groundedness_pass_rate` remains pessimistic even after answer quality improved.
 - The benchmark result above was produced by reusing a backend whose knowledge index already reported `vector_ready=true` and `bm25_ready=true`; the manual targeted runner skipped a fresh rebuild because an async rebuild on this machine can remain stuck in `building=true` even after both retrieval channels are already ready.
+## 2026-03-29 Thirty-Seventh Update
+- The token-accounting confusion between the local breakdown script and the frontend header was resolved by splitting two different metrics:
+  - `model_call_total_tokens`: the estimated prompt + output tokens for actual model calls saved on assistant messages
+  - `session_trace_tokens`: the old debug-style total that includes persisted retrieval-step payloads and other saved session text
+- On the reproduced one-question knowledge session:
+  - the frontend's old single number `64290` came almost entirely from persisted retrieval trace text
+  - the saved assistant answer itself was only ~1.7k tokens
+  - the retrieved `vector/bm25/fused/rerank/parent_merge/diversified` step payloads together contributed ~60k tokens of debug text
+- The frontend header now shows both counts side by side, so future debugging can distinguish:
+  - "what the model likely consumed"
+  - vs "how much debug/session text we are persisting"

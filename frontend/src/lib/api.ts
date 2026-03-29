@@ -46,6 +46,16 @@ export type SessionSummary = {
   message_count: number;
 };
 
+export type SessionTokenStats = {
+  system_tokens: number;
+  message_tokens: number;
+  total_tokens: number;
+  session_trace_tokens: number;
+  model_call_input_tokens: number;
+  model_call_output_tokens: number;
+  model_call_total_tokens: number;
+};
+
 export type SessionHistory = {
   id: string;
   title: string;
@@ -192,11 +202,7 @@ export async function getSessionHistory(sessionId: string) {
  * Returns one token summary from a session id input and fetches aggregate token counts for a session.
  */
 export async function getSessionTokens(sessionId: string) {
-  return request<{
-    system_tokens: number;
-    message_tokens: number;
-    total_tokens: number;
-  }>(`/tokens/session/${sessionId}`);
+  return request<SessionTokenStats>(`/tokens/session/${sessionId}`);
 }
 
 /**

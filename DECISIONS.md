@@ -404,3 +404,8 @@
   - Status: Accepted
   - Decision: the agent now removes raw retrieval `Status/Reason` strings from the hidden knowledge context, adds a lightweight negation scaffold, and strengthens multi-hop instructions to stay within the explicitly requested entities and supported evidence.
   - Reason: partial negation answers were leaking internal retrieval notes into user-facing prose, and one multi-hop answer was adding an extra medical product plus an unsupported page citation.
+## 2026-03-29 Thirty-Seventh Update
+- D-076 Token metrics now separate model-call usage from session-trace volume
+  - Status: Accepted
+  - Decision: knowledge/direct-answer model completions now save per-message `usage` with prompt/output token estimates, `/api/tokens/session/{id}` now returns both `model_call_total_tokens` and `session_trace_tokens`, and the frontend header shows both values side by side.
+  - Reason: the old single token number mixed the final model call with all persisted retrieval-step text, which made a one-question knowledge session appear to consume ~64k tokens even though the actual final model call was much smaller.

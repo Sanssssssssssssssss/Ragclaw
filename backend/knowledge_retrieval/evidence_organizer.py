@@ -38,10 +38,79 @@ def _source_family(path: str) -> str:
     return f"{parent}/{family}" if parent else family
 
 
+def source_family(path: str) -> str:
+    return _source_family(path)
+
+
+KEY_EVIDENCE_PATTERNS = (
+    re.compile(r"(营收|营业收入|营业总收入|收入|净利润|利润总额|同比|增长|下降|亏损|盈利)", re.IGNORECASE),
+    re.compile(r"(原因|影响|导致|由于|因为|索赔|费用|减值|现金流|资产|负债)", re.IGNORECASE),
+    re.compile(r"(Q[1-4]|20\d{2}|季度|报告期|年初至报告期末|本报告期|前三季度)", re.IGNORECASE),
+)
+
+
+def _snippet_priority(item: Evidence) -> tuple[float, int, int]:
+    snippet = str(item.snippet or "")
+    text = " ".join([str(item.source_path or ""), str(item.locator or ""), snippet])
+    keyword_hits = sum(1 for pattern in KEY_EVIDENCE_PATTERNS if pattern.search(text))
+    pdf_bonus = 1 if str(item.source_path or "").lower().endswith(".pdf") else 0
+    return (float(item.score or 0.0), keyword_hits, pdf_bonus)
+
+
+def _trim_text_to_budget(text: str, budget: int) -> str:
+    clean = str(text or "").strip()
+    if len(clean) <= budget:
+        return clean
+    return clean[: max(0, budget - 3)].rstrip() + "..."
+
+
+def _constraint_signature(evidence: Evidence) -> tuple[str, ...]:
+    text = " ".join(
+        [
+            str(evidence.source_path or ""),
+            str(evidence.locator or ""),
+            str(evidence.snippet or ""),
+        ]
+    ).lower()
+    signature: list[str] = []
+    if any(term in text for term in ("营收", "营业收入", "营业总收入", "收入", "净利润", "利润总额", "同比", "增长", "下降")):
+        signature.append("performance")
+    if any(term in text for term in ("原因", "影响", "导致", "由于", "因为", "索赔", "费用", "减值")):
+        signature.append("reason")
+    if any(term in text for term in ("q1", "q2", "q3", "q4", "季度", "报告期", "前三季度", "年初至报告期末", "本报告期")):
+        signature.append("period")
+    return tuple(signature) or ("general",)
+
+
+def _selection_bonus(item: Evidence, question_type: str) -> tuple[int, int]:
+    text = " ".join(
+        [
+            str(item.source_path or ""),
+            str(item.locator or ""),
+            str(item.snippet or ""),
+        ]
+    ).lower()
+    numeric_bonus = 1 if re.search(r"-?\d[\d,]*(?:\.\d+)?", text) else 0
+    if question_type == "negation":
+        negative_bonus = 1 if any(term in text for term in ("亏损", "未盈利", "净利润为负", "利润为负", "-", "负数")) else 0
+        metric_bonus = 1 if any(term in text for term in ("净利润", "利润总额")) else 0
+        return (negative_bonus + metric_bonus, numeric_bonus)
+    if question_type == "compare":
+        compare_bonus = 1 if "%" in text else 0
+        metric_bonus = 1 if any(term in text for term in ("净利润", "营业收入", "利润总额", "同比")) else 0
+        return (compare_bonus + metric_bonus, numeric_bonus)
+    if question_type == "multi_hop":
+        reason_bonus = 1 if any(term in text for term in ("原因", "影响", "导致", "由于", "因为", "索赔", "费用")) else 0
+        metric_bonus = 1 if any(term in text for term in ("净利润", "营业收入", "利润总额", "同比")) else 0
+        return (reason_bonus + metric_bonus, numeric_bonus)
+    return (0, numeric_bonus)
+
+
 def merge_parent_evidences(
     evidences: list[Evidence],
     *,
-    max_children_per_parent: int = 3,
+    max_children_per_parent: int = 2,
+    merged_snippet_total_chars: int = 1000,
     top_k: int = 10,
 ) -> list[Evidence]:
     grouped: dict[str, list[Evidence]] = defaultdict(list)
@@ -51,17 +120,26 @@ def merge_parent_evidences(
 
     merged: list[Evidence] = []
     for group in grouped.values():
-        sorted_group = sorted(group, key=lambda item: float(item.score or 0.0), reverse=True)
+        sorted_group = sorted(group, key=_snippet_priority, reverse=True)
         lead = sorted_group[0]
         selected_children = sorted_group[:max_children_per_parent]
-        merged_snippet = "\n\n".join(
-            snippet
-            for snippet in [str(item.snippet or "").strip() for item in selected_children]
-            if snippet
-        )
+        snippet_parts: list[str] = []
+        remaining_budget = merged_snippet_total_chars
+        for item in selected_children:
+            snippet = str(item.snippet or "").strip()
+            if not snippet or remaining_budget <= 0:
+                continue
+            trimmed = _trim_text_to_budget(snippet, remaining_budget)
+            if not trimmed:
+                continue
+            snippet_parts.append(trimmed)
+            remaining_budget -= len(trimmed)
+            if remaining_budget > 2:
+                remaining_budget -= 2
+        merged_snippet = "\n\n".join(snippet_parts)
         merged_locator = " | ".join(
             locator
-            for locator in dict.fromkeys(str(item.locator or "").strip() for item in selected_children)
+            for locator in list(dict.fromkeys(str(item.locator or "").strip() for item in selected_children))[:3]
             if locator
         )
         merged.append(
@@ -92,15 +170,16 @@ def diversify_evidences(
     if not evidences:
         return []
 
-    max_per_source_family = 1 if question_type in {"compare", "cross_file_aggregation"} else 2
-    def family_sort_key(item: Evidence) -> tuple[float, int]:
+    max_per_source_family = 1
+    def family_sort_key(item: Evidence) -> tuple[float, int, int, int]:
         path = str(item.source_path or "").lower()
         pdf_preference = 0
         if path.endswith(".pdf"):
             pdf_preference = 2
         elif path.endswith("_extracted.txt"):
             pdf_preference = 1
-        return (float(item.score or 0.0), pdf_preference)
+        type_bonus, numeric_bonus = _selection_bonus(item, question_type)
+        return (float(item.score or 0.0), type_bonus, numeric_bonus, pdf_preference)
 
     family_best: dict[str, list[Evidence]] = defaultdict(list)
     for evidence in evidences:
@@ -111,7 +190,14 @@ def diversify_evidences(
         family_best[family] = sorted(items, key=family_sort_key, reverse=True)
         ordered.extend(family_best[family])
 
-    ordered.sort(key=lambda item: (float(item.score or 0.0), 1 if str(item.source_path or "").lower().endswith(".pdf") else 0), reverse=True)
+    ordered.sort(
+        key=lambda item: (
+            float(item.score or 0.0),
+            *_selection_bonus(item, question_type),
+            1 if str(item.source_path or "").lower().endswith(".pdf") else 0,
+        ),
+        reverse=True,
+    )
     counts: dict[str, int] = defaultdict(int)
     diversified: list[Evidence] = []
     deferred: list[Evidence] = []
@@ -143,13 +229,26 @@ def diversify_evidences(
         if counts[family] < max_per_source_family:
             diversified.append(evidence)
             counts[family] += 1
+        elif (
+            question_type == "multi_hop"
+            and counts[family] < 2
+            and all(str(existing.parent_id or "") != str(evidence.parent_id or "") for existing in diversified if _source_family(existing.source_path) == family)
+            and not any(
+                set(_constraint_signature(existing)) == set(_constraint_signature(evidence))
+                for existing in diversified
+                if _source_family(existing.source_path) == family
+            )
+        ):
+            diversified.append(evidence)
+            counts[family] += 1
         else:
             deferred.append(evidence)
         if len(diversified) >= top_k:
             return diversified
 
-    for evidence in deferred:
-        diversified.append(evidence)
-        if len(diversified) >= top_k:
-            break
+    if question_type == "multi_hop":
+        for evidence in deferred:
+            diversified.append(evidence)
+            if len(diversified) >= top_k:
+                break
     return diversified

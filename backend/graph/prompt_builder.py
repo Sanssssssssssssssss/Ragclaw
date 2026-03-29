@@ -13,6 +13,16 @@ SYSTEM_COMPONENTS: tuple[tuple[str, str], ...] = (
     ("Long-term Memory", "memory/MEMORY.md"),
 )
 
+KNOWLEDGE_SYSTEM_PROMPT = """<!-- Knowledge Answer Mode -->
+You are answering a knowledge-base question.
+Use only the provided retrieval evidence and scaffold.
+Do not fabricate facts or fill gaps with assumptions.
+When evidence is partial, answer conservatively and say what is still unsupported.
+Only mention paths, numbers, percentages, dates, or locators when they appear in the evidence.
+Keep comparisons and multi-hop answers scoped to the supported entities and fields.
+Do not mention internal pipeline details, retrieval stages, or hidden notes.
+"""
+
 def _build_runtime_override(execution_platform: str) -> str:
     """Return one runtime guidance block from the configured execution platform."""
 
@@ -69,3 +79,7 @@ def build_system_prompt(base_dir: Path, rag_mode: bool) -> str:
 
     parts.append(_build_runtime_override(execution_platform))
     return "\n\n".join(parts)
+
+
+def build_knowledge_system_prompt() -> str:
+    return KNOWLEDGE_SYSTEM_PROMPT.strip()

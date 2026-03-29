@@ -8,9 +8,10 @@ from typing import Any
 from config import get_settings, runtime_config
 from graph.execution_strategy import ExecutionStrategy, parse_execution_strategy
 from graph.memory_indexer import memory_indexer
-from graph.prompt_builder import build_system_prompt
+from graph.prompt_builder import build_knowledge_system_prompt, build_system_prompt
 from graph.session_manager import SessionManager
 from knowledge_retrieval import knowledge_orchestrator
+from token_utils import count_tokens
 from tools import get_all_tools
 
 KNOWLEDGE_SKILL_PATTERNS = (
@@ -60,6 +61,15 @@ def _stringify_content(content: Any) -> str:
                 parts.append(str(block.get("text", "")))
         return "".join(parts)
     return str(content or "")
+
+
+def _serialize_model_messages(messages: list[dict[str, str]]) -> str:
+    parts: list[str] = []
+    for item in messages:
+        role = str(item.get("role", "")).strip() or "unknown"
+        content = str(item.get("content", "") or "")
+        parts.append(f"{role}: {content}")
+    return "\n\n".join(parts)
 
 
 class AgentManager:
@@ -214,12 +224,14 @@ class AgentManager:
             return "\n".join(lines)
 
         for index, evidence in enumerate(retrieval_result.evidences, start=1):
-            support_note = ""
-            if getattr(evidence, "supporting_children", None):
-                support_note = f" / merged children: {evidence.supporting_children}"
-            lines.append(
-                f"{index}. [{evidence.channel}] {evidence.source_path} ({evidence.locator}){support_note}\n{evidence.snippet}"
-            )
+            header_parts = [f"{index}. {evidence.source_path}"]
+            locator = str(getattr(evidence, "locator", "") or "").strip()
+            if locator:
+                header_parts.append(f"loc: {locator}")
+            supporting_children = getattr(evidence, "supporting_children", None)
+            if supporting_children:
+                header_parts.append(f"merged: {supporting_children}")
+            lines.append(f"{' | '.join(header_parts)}\n{evidence.snippet}")
         return "\n\n".join(lines)
 
     def _knowledge_question_type(self, retrieval_result) -> str:
@@ -296,6 +308,7 @@ class AgentManager:
                     f"missing_fields_{'a' if index == 1 else 'b'}: {missing_fields}",
                 ]
             )
+        slots.append("Rules: copy these slot values directly into the answer; do not recompute or swap values across companies or periods.")
         slots.append("Rules: compare company by company; if one company lacks a field, write 当前证据未显示 for that company only.")
         return "\n".join(slots)
 
@@ -368,50 +381,41 @@ class AgentManager:
 
     def _knowledge_answer_instructions(self, retrieval_result) -> list[str]:
         instructions = [
-            "This is a knowledge-base question.",
-            "Use only the provided knowledge retrieval evidence to answer.",
-            "Do not perform additional knowledge-base inspection with tools.",
-            "If the evidence is incomplete, explicitly say the current knowledge base only supports a partial answer or no direct answer.",
-            "Do not fabricate facts.",
-            "Cite the file paths you relied on.",
-            "Only mention numeric values, percentages, amounts, page numbers, paragraph numbers, section identifiers, or table/row/column locations when those details appear directly in the retrieval evidence.",
-            "If the retrieval evidence does not directly support a numeric or locator detail, say the current knowledge base does not contain enough evidence for that level of specificity.",
-            "Do not infer numbers or locator details from file names, prior knowledge, or guesswork.",
-            "Do not infer profitability, losses, negative values, growth rates, or trends from headings, dashes, placeholders, blank cells, or table structure alone.",
-            "If the evidence only shows document structure or incomplete fragments, answer conservatively and stop at what is directly supported.",
-            "Do not mention internal pipeline details such as vector retrieval, BM25, fusion, fallback logic, or retrieval stages in the final answer.",
+            "Use only the provided evidence and scaffold.",
+            "Cite the source paths you used.",
+            "Do not inspect files with tools or mention internal retrieval steps.",
+            "Only state numbers or locators that appear directly in the evidence.",
+            "If evidence is incomplete, answer conservatively and mark unsupported parts as 当前证据未显示.",
         ]
         if getattr(retrieval_result, "status", "") == "partial":
             instructions.extend(
                 [
-                    "The retrieval status is partial.",
-                    "Answer in a conservative style: first state the supported findings, then state what the current evidence still does not support.",
-                    "Do not complete comparisons, negation claims, or cross-file aggregation beyond the cited evidence.",
+                    "The evidence is partial.",
+                    "State supported findings first, then state what is still unsupported.",
                 ]
             )
         question_type = self._knowledge_question_type(retrieval_result)
         if question_type == "compare":
             instructions.extend(
                 [
-                    "For compare questions, organize the answer by company and field before writing prose.",
-                    "Do not generalize one company's missing field into a statement about both companies or the whole knowledge base.",
-                    "Keep period and scope precise: do not mix 本报告期 with 年初至报告期末.",
+                    "For compare questions, keep company, field, and period aligned.",
+                    "Do not generalize one company's missing field to both companies.",
+                    "Use the scaffold slot values verbatim when you write any table or bullet list.",
+                    "Do not create a second summary table with recomputed values that differ from the scaffold.",
                 ]
             )
         if question_type == "multi_hop":
             instructions.extend(
                 [
-                    "For multi-hop questions, cover each requested constraint separately before writing the final summary.",
-                    "If one required constraint is not directly supported, keep the answer partial and explicitly mark that missing piece as 当前证据未显示.",
-                    "Do not replace a missing cause with a generic business explanation.",
-                    "Do not add extra products, companies, or examples beyond the requested scope.",
+                    "For multi-hop questions, cover each requested constraint separately.",
+                    "If one required constraint is missing, keep the answer partial.",
                 ]
             )
         if question_type == "negation":
             instructions.extend(
                 [
-                    "For negation questions, only conclude loss, non-profitability, or negative values when the retrieved evidence shows those facts directly.",
-                    "Do not quote or paraphrase hidden retrieval notes, status labels, or internal reasoning.",
+                    "For negation questions, only conclude losses or negative values when evidence shows them directly.",
+                    "If direct negative evidence exists, quote that supported value instead of summarizing it away.",
                 ]
             )
         return instructions
@@ -688,16 +692,19 @@ class AgentManager:
         self,
         messages: list[dict[str, str]],
         extra_instructions: list[str] | None = None,
+        system_prompt_override: str | None = None,
     ):
         if self.base_dir is None:
             raise RuntimeError("AgentManager is not initialized")
 
-        system_prompt = build_system_prompt(self.base_dir, runtime_config.get_rag_mode())
+        system_prompt = system_prompt_override or build_system_prompt(self.base_dir, runtime_config.get_rag_mode())
         if extra_instructions:
             system_prompt = f"{system_prompt}\n\n" + "\n\n".join(extra_instructions)
 
         model_messages: list[dict[str, str]] = [{"role": "system", "content": system_prompt}]
         model_messages.extend(messages)
+        prompt_payload = _serialize_model_messages(model_messages)
+        prompt_tokens = count_tokens(prompt_payload)
 
         final_content_parts: list[str] = []
         async for chunk in self._build_chat_model().astream(model_messages):
@@ -706,7 +713,15 @@ class AgentManager:
                 final_content_parts.append(text)
                 yield {"type": "token", "content": text}
 
-        yield {"type": "done", "content": "".join(final_content_parts).strip()}
+        final_content = "".join(final_content_parts).strip()
+        yield {
+            "type": "done",
+            "content": final_content,
+            "usage": {
+                "input_tokens": prompt_tokens,
+                "output_tokens": count_tokens(final_content),
+            },
+        }
 
     async def astream(
         self,
@@ -777,6 +792,7 @@ class AgentManager:
             async for event in self._astream_model_answer(
                 messages,
                 extra_instructions=self._knowledge_answer_instructions(knowledge_result) if knowledge_result else None,
+                system_prompt_override=build_knowledge_system_prompt(),
             ):
                 yield event
             return

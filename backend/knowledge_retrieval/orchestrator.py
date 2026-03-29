@@ -1,9 +1,8 @@
 from __future__ import annotations
 
-import re
 from typing import AsyncIterator
 
-from knowledge_retrieval.evidence_organizer import diversify_evidences, merge_parent_evidences
+from knowledge_retrieval.evidence_organizer import diversify_evidences, merge_parent_evidences, source_family
 from knowledge_retrieval.fusion import evidence_dedupe_key, reciprocal_rank_fusion
 from knowledge_retrieval.hybrid_retriever import hybrid_retriever
 from knowledge_retrieval.query_rewrite import QueryPlan, build_query_plan
@@ -18,33 +17,13 @@ class KnowledgeOrchestrator:
     def configure(self, base_dir, _model_builder) -> None:
         self.base_dir = base_dir
 
-    def _normalize_source_path(self, source_path: str) -> str:
-        normalized = source_path.replace("\\", "/").strip()
-        if "knowledge/" in normalized and not normalized.startswith("knowledge/"):
-            normalized = normalized[normalized.index("knowledge/") :]
-        return normalized
-
     def _source_family(self, source_path: str) -> str:
-        normalized = self._normalize_source_path(source_path)
-        parent, _, filename = normalized.rpartition("/")
-        lowered = filename.lower()
-        if lowered.endswith("_extracted.txt"):
-            stem = filename[: -len("_extracted.txt")]
-            extension = ".pdf"
-        else:
-            stem, dot, ext = filename.rpartition(".")
-            if dot:
-                extension = f".{ext}"
-            else:
-                stem = filename
-                extension = ""
-        if extension.lower() == ".txt" and re.search(r"20\d{2}[_\s-]*q[1-4]|20\d{2}.+(季度|q[1-4])", stem, re.IGNORECASE):
-            stem = re.sub(r"[_\s-]*(提取文本|extracted)$", "", stem, flags=re.IGNORECASE)
-            extension = ".pdf"
-        if extension.lower() == ".pdf":
-            stem = " ".join(stem.replace("_", " ").split())
-        family = f"{stem}{extension}"
-        return f"{parent}/{family}" if parent else family
+        return source_family(source_path)
+
+    def _final_evidence_limit(self, question_type: str) -> int:
+        if question_type in {"multi_hop", "cross_file_aggregation"}:
+            return 4
+        return 3
 
     def _has_correlated_retrieval_evidence(
         self,
@@ -316,11 +295,12 @@ class KnowledgeOrchestrator:
                 )
             )
 
+        final_limit = self._final_evidence_limit(query_plan.question_type)
         diversified = diversify_evidences(
             merged,
             question_type=query_plan.question_type,
             entity_hints=query_plan.entity_hints,
-            top_k=6,
+            top_k=final_limit,
         )
         final_evidences = diversified or merged or reranked or candidate_pool
         if diversified:
@@ -330,7 +310,7 @@ class KnowledgeOrchestrator:
                     stage="diversified",
                     title="Diversified evidence pick",
                     message="Final evidence selection enforced lightweight source diversification so one document family would not dominate the context.",
-                    results=diversified,
+                    results=diversified[:final_limit],
                 )
             )
 
@@ -343,7 +323,7 @@ class KnowledgeOrchestrator:
 
         return OrchestratedRetrievalResult(
             status=status,
-            evidences=final_evidences[:6],
+            evidences=final_evidences[:final_limit],
             steps=steps,
             fallback_used=False,
             reason=reason,

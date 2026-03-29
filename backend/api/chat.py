@@ -23,7 +23,7 @@ def _sse(event: str, data: dict[str, Any]) -> str:
 
 
 def _new_segment() -> dict[str, Any]:
-    return {"content": "", "tool_calls": [], "retrieval_steps": []}
+    return {"content": "", "tool_calls": [], "retrieval_steps": [], "usage": None}
 
 
 _AUTO_TITLE_PLACEHOLDERS = {
@@ -89,6 +89,7 @@ async def chat(payload: ChatRequest):
                     segment["content"],
                     tool_calls=segment["tool_calls"] or None,
                     retrieval_steps=segment["retrieval_steps"] or None,
+                    usage=segment.get("usage") or None,
                 )
 
             conversation_saved = True
@@ -131,6 +132,8 @@ async def chat(payload: ChatRequest):
                 elif event_type == "done":
                     if not current_segment["content"].strip() and event.get("content"):
                         current_segment["content"] = event["content"]
+                    if event.get("usage"):
+                        current_segment["usage"] = event["usage"]
                     persist_segments()
 
                 data = {key: value for key, value in event.items() if key != "type"}

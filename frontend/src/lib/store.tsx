@@ -28,6 +28,7 @@ import {
   loadFile,
   renameSession,
   rebuildKnowledgeIndex as rebuildKnowledgeIndexRequest,
+  type SessionTokenStats,
   saveFile,
   setExecutionPlatform as setExecutionPlatformRequest,
   setRagMode,
@@ -53,16 +54,11 @@ export type Message = {
 
 const STREAM_TOKEN_FLUSH_MS = 80;
 
-type TokenStats = {
-  system_tokens: number;
-  message_tokens: number;
-  total_tokens: number;
-};
-
 type AppStore = {
   sessions: SessionSummary[];
   currentSessionId: string | null;
   messages: Message[];
+  messageFeed: Message[];
   isInitializing: boolean;
   isStreaming: boolean;
   connectionError: string | null;
@@ -76,7 +72,7 @@ type AppStore = {
   inspectorDirty: boolean;
   sidebarWidth: number;
   inspectorWidth: number;
-  tokenStats: TokenStats | null;
+  tokenStats: SessionTokenStats | null;
   knowledgeIndexStatus: KnowledgeIndexStatus | null;
   createNewSession: () => Promise<void>;
   retryInitialization: () => Promise<void>;
@@ -127,6 +123,8 @@ type ChatStore = Pick<
   | "sendMessage"
 >;
 
+type FeedStore = Pick<AppStore, "messageFeed">;
+
 type RuntimeStore = Pick<
   AppStore,
   | "ragMode"
@@ -158,6 +156,7 @@ type LayoutStore = Pick<
 
 const SessionContext = createContext<SessionStore | null>(null);
 const ChatContext = createContext<ChatStore | null>(null);
+const FeedContext = createContext<FeedStore | null>(null);
 const RuntimeContext = createContext<RuntimeStore | null>(null);
 const InspectorContext = createContext<InspectorStore | null>(null);
 const LayoutContext = createContext<LayoutStore | null>(null);
@@ -272,14 +271,23 @@ function toErrorMessage(error: unknown) {
 }
 
 /**
- * Returns one updated message list from previous messages, target id, and updater inputs without remapping every entry.
+ * Returns one updated message list from previous messages, preferred index, and message id inputs.
  */
-function updateMessageById(
+function updateMessageAtPosition(
   previous: Message[],
+  preferredIndex: number,
   messageId: string,
   updater: (message: Message) => Message
 ) {
-  const targetIndex = previous.findIndex((message) => message.id === messageId);
+  const matchesPreferredIndex =
+    preferredIndex >= 0 &&
+    preferredIndex < previous.length &&
+    previous[preferredIndex]?.id === messageId;
+
+  const targetIndex = matchesPreferredIndex
+    ? preferredIndex
+    : previous.findIndex((message) => message.id === messageId);
+
   if (targetIndex === -1) {
     return previous;
   }
@@ -290,12 +298,22 @@ function updateMessageById(
 }
 
 /**
+ * Returns a compact recent-message slice from full chat input for low-priority sidebar previews.
+ */
+function buildMessageFeed(messages: Message[]) {
+  return messages
+    .filter((message) => message.role === "user" || Boolean(message.content.trim()) || message.toolCalls.length > 0)
+    .slice(-8);
+}
+
+/**
  * Returns one rendered provider tree from children input and owns the application state and side effects.
  */
 export function AppProvider({ children }: { children: ReactNode }) {
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
   const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
+  const [messageFeed, setMessageFeed] = useState<Message[]>([]);
   const [isInitializing, setIsInitializing] = useState(true);
   const [isStreaming, setIsStreaming] = useState(false);
   const [connectionError, setConnectionError] = useState<string | null>(null);
@@ -310,7 +328,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [inspectorDirty, setInspectorDirty] = useState(false);
   const [sidebarWidth, setSidebarWidth] = useState(272);
   const [inspectorWidth, setInspectorWidth] = useState(320);
-  const [tokenStats, setTokenStats] = useState<TokenStats | null>(null);
+  const [tokenStats, setTokenStats] = useState<SessionTokenStats | null>(null);
   const [knowledgeIndexStatus, setKnowledgeIndexStatus] = useState<KnowledgeIndexStatus | null>(
     null
   );
@@ -347,8 +365,17 @@ export function AppProvider({ children }: { children: ReactNode }) {
    */
   const refreshSessionDetails = useCallback(async function refreshSessionDetails(sessionId: string) {
     const [history, tokens] = await Promise.all([getSessionHistory(sessionId), getSessionTokens(sessionId)]);
-    setMessages(toUiMessages(history.messages));
+    const nextMessages = toUiMessages(history.messages);
+    setMessages(nextMessages);
+    setMessageFeed(buildMessageFeed(nextMessages));
     setTokenStats(tokens);
+  }, []);
+
+  /**
+   * Returns no value from a session id input and refreshes only aggregate token stats for the current chat.
+   */
+  const refreshSessionTokens = useCallback(async function refreshSessionTokens(sessionId: string) {
+    setTokenStats(await getSessionTokens(sessionId));
   }, []);
 
   /**
@@ -378,6 +405,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       await refreshSessions();
       setCurrentSessionId(created.id);
       setMessages([]);
+      setMessageFeed([]);
       setTokenStats(null);
     });
   }, [refreshSessions, runUserAction]);
@@ -435,7 +463,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
       usage: null
     };
 
-    setMessages((prev) => [...prev, userMessage, assistantMessage]);
+    let activeAssistantIndex = -1;
+
+    setMessages((prev) => {
+      activeAssistantIndex = prev.length + 1;
+      return [...prev, userMessage, assistantMessage];
+    });
     setIsStreaming(true);
     setConnectionError(null);
 
@@ -448,7 +481,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
      * Returns no value from one message-updater callback input and patches the currently streaming assistant message.
      */
     const patchAssistant = (updater: (message: Message) => Message) => {
-      setMessages((prev) => updateMessageById(prev, activeAssistantId, updater));
+      setMessages((prev) =>
+        updateMessageAtPosition(prev, activeAssistantIndex, activeAssistantId, updater)
+      );
     };
 
     /**
@@ -549,7 +584,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
                 usage: null
               };
               activeAssistantId = nextAssistant.id;
-              setMessages((prev) => [...prev, nextAssistant]);
+              setMessages((prev) => {
+                activeAssistantIndex = prev.length;
+                return [...prev, nextAssistant];
+              });
               return;
             }
 
@@ -616,13 +654,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
       try {
         await refreshSessions();
-        await refreshSessionDetails(sessionId);
+        await refreshSessionTokens(sessionId);
         setConnectionError(null);
       } catch (error) {
         setConnectionError(toErrorMessage(error));
       }
     }
-  }, [currentSessionId, ensureSession, isStreaming, refreshSessionDetails, refreshSessions]);
+  }, [currentSessionId, ensureSession, isStreaming, refreshSessionTokens, refreshSessions]);
 
   /**
    * Returns no value from no inputs and flips the memory-retrieval mode while preserving rollback on failure.
@@ -704,6 +742,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         } else {
           setCurrentSessionId(null);
           setMessages([]);
+          setMessageFeed([]);
           setTokenStats(null);
         }
       }
@@ -814,6 +853,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       setSessions([]);
       setCurrentSessionId(null);
       setMessages([]);
+      setMessageFeed([]);
       setSkills([]);
       setTokenStats(null);
       setKnowledgeIndexStatus(null);
@@ -850,6 +890,22 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
     return () => window.clearInterval(timer);
   }, [knowledgeIndexStatus?.building]);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      startTransition(() => {
+        setMessageFeed((previous) => {
+          const next = buildMessageFeed(messages);
+          if (previous.length === next.length && previous.every((message, index) => message === next[index])) {
+            return previous;
+          }
+          return next;
+        });
+      });
+    }, isStreaming ? 260 : 120);
+
+    return () => window.clearTimeout(timer);
+  }, [messages, isStreaming]);
 
   const sessionValue = useMemo<SessionStore>(
     () => ({
@@ -891,6 +947,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
       retryInitialization,
       sendMessage
     ]
+  );
+
+  const feedValue = useMemo<FeedStore>(
+    () => ({
+      messageFeed
+    }),
+    [messageFeed]
   );
 
   const runtimeValue = useMemo<RuntimeStore>(
@@ -951,13 +1014,15 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
   return (
     <SessionContext.Provider value={sessionValue}>
-      <ChatContext.Provider value={chatValue}>
-        <RuntimeContext.Provider value={runtimeValue}>
-          <InspectorContext.Provider value={inspectorValue}>
-            <LayoutContext.Provider value={layoutValue}>{children}</LayoutContext.Provider>
-          </InspectorContext.Provider>
-        </RuntimeContext.Provider>
-      </ChatContext.Provider>
+      <FeedContext.Provider value={feedValue}>
+        <ChatContext.Provider value={chatValue}>
+          <RuntimeContext.Provider value={runtimeValue}>
+            <InspectorContext.Provider value={inspectorValue}>
+              <LayoutContext.Provider value={layoutValue}>{children}</LayoutContext.Provider>
+            </InspectorContext.Provider>
+          </RuntimeContext.Provider>
+        </ChatContext.Provider>
+      </FeedContext.Provider>
     </SessionContext.Provider>
   );
 }
@@ -967,6 +1032,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
  */
 export function useAppStore() {
   const session = useSessionStore();
+  const feed = useFeedStore();
   const chat = useChatStore();
   const runtime = useRuntimeStore();
   const inspector = useInspectorStore();
@@ -975,12 +1041,13 @@ export function useAppStore() {
   return useMemo(
     () => ({
       ...session,
+      ...feed,
       ...chat,
       ...runtime,
       ...inspector,
       ...layout
     }),
-    [session, chat, runtime, inspector, layout]
+    [session, feed, chat, runtime, inspector, layout]
   );
 }
 
@@ -1002,6 +1069,17 @@ export function useChatStore() {
   const value = useContext(ChatContext);
   if (!value) {
     throw new Error("useChatStore must be used inside AppProvider");
+  }
+  return value;
+}
+
+/**
+ * Returns one feed-focused store object from no explicit inputs and exposes throttled sidebar previews.
+ */
+export function useFeedStore() {
+  const value = useContext(FeedContext);
+  if (!value) {
+    throw new Error("useFeedStore must be used inside AppProvider");
   }
   return value;
 }

@@ -208,3 +208,7 @@
 - Completed: T-123 Add lightweight compare / multi-hop / negation scaffolds so answer generation stays within requested entities and supported evidence without introducing a heavy guard system.
 - Completed: T-124 Re-run the targeted PDF slices after the focused retrieval + grounding cleanup and save the fresh result to `backend/storage/benchmarks/pdf_targeted_after_focus.json`.
 - Next: T-125 Revisit rule-based groundedness criteria for compare / multi-hop PDF cases so the rule-based pass rate better matches the now-clean judge outcomes without hiding real unsupported claims.
+## 2026-03-29 Thirty-Seventh Update
+- Completed: T-125 Separate session-trace token volume from model-call token usage in backend token accounting and frontend display.
+- Completed: T-126 Add a local debug script `backend/scripts/print_knowledge_token_breakdown.py` that prints both token views plus per-stage retrieval breakdown for one fixed knowledge question.
+- Next: T-127 Decide whether the next cheapest token reduction comes from trimming persisted retrieval-step payloads, limiting saved results per stage, or shrinking answer-time knowledge context.

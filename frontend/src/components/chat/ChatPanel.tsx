@@ -1,47 +1,38 @@
 "use client";
 
-import { useEffect, useLayoutEffect, useMemo, useRef } from "react";
+import { memo, useEffect, useLayoutEffect, useMemo, useRef } from "react";
 
 import { ChatInput } from "@/components/chat/ChatInput";
 import { ChatMessage } from "@/components/chat/ChatMessage";
-import { useChatStore } from "@/lib/store";
+import { type Message, useChatStore } from "@/lib/store";
 
 const AUTO_SCROLL_THRESHOLD = 72;
 
-/**
- * Returns one compact scroll signature string from the latest message input and tracks layout-affecting chat changes.
- */
-function buildScrollSignature(
-  message:
-    | {
-        id: string;
-        content: string;
-        toolCalls: Array<{ input: string; output: string }>;
-        retrievalSteps: Array<{ stage: string; title: string; message: string; results: unknown[] }>;
-        usage: { input_tokens: number; output_tokens: number } | null;
-      }
-    | undefined
-) {
-  if (!message) {
-    return "empty";
-  }
-
-  return [
-    message.id,
-    message.content.length,
-    message.toolCalls.length,
-    ...message.toolCalls.flatMap((toolCall) => [toolCall.input.length, toolCall.output.length]),
-    message.retrievalSteps.length,
-    ...message.retrievalSteps.flatMap((step) => [
-      step.stage,
-      step.title.length,
-      step.message.length,
-      step.results.length
-    ]),
-    message.usage?.input_tokens ?? 0,
-    message.usage?.output_tokens ?? 0
-  ].join(":");
-}
+const StableHistory = memo(
+  function StableHistory({
+    messages
+  }: {
+    messages: Message[];
+  }) {
+    return (
+      <>
+        {messages.map((message) => (
+          <ChatMessage
+            content={message.content}
+            key={message.id}
+            retrievalSteps={message.retrievalSteps}
+            role={message.role}
+            toolCalls={message.toolCalls}
+            usage={message.usage}
+          />
+        ))}
+      </>
+    );
+  },
+  (previous, next) =>
+    previous.messages.length === next.messages.length &&
+    previous.messages.every((message, index) => message === next.messages[index])
+);
 
 /**
  * Returns one rendered chat panel from no explicit inputs and keeps the chat viewport pinned without scroll jitter.
@@ -61,9 +52,11 @@ export function ChatPanel() {
   const frameRef = useRef<number | null>(null);
 
   const lastMessage = messages[messages.length - 1];
-  const scrollSignature = useMemo(
-    () => buildScrollSignature(lastMessage),
-    [lastMessage]
+  const liveMessage =
+    isStreaming && lastMessage?.role === "assistant" ? lastMessage : null;
+  const historyMessages = useMemo(
+    () => (liveMessage ? messages.slice(0, -1) : messages),
+    [liveMessage, messages]
   );
 
   /**
@@ -132,7 +125,7 @@ export function ChatPanel() {
 
   useLayoutEffect(() => {
     syncToBottom(true);
-  }, [scrollSignature, isStreaming]);
+  }, [lastMessage, isStreaming]);
 
   return (
     <section className="flex h-full min-w-0 flex-[1.5] flex-col gap-3 px-1">
@@ -145,8 +138,15 @@ export function ChatPanel() {
             Answers, retrieval, and tool traces in one stream
           </h2>
         </div>
-        <div className="mono rounded-full border border-[var(--color-line)] bg-[var(--color-bg-soft)] px-3 py-1.5 text-sm text-[var(--color-ink-soft)]">
-          {tokenStats ? `${tokenStats.total_tokens} tokens` : "No metrics yet"}
+        <div className="mono rounded-[20px] border border-[var(--color-line)] bg-[var(--color-bg-soft)] px-4 py-2 text-right text-sm text-[var(--color-ink-soft)]">
+          {tokenStats ? (
+            <div className="space-y-1">
+              <div>{`Model call ${tokenStats.model_call_total_tokens.toLocaleString()} tokens`}</div>
+              <div className="text-[var(--color-ink-muted)]">{`Session trace ${tokenStats.session_trace_tokens.toLocaleString()} tokens`}</div>
+            </div>
+          ) : (
+            "No metrics yet"
+          )}
         </div>
       </div>
 
@@ -193,17 +193,18 @@ export function ChatPanel() {
             </div>
           )}
 
-          {messages.map((message, index) => (
+          <StableHistory messages={historyMessages} />
+          {liveMessage ? (
             <ChatMessage
-              content={message.content}
-              key={message.id}
-              retrievalSteps={message.retrievalSteps}
-              role={message.role}
-              streaming={isStreaming && index === messages.length - 1 && message.role === "assistant"}
-              toolCalls={message.toolCalls}
-              usage={message.usage}
+              content={liveMessage.content}
+              key={liveMessage.id}
+              retrievalSteps={liveMessage.retrievalSteps}
+              role={liveMessage.role}
+              streaming
+              toolCalls={liveMessage.toolCalls}
+              usage={liveMessage.usage}
             />
-          ))}
+          ) : null}
         </div>
       </div>
 
