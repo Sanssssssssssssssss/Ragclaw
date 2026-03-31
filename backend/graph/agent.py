@@ -7,8 +7,10 @@ from typing import Any
 
 from config import get_settings, runtime_config
 from graph.execution_strategy import ExecutionStrategy, parse_execution_strategy
+from graph.lightweight_router import RoutingDecision, LightweightLLMRouter, deterministic_route
 from graph.memory_indexer import memory_indexer
 from graph.prompt_builder import build_knowledge_system_prompt, build_system_prompt
+from graph.skill_gate import SkillDecision, SkillGate, skill_instruction
 from graph.session_manager import SessionManager
 from knowledge_retrieval import knowledge_orchestrator
 from token_utils import count_tokens
@@ -77,6 +79,8 @@ class AgentManager:
         self.base_dir: Path | None = None
         self.session_manager: SessionManager | None = None
         self.tools = []
+        self._lightweight_router = LightweightLLMRouter()
+        self._skill_gate = SkillGate()
 
     def initialize(self, base_dir: Path) -> None:
         self.base_dir = base_dir
@@ -164,21 +168,166 @@ class AgentManager:
 
         return allowed_tools
 
+    def _tool_name_tuple(self) -> tuple[str, ...]:
+        return tuple(sorted(str(getattr(tool, "name", "") or "").strip() for tool in self.tools if getattr(tool, "name", "")))
+
+    def _fallback_routing_decision(self, message: str, strategy: ExecutionStrategy) -> RoutingDecision:
+        if self._is_knowledge_query(message) and strategy.allow_knowledge and strategy.allow_retrieval:
+            return RoutingDecision(
+                intent="knowledge_qa",
+                needs_tools=False,
+                needs_retrieval=True,
+                allowed_tools=(),
+                confidence=0.5,
+                reason_short="fallback knowledge heuristic",
+                source="fallback",
+            )
+        if strategy.allow_tools and self._is_workspace_request(message):
+            return RoutingDecision(
+                intent="workspace_file_ops",
+                needs_tools=True,
+                needs_retrieval=False,
+                allowed_tools=("read_file", "terminal"),
+                confidence=0.45,
+                reason_short="fallback workspace heuristic",
+                source="fallback",
+            )
+        return RoutingDecision(
+            intent="direct_answer",
+            needs_tools=False,
+            needs_retrieval=False,
+            allowed_tools=(),
+            confidence=0.4,
+            reason_short="fallback direct answer",
+            source="fallback",
+        )
+
+    def _apply_routing_constraints(self, decision: RoutingDecision, strategy: ExecutionStrategy) -> RoutingDecision:
+        allowed_tools = list(decision.allowed_tools)
+        if strategy.allowed_tools:
+            allowed_tools = [tool for tool in allowed_tools if tool in strategy.allowed_tools]
+        if strategy.blocked_tools:
+            allowed_tools = [tool for tool in allowed_tools if tool not in strategy.blocked_tools]
+        if not strategy.allow_tools:
+            allowed_tools = []
+
+        intent = decision.intent
+        needs_retrieval = decision.needs_retrieval and strategy.allow_knowledge and strategy.allow_retrieval
+        needs_tools = bool(allowed_tools) and strategy.allow_tools
+
+        if intent == "knowledge_qa" and not needs_retrieval:
+            intent = "direct_answer" if not needs_tools else "workspace_file_ops"
+        if intent == "direct_answer":
+            allowed_tools = []
+            needs_tools = False
+            needs_retrieval = False
+        elif intent == "knowledge_qa":
+            allowed_tools = []
+            needs_tools = False
+            needs_retrieval = True
+
+        if strategy.force_direct_answer:
+            intent = "direct_answer"
+            allowed_tools = []
+            needs_tools = False
+            needs_retrieval = False
+
+        return RoutingDecision(
+            intent=intent,
+            needs_tools=needs_tools,
+            needs_retrieval=needs_retrieval,
+            allowed_tools=tuple(allowed_tools),
+            confidence=decision.confidence,
+            reason_short=decision.reason_short,
+            source=decision.source,
+            prompt_tokens=decision.prompt_tokens,
+            output_tokens=decision.output_tokens,
+            ambiguity_flags=tuple(getattr(decision, "ambiguity_flags", ()) or ()),
+            escalated=bool(getattr(decision, "escalated", False)),
+            model_name=str(getattr(decision, "model_name", "") or ""),
+            subtype=str(getattr(decision, "subtype", "") or ""),
+        )
+
+    async def resolve_routing(self, message: str, history: list[dict[str, Any]]) -> tuple[ExecutionStrategy, RoutingDecision]:
+        strategy = parse_execution_strategy(message)
+        tool_names = self._tool_name_tuple()
+        decision = deterministic_route(
+            message=message,
+            strategy=strategy,
+            tool_names=tool_names,
+            is_knowledge_query=self._is_knowledge_query(message),
+            prefer_tool_agent=self._should_prefer_tool_agent(message, strategy),
+        )
+        if decision is None:
+            try:
+                decision = await self._lightweight_router.route(
+                    message=message,
+                    history=history,
+                    strategy=strategy,
+                    tool_names=tool_names,
+                )
+            except Exception:
+                decision = self._fallback_routing_decision(message, strategy)
+        return strategy, self._apply_routing_constraints(decision, strategy)
+
+    def decide_skill(
+        self,
+        message: str,
+        history: list[dict[str, Any]],
+        strategy: ExecutionStrategy,
+        routing_decision: RoutingDecision,
+    ) -> SkillDecision:
+        return self._skill_gate.decide(
+            message=message,
+            history=history,
+            strategy=strategy,
+            routing_decision=routing_decision,
+        )
+
     def _is_knowledge_query(self, message: str) -> bool:
-        normalized = message.replace("\\", "/").strip()
+        normalized = str(message or "").replace("\\", "/").strip()
         lowered = normalized.lower()
-        if any(token in normalized for token in STABLE_KNOWLEDGE_QUERY_SUBSTRINGS):
+        if any(token in lowered for token in ("repo", "workspace/", "backend/", "memory/")) and "知识库" not in normalized and "knowledge base" not in lowered:
+            return False
+        stable_substrings = (
+            "知识库",
+            "根据知识库",
+            "基于知识库",
+            "从知识库",
+            "knowledge base",
+            "knowledge/",
+        )
+        if any(token in normalized for token in stable_substrings):
             return True
-        if any(pattern.search(normalized) for pattern in STABLE_KNOWLEDGE_QUERY_PATTERNS):
+        if any(
+            pattern.search(normalized)
+            for pattern in (
+                re.compile(r"\bknowledge\b", re.IGNORECASE),
+                re.compile(r"\.(md|json|txt|pdf|xlsx|xls)\b", re.IGNORECASE),
+                re.compile(r"(哪份|哪个|哪张|那个|那份).{0,30}(文档|文件|报告|财报|路径|来源)"),
+                re.compile(r"(给出|返回).{0,12}(路径|来源)"),
+                re.compile(r"\b(which|what)\b.{0,24}\b(file|document|report|path|source)\b", re.IGNORECASE),
+            )
+        ):
             return True
         return lowered.startswith("based on the knowledge") or lowered.startswith("from the knowledge")
+
+    def _is_workspace_request(self, message: str) -> bool:
+        normalized = str(message or "").replace("\\", "/").strip()
+        return any(
+            pattern.search(normalized)
+            for pattern in (
+                re.compile(r"(?:读取|打开|列出|查看|统计|提取|分析|显示|解析|转换|计算).{0,40}(?:knowledge/|workspace/|memory/|storage/|backend/)", re.IGNORECASE),
+                re.compile(r"(?:read|open|list|count|extract|analyze|show|parse|convert|calculate|compute).{0,60}(?:knowledge/|workspace/|memory/|storage/|backend/)", re.IGNORECASE),
+            )
+        )
 
     def _should_prefer_tool_agent(self, message: str, strategy: ExecutionStrategy) -> bool:
         """Return whether the request should bypass knowledge routing and go straight to tools."""
 
         if strategy.require_tool_use or strategy.allowed_tools:
             return True
-        return any(pattern.search(message) for pattern in STABLE_WORKSPACE_OPERATION_PATTERNS)
+        return self._is_workspace_request(message)
 
     def _build_messages(self, history: list[dict[str, Any]]) -> list[dict[str, str]]:
         messages: list[dict[str, str]] = []
@@ -237,6 +386,276 @@ class AgentManager:
     def _knowledge_question_type(self, retrieval_result) -> str:
         return str(getattr(retrieval_result, "question_type", "") or "direct_fact").strip().lower()
 
+    def _evidence_missing_text(self) -> str:
+        return "\u5f53\u524d\u8bc1\u636e\u672a\u663e\u793a"
+
+    def _knowledge_entities(self, message: str, retrieval_result) -> list[str]:
+        compare_segment = ""
+        compare_match = re.search(r"\u5bf9\u6bd4(.+?)(?:20\d{2}|Q\d|\u7684|\u51c0\u5229\u6da6|\u8425\u4e1a\u6536\u5165)", str(message or ""))
+        if compare_match:
+            compare_segment = compare_match.group(1)
+        if compare_segment:
+            parsed = [
+                part.strip()
+                for part in re.split(r"[\u4e0e\u548c\u53ca\u3001/]", compare_segment)
+                if len(part.strip()) >= 2
+            ]
+            if len(parsed) >= 2:
+                return self._dedupe_preserve_order(parsed)[:2]
+
+        entities = [
+            str(item).strip()
+            for item in getattr(retrieval_result, "entity_hints", []) or []
+            if len(str(item).strip()) >= 2
+        ]
+        if len(entities) >= 2:
+            return self._dedupe_preserve_order(entities)[:2]
+
+        derived: list[str] = []
+        for evidence in getattr(retrieval_result, "evidences", []) or []:
+            source_path = str(getattr(evidence, "source_path", "") or "").replace("\\", "/")
+            stem = Path(source_path).stem
+            stem = re.sub(r"\s*20\d{2}\s*Q\d.*$", "", stem).strip()
+            stem = re.sub(r"_20\d{2}_Q\d.*$", "", stem).strip()
+            if stem:
+                derived.append(stem)
+        return self._dedupe_preserve_order(entities + derived)[:2]
+
+    def _entity_aliases(self, entity: str) -> list[str]:
+        raw = str(entity or "").strip()
+        aliases = [raw]
+        for suffix in ("\u80a1\u4efd\u6709\u9650\u516c\u53f8", "\u6709\u9650\u516c\u53f8", "\u96c6\u56e2", "\u516c\u53f8"):
+            if raw.endswith(suffix):
+                aliases.append(raw[: -len(suffix)].strip())
+        return self._dedupe_preserve_order([alias for alias in aliases if len(alias) >= 2])
+
+    def _snippet_lines(self, text: str) -> list[str]:
+        parts = re.split(r"[\n\r]+|(?<=\|)\s+|(?<=\u3002)\s*", str(text or ""))
+        return [part.strip() for part in parts if part and part.strip()]
+
+    def _evidence_matches_entity(self, evidence: Any, entity: str) -> bool:
+        blob = " ".join(
+            [
+                str(getattr(evidence, "source_path", "") or ""),
+                str(getattr(evidence, "locator", "") or ""),
+                str(getattr(evidence, "snippet", "") or ""),
+            ]
+        ).lower()
+        return any(alias.lower() in blob for alias in self._entity_aliases(entity))
+
+    def _requested_period_scope(self, message: str) -> str:
+        lowered = str(message or "").lower()
+        if "\u5e74\u521d\u81f3\u62a5\u544a\u671f\u672b" in message or "\u524d\u4e09\u5b63\u5ea6" in message:
+            return "ytd"
+        if any(term in message for term in ("\u672c\u62a5\u544a\u671f", "\u5355\u5b63\u5ea6", "\u5f53\u5b63", "\u6b63\u8d1f")):
+            return "report"
+        if "q3" in lowered and any(term in message for term in ("\u53d8\u5316", "\u5bf9\u6bd4", "\u6bd4\u8f83")):
+            return "both"
+        return "report"
+
+    def _period_markers_for_scope(self, scope: str) -> tuple[list[str], list[str]]:
+        report_markers = ["\u672c\u62a5\u544a\u671f", "\u672c\u671f", "\u5355\u5b63\u5ea6", "q3", "\u7b2c\u4e09\u5b63\u5ea6"]
+        ytd_markers = ["\u5e74\u521d\u81f3\u62a5\u544a\u671f\u672b", "\u524d\u4e09\u5b63\u5ea6", "\u7d2f\u8ba1", "1-9\u6708"]
+        if scope == "ytd":
+            return ytd_markers, report_markers
+        return report_markers, ytd_markers
+
+    def _extract_amounts(self, text: str) -> list[str]:
+        pattern = re.compile(
+            r"-?\d[\d,]*(?:\.\d+)?\s*(?:\u4ebf\u5143|\u4e07\u5143|\u5143|\u5343\u5143|\u4e07\u4ebf)?",
+            re.IGNORECASE,
+        )
+        matches: list[str] = []
+        for match in pattern.finditer(str(text or "")):
+            token = match.group(0).strip()
+            digits = re.sub(r"\D+", "", token)
+            has_unit = any(unit in token for unit in ("\u4ebf\u5143", "\u4e07\u5143", "\u5143", "\u5343\u5143", "\u4e07\u4ebf"))
+            has_grouping = "," in token
+            if has_unit or has_grouping or len(digits) >= 7:
+                matches.append(token)
+        return self._dedupe_preserve_order(matches)
+
+    def _extract_percentages(self, text: str) -> list[str]:
+        return self._dedupe_preserve_order(
+            [match.group(0).strip() for match in re.finditer(r"-?\d[\d,]*(?:\.\d+)?\s*%", str(text or ""))]
+        )
+
+    def _collect_metric_candidates(self, entity: str, metric_terms: list[str], message: str, retrieval_result) -> list[dict[str, str | int]]:
+        candidates: list[dict[str, str | int]] = []
+        scope = self._requested_period_scope(message)
+        preferred_markers, secondary_markers = self._period_markers_for_scope(scope)
+        noise_terms = ["\u666e\u901a\u80a1\u80a1\u4e1c\u603b\u6570", "\u8d28\u62bc", "\u80a1\u4efd\u6570\u91cf", "\u6301\u80a1", "\u524d\u5341\u540d\u80a1\u4e1c"]
+
+        for evidence in getattr(retrieval_result, "evidences", []) or []:
+            if not self._evidence_matches_entity(evidence, entity):
+                continue
+            source_path = str(getattr(evidence, "source_path", "") or "").strip()
+            locator = str(getattr(evidence, "locator", "") or "").strip()
+            snippet = str(getattr(evidence, "snippet", "") or "").strip()
+            lines = self._snippet_lines(snippet) or [snippet]
+            for line in lines:
+                lowered = line.lower()
+                if any(term in line for term in noise_terms):
+                    continue
+                has_metric_term = any(term.lower() in lowered for term in metric_terms)
+                if not has_metric_term:
+                    continue
+                score = 0
+                score += 5
+                if any(marker.lower() in lowered for marker in preferred_markers):
+                    score += 3
+                if any(marker.lower() in lowered for marker in secondary_markers):
+                    score += 1
+                if self._extract_amounts(line):
+                    score += 2
+                if self._extract_percentages(line):
+                    score += 1
+                if score <= 0:
+                    continue
+                candidates.append(
+                    {
+                        "source_path": source_path,
+                        "locator": locator,
+                        "line": line,
+                        "score": score,
+                    }
+                )
+        return sorted(candidates, key=lambda item: int(item["score"]), reverse=True)
+
+    def _parse_period_values_from_line(self, line: str, scope: str) -> dict[str, str]:
+        amounts = self._extract_amounts(line)
+        percentages = self._extract_percentages(line)
+        lowered = line.lower()
+        report_markers, ytd_markers = self._period_markers_for_scope("both")
+        has_report = any(marker.lower() in lowered for marker in report_markers)
+        has_ytd = any(marker.lower() in lowered for marker in ytd_markers)
+        data = {
+            "report_value": self._evidence_missing_text(),
+            "report_yoy": self._evidence_missing_text(),
+            "ytd_value": self._evidence_missing_text(),
+            "ytd_yoy": self._evidence_missing_text(),
+        }
+
+        if scope == "ytd":
+            if amounts:
+                data["ytd_value"] = amounts[-1]
+            if percentages:
+                data["ytd_yoy"] = percentages[-1]
+            return data
+
+        if len(amounts) >= 2:
+            data["report_value"] = amounts[0]
+            data["ytd_value"] = amounts[1]
+        elif amounts:
+            if has_ytd and not has_report:
+                data["ytd_value"] = amounts[0]
+            else:
+                data["report_value"] = amounts[0]
+
+        if len(percentages) >= 2:
+            data["report_yoy"] = percentages[0]
+            data["ytd_yoy"] = percentages[1]
+        elif percentages:
+            if has_ytd and not has_report:
+                data["ytd_yoy"] = percentages[0]
+            else:
+                data["report_yoy"] = percentages[0]
+
+        return data
+
+    def _build_compare_company_slots(self, entity: str, metric_terms: list[str], message: str, retrieval_result) -> dict[str, str]:
+        missing = self._evidence_missing_text()
+        slots = {
+            "entity": entity,
+            "source_path": missing,
+            "locator": missing,
+            "report_value": missing,
+            "report_yoy": missing,
+            "ytd_value": missing,
+            "ytd_yoy": missing,
+            "evidence_line": missing,
+        }
+
+        for candidate in self._collect_metric_candidates(entity, metric_terms, message, retrieval_result):
+            line = str(candidate["line"])
+            parsed = self._parse_period_values_from_line(line, self._requested_period_scope(message))
+            if slots["source_path"] == missing:
+                slots["source_path"] = str(candidate["source_path"])
+            if slots["locator"] == missing and str(candidate["locator"]).strip():
+                slots["locator"] = str(candidate["locator"]).strip()
+            if slots["evidence_line"] == missing:
+                slots["evidence_line"] = line
+            for field in ("report_value", "report_yoy", "ytd_value", "ytd_yoy"):
+                if slots[field] == missing and parsed[field] != missing:
+                    slots[field] = parsed[field]
+
+        scope = self._requested_period_scope(message)
+        requested_fields = ["report_value", "report_yoy"] if scope == "report" else ["ytd_value", "ytd_yoy"]
+        if scope == "both":
+            requested_fields = ["report_value", "report_yoy", "ytd_value", "ytd_yoy"]
+        missing_fields = [field for field in requested_fields if slots[field] == missing]
+        slots["missing_fields"] = ", ".join(missing_fields) if missing_fields else "none"
+        return slots
+
+    def _extract_named_items_from_corpus(self, support_corpus: str, message: str) -> list[tuple[str, list[str]]]:
+        lines = [line.strip() for line in re.split(r"[\n\r]+", str(support_corpus or "")) if line.strip()]
+        matches: dict[str, list[str]] = {}
+        domain_terms = []
+        if any(term in message for term in ("\u533b\u7597", "\u5c31\u533b", "\u533b\u9662", "\u533b\u4fdd")):
+            domain_terms = ["health", "healthcare", "\u533b\u7597", "\u5c31\u533b", "\u533b\u9662", "\u533b\u4fdd"]
+
+        quoted_pattern = re.compile(r"[\"“”']([^\"“”']{2,30})[\"“”']")
+        english_pattern = re.compile(r"\b[A-Z][A-Za-z0-9.+-]*(?:\s+(?:for\s+)?[A-Z][A-Za-z0-9.+-]*)*\b")
+        chinese_product_pattern = re.compile(r"([\u4e00-\u9fffA-Za-z0-9]{2,30}(?:\u667a\u80fd\u4f53|\u4ea7\u54c1|\u5e73\u53f0|\u52a9\u624b|\u7cfb\u7edf))")
+
+        for line in lines:
+            lowered = line.lower()
+            if domain_terms and not any(term in lowered or term in line for term in domain_terms):
+                continue
+            candidates = [match.group(1).strip() for match in quoted_pattern.finditer(line)]
+            candidates.extend(match.group(0).strip() for match in english_pattern.finditer(line))
+            candidates.extend(match.group(1).strip() for match in chinese_product_pattern.finditer(line))
+            for candidate in candidates:
+                if len(candidate) < 2 or candidate.lower() in {"q3", "ai"}:
+                    continue
+                if candidate in {
+                    "\u533b\u7597\u76f8\u5173\u4ea7\u54c1",
+                    "\u533b\u7597\u4ea7\u54c1",
+                    "\u4ea7\u54c1",
+                    "\u667a\u80fd\u4f53",
+                    "\u5c31\u533b\u667a\u80fd\u4f53",
+                }:
+                    continue
+                matches.setdefault(candidate, []).append(line)
+
+        return [(name, self._dedupe_preserve_order(item_lines)[:2]) for name, item_lines in matches.items()]
+
+    def _collect_negation_evidence_lines(self, retrieval_result) -> tuple[list[str], list[str]]:
+        support_corpus = self._knowledge_support_corpus(retrieval_result)
+        evidence_lines = [raw.strip() for raw in re.split(r"[\n\r]+", support_corpus) if raw.strip()]
+        direct: list[str] = []
+        weak: list[str] = []
+        profit_terms = (
+            "\u51c0\u5229\u6da6",
+            "\u5229\u6da6\u603b\u989d",
+            "\u5f52\u5c5e\u4e8e\u4e0a\u5e02\u516c\u53f8\u80a1\u4e1c\u7684\u51c0\u5229\u6da6",
+            "\u6263\u975e\u51c0\u5229\u6da6",
+        )
+        direct_terms = ("\u4e8f\u635f", "\u4e3a\u8d1f", "\u672a\u76c8\u5229", "\u8d1f\u503c", "\u51c0\u4e8f\u635f")
+        for line in evidence_lines:
+            has_profit_term = any(term in line for term in profit_terms)
+            has_direct_term = any(term in line for term in direct_terms)
+            has_negative_number = bool(re.search(r"-\d", line))
+            has_zero_fragment = bool(re.search(r"(?<!\d)0(?:\.0+)?(?!\d)", line))
+            has_not_applicable = "\u4e0d\u9002\u7528" in line
+
+            if has_direct_term or (has_profit_term and has_negative_number):
+                direct.append(line)
+                continue
+            if has_profit_term and (has_zero_fragment or has_not_applicable or "%" in line):
+                weak.append(line)
+        return self._dedupe_preserve_order(direct), self._dedupe_preserve_order(weak)
+
     def _metric_terms_from_query(self, message: str) -> tuple[str, list[str]]:
         lowered = str(message or "").lower()
         if "净利润" in message or "profit" in lowered:
@@ -281,7 +700,7 @@ class AgentManager:
         return missing
 
     def _build_compare_scaffold(self, message: str, retrieval_result) -> str:
-        entities = [item for item in getattr(retrieval_result, "entity_hints", []) or [] if len(str(item).strip()) >= 2][:2]
+        entities = self._knowledge_entities(message, retrieval_result)
         if len(entities) < 2:
             return ""
 
@@ -369,6 +788,101 @@ class AgentManager:
         lines.append("Rules: if direct negative evidence is missing, say only that the current evidence is insufficient to confirm the negative conclusion.")
         return "\n".join(lines)
 
+    def _build_compare_scaffold(self, message: str, retrieval_result) -> str:  # type: ignore[override]
+        entities = self._knowledge_entities(message, retrieval_result)
+        if len(entities) < 2:
+            return ""
+
+        metric_label, metric_terms = self._metric_terms_from_query(message)
+        slots: list[str] = ["[Compare answer scaffold]"]
+        slots.append(f"metric: {metric_label}")
+        slots.append(f"period_scope: {self._requested_period_scope(message)}")
+        for index, entity in enumerate(entities, start=1):
+            company_slots = self._build_compare_company_slots(entity, metric_terms, message, retrieval_result)
+            prefix = "a" if index == 1 else "b"
+            slots.extend(
+                [
+                    f"company_{prefix}: {company_slots['entity']}",
+                    f"source_{prefix}: {company_slots['source_path']}",
+                    f"locator_{prefix}: {company_slots['locator']}",
+                    f"report_value_{prefix}: {company_slots['report_value']}",
+                    f"report_yoy_{prefix}: {company_slots['report_yoy']}",
+                    f"ytd_value_{prefix}: {company_slots['ytd_value']}",
+                    f"ytd_yoy_{prefix}: {company_slots['ytd_yoy']}",
+                    f"evidence_line_{prefix}: {company_slots['evidence_line']}",
+                    f"missing_fields_{prefix}: {company_slots['missing_fields']}",
+                ]
+            )
+        slots.append("Rules: treat these slots as authoritative extracted facts from the current evidence.")
+        slots.append("Rules: do not swap company A/B, do not mix report period and year-to-date, and do not turn yoy into an absolute value.")
+        slots.append(f"Rules: if a slot is missing, keep it as {self._evidence_missing_text()} for that company only; do not generalize that the whole knowledge base lacks the field.")
+        return "\n".join(slots)
+
+    def _build_multi_hop_scaffold(self, message: str, retrieval_result) -> str:  # type: ignore[override]
+        support_corpus = self._knowledge_support_corpus(retrieval_result)
+        lowered = str(message or "").lower()
+        requested_two_items = any(token in message for token in ("\u4e24\u9879", "\u4e24\u4e2a", "2\u9879", "2\u4e2a"))
+        extracted_items = self._extract_named_items_from_corpus(support_corpus, message)
+
+        if requested_two_items and extracted_items:
+            lines = ["[Multi-hop answer scaffold]"]
+            lines.append("mode: enumerated_items")
+            lines.append("requested_item_count: 2")
+            lines.append(f"found_item_count: {min(len(extracted_items), 2)}")
+            for index, (name, evidence_lines) in enumerate(extracted_items[:2], start=1):
+                lines.append(f"item_{index}: {name}")
+                lines.append(f"item_{index}_evidence: {' | '.join(evidence_lines[:2])}")
+            lines.append(f"missing_constraints: {'item_2' if len(extracted_items) < 2 else 'none'}")
+            lines.append(f"Rules: list up to two distinct supported items. If fewer than two are supported, keep the answer partial and mark the missing item as {self._evidence_missing_text()}.")
+            lines.append("Rules: do not collapse two different products into a single generic summary.")
+            return "\n".join(lines)
+
+        constraints: list[tuple[str, list[str], str]] = []
+        if any(term in message for term in ("\u4e1a\u7ee9\u60c5\u51b5", "\u51c0\u5229\u6da6", "\u8425\u6536", "\u8425\u4e1a\u6536\u5165")):
+            constraints.append(("constraint_1", ["\u51c0\u5229\u6da6", "\u8425\u4e1a\u6536\u5165", "\u5229\u6da6\u603b\u989d", "\u540c\u6bd4", "\u589e\u957f", "\u4e0b\u964d"], "performance"))
+        if any(term in message for term in ("\u539f\u56e0", "\u6240\u81f4", "\u635f\u5931", "\u53ca", "\u53c8")) or "reason" in lowered:
+            constraints.append(("constraint_2", ["\u539f\u56e0", "\u6240\u81f4", "\u635f\u5931", "\u5f71\u54cd", "\u5bfc\u81f4", "\u7d22\u8d54"], "reason"))
+        if not constraints:
+            return ""
+
+        lines = ["[Multi-hop answer scaffold]"]
+        missing: list[str] = []
+        for label, terms, kind in constraints[:2]:
+            matched_lines = [
+                raw.strip()
+                for raw in re.split(r"[\n\r]+", support_corpus)
+                if raw.strip() and any(term.lower() in raw.lower() for term in terms)
+            ]
+            if matched_lines:
+                lines.append(f"{label}: covered")
+                lines.append(f"{label}_kind: {kind}")
+                lines.append(f"{label}_evidence: {' | '.join(matched_lines[:3])}")
+            else:
+                lines.append(f"{label}: missing")
+                lines.append(f"{label}_kind: {kind}")
+                missing.append(label)
+        lines.append(f"missing_constraints: {', '.join(missing) if missing else 'none'}")
+        lines.append(f"Rules: satisfy every listed constraint separately. If any constraint is missing, keep the answer partial and write {self._evidence_missing_text()} for the uncovered part.")
+        lines.append("Rules: do not replace the requested reason with a generic explanation that is not supported by the evidence.")
+        return "\n".join(lines)
+
+    def _build_negation_scaffold(self, message: str, retrieval_result) -> str:  # type: ignore[override]
+        direct_lines, weak_lines = self._collect_negation_evidence_lines(retrieval_result)
+        lines = ["[Negation answer scaffold]"]
+        if direct_lines:
+            lines.append("negative_signal: direct")
+            lines.append(f"direct_evidence_lines: {' | '.join(direct_lines[:4])}")
+        elif weak_lines:
+            lines.append("negative_signal: weak")
+            lines.append(f"weak_fragment_lines: {' | '.join(weak_lines[:4])}")
+        else:
+            lines.append("negative_signal: missing")
+            lines.append(f"weak_fragment_lines: {self._evidence_missing_text()}")
+        lines.append("Rules: do not mention retrieval status, internal pipeline notes, or hidden system reasons.")
+        lines.append("Rules: only conclude loss / negative profit / not profitable when negative_signal is direct.")
+        lines.append(f"Rules: if negative_signal is weak, mention the fragmentary indicator but say it is insufficient to prove the stronger conclusion; never say the evidence contains only title information when weak fragments are present.")
+        return "\n".join(lines)
+
     def _build_knowledge_scaffold(self, message: str, retrieval_result) -> str:
         question_type = self._knowledge_question_type(retrieval_result)
         if question_type == "compare":
@@ -399,9 +913,10 @@ class AgentManager:
             instructions.extend(
                 [
                     "For compare questions, keep company, field, and period aligned.",
-                    "Do not generalize one company's missing field to both companies.",
                     "Use the scaffold slot values verbatim when you write any table or bullet list.",
                     "Do not create a second summary table with recomputed values that differ from the scaffold.",
+                    "Do not turn yoy percentages into absolute values or vice versa.",
+                    "If one company has a missing slot, keep that company-level field as 当前证据未显示 instead of saying the whole knowledge base lacks it.",
                 ]
             )
         if question_type == "multi_hop":
@@ -409,6 +924,7 @@ class AgentManager:
                 [
                     "For multi-hop questions, cover each requested constraint separately.",
                     "If one required constraint is missing, keep the answer partial.",
+                    "If the scaffold enumerates multiple requested items, mention each supported item separately and do not pretend a missing second item is covered.",
                 ]
             )
         if question_type == "negation":
@@ -416,6 +932,8 @@ class AgentManager:
                 [
                     "For negation questions, only conclude losses or negative values when evidence shows them directly.",
                     "If direct negative evidence exists, quote that supported value instead of summarizing it away.",
+                    "If the scaffold marks weak fragments only, mention those fragmentary indicators but say they are insufficient for the stronger negative conclusion.",
+                    "Do not say the evidence contains only title information when the scaffold already includes financial fragments.",
                 ]
             )
         return instructions
@@ -609,7 +1127,7 @@ class AgentManager:
 
         return answer
 
-    def _tool_agent_instructions(self, strategy: ExecutionStrategy) -> list[str]:
+    def _tool_agent_instructions(self, strategy: ExecutionStrategy, skill_decision: SkillDecision | None = None) -> list[str]:
         """Return tool-agent instructions from one execution strategy input."""
 
         instructions = [
@@ -617,6 +1135,8 @@ class AgentManager:
             "Do not stop at an action announcement such as saying you will use a tool.",
             "When tool output is sufficient, summarize the result directly and clearly.",
         ]
+        if skill_decision and skill_decision.use_skill and skill_decision.skill_name:
+            instructions.extend(skill_instruction(skill_decision.skill_name))
         instructions.extend(strategy.to_instructions())
         return instructions
 
@@ -731,7 +1251,8 @@ class AgentManager:
         if self.base_dir is None:
             raise RuntimeError("AgentManager is not initialized")
 
-        strategy = parse_execution_strategy(message)
+        strategy, routing_decision = await self.resolve_routing(message, history)
+        skill_decision = self.decide_skill(message, history, strategy, routing_decision)
         rag_mode = runtime_config.get_rag_mode()
         augmented_history = list(history)
         if rag_mode and strategy.allow_retrieval:
@@ -746,7 +1267,7 @@ class AgentManager:
                     }
                 )
 
-        if strategy.force_direct_answer or not strategy.allow_tools:
+        if routing_decision.intent == "direct_answer" or (not routing_decision.needs_tools and not routing_decision.needs_retrieval):
             messages = self._build_messages(augmented_history)
             messages.append({"role": "user", "content": message})
             async for event in self._astream_model_answer(
@@ -756,11 +1277,7 @@ class AgentManager:
                 yield event
             return
 
-        if (
-            strategy.allow_knowledge
-            and not self._should_prefer_tool_agent(message, strategy)
-            and self._is_knowledge_query(message)
-        ):
+        if routing_decision.intent == "knowledge_qa" and strategy.allow_knowledge and strategy.allow_retrieval:
             knowledge_result = None
             async for event in knowledge_orchestrator.astream(message):
                 if event.get("type") == "orchestrated_result":
@@ -798,6 +1315,11 @@ class AgentManager:
             return
 
         allowed_tools = self._resolve_tools_for_strategy(strategy)
+        if routing_decision.allowed_tools:
+            allowed_names = set(routing_decision.allowed_tools)
+            allowed_tools = [tool for tool in allowed_tools if getattr(tool, "name", "") in allowed_names]
+        if skill_decision.use_skill:
+            yield {"type": "skill_gate", "decision": skill_decision.to_dict()}
         if not allowed_tools:
             messages = self._build_messages(augmented_history)
             messages.append({"role": "user", "content": message})
@@ -809,7 +1331,7 @@ class AgentManager:
             return
 
         agent = self._build_agent(
-            extra_instructions=self._tool_agent_instructions(strategy),
+            extra_instructions=self._tool_agent_instructions(strategy, skill_decision),
             tools_override=allowed_tools,
         )
         messages = self._build_messages(augmented_history)

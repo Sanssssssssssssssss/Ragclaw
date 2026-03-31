@@ -1,0 +1,324 @@
+[
+  {
+    "id": "skill_web_001",
+    "bucket": "web_search_should_use",
+    "input": "Look up the latest OpenAI pricing on the web and give me the official link.",
+    "expected_use_skill": true,
+    "expected_skill_name": "web-search",
+    "expected_route": "web_lookup",
+    "expected_allowed_tools": ["fetch_url"],
+    "ambiguous": false
+  },
+  {
+    "id": "skill_web_002",
+    "bucket": "web_search_should_use",
+    "input": "Search online for the official Moonshot API docs homepage.",
+    "expected_use_skill": true,
+    "expected_skill_name": "web-search",
+    "expected_route": "web_lookup",
+    "expected_allowed_tools": ["fetch_url"],
+    "ambiguous": false
+  },
+  {
+    "id": "skill_web_003",
+    "bucket": "web_search_should_use",
+    "input": "Find the latest LangChain create_agent documentation online.",
+    "expected_use_skill": true,
+    "expected_skill_name": "web-search",
+    "expected_route": "web_lookup",
+    "expected_allowed_tools": ["fetch_url"],
+    "ambiguous": false
+  },
+  {
+    "id": "skill_web_004",
+    "bucket": "web_search_should_use",
+    "input": "Look up current OpenAI news on the web and cite the source link.",
+    "expected_use_skill": true,
+    "expected_skill_name": "web-search",
+    "expected_route": "web_lookup",
+    "expected_allowed_tools": ["fetch_url"],
+    "ambiguous": false
+  },
+  {
+    "id": "skill_web_005",
+    "bucket": "web_search_should_use",
+    "input": "Search online for the latest Python release notes homepage.",
+    "expected_use_skill": true,
+    "expected_skill_name": "web-search",
+    "expected_route": "web_lookup",
+    "expected_allowed_tools": ["fetch_url"],
+    "ambiguous": false
+  },
+  {
+    "id": "skill_web_006",
+    "bucket": "web_search_should_use",
+    "input": "Please look up the official Hugging Face datasets docs on the web.",
+    "expected_use_skill": true,
+    "expected_skill_name": "web-search",
+    "expected_route": "web_lookup",
+    "expected_allowed_tools": ["fetch_url"],
+    "ambiguous": false
+  },
+  {
+    "id": "skill_weather_001",
+    "bucket": "weather_should_use",
+    "input": "Look up today's weather in London on the web.",
+    "expected_use_skill": true,
+    "expected_skill_name": "get_weather",
+    "expected_route": "web_lookup",
+    "expected_allowed_tools": ["fetch_url"],
+    "ambiguous": false
+  },
+  {
+    "id": "skill_weather_002",
+    "bucket": "weather_should_use",
+    "input": "Check the current weather in Beijing online and summarize it.",
+    "expected_use_skill": true,
+    "expected_skill_name": "get_weather",
+    "expected_route": "web_lookup",
+    "expected_allowed_tools": ["fetch_url"],
+    "ambiguous": false
+  },
+  {
+    "id": "skill_weather_003",
+    "bucket": "weather_should_use",
+    "input": "Find tomorrow's weather forecast for Paris online.",
+    "expected_use_skill": true,
+    "expected_skill_name": "get_weather",
+    "expected_route": "web_lookup",
+    "expected_allowed_tools": ["fetch_url"],
+    "ambiguous": false
+  },
+  {
+    "id": "skill_weather_004",
+    "bucket": "weather_should_use",
+    "input": "Please look up the weather in Tokyo on the web.",
+    "expected_use_skill": true,
+    "expected_skill_name": "get_weather",
+    "expected_route": "web_lookup",
+    "expected_allowed_tools": ["fetch_url"],
+    "ambiguous": false
+  },
+  {
+    "id": "skill_knowledge_001",
+    "bucket": "knowledge_should_not_use",
+    "input": "From the knowledge base, which file explains CSRF with a blog deletion example? Return the path.",
+    "expected_use_skill": false,
+    "expected_skill_name": "",
+    "expected_route": "knowledge_qa",
+    "expected_allowed_tools": [],
+    "ambiguous": false
+  },
+  {
+    "id": "skill_knowledge_002",
+    "bucket": "knowledge_should_not_use",
+    "input": "According to the knowledge base, compare Sany and Aerospace Q3 metrics and cite the source path.",
+    "expected_use_skill": false,
+    "expected_skill_name": "",
+    "expected_route": "knowledge_qa",
+    "expected_allowed_tools": [],
+    "ambiguous": false
+  },
+  {
+    "id": "skill_knowledge_003",
+    "bucket": "knowledge_should_not_use",
+    "input": "Which knowledge-base file contains refund rules and payment methods? Give me the path.",
+    "expected_use_skill": false,
+    "expected_skill_name": "",
+    "expected_route": "knowledge_qa",
+    "expected_allowed_tools": [],
+    "ambiguous": false
+  },
+  {
+    "id": "skill_knowledge_004",
+    "bucket": "knowledge_should_not_use",
+    "input": "See whether the knowledge base has that Sany versus Aerospace report and give me the source path.",
+    "expected_use_skill": false,
+    "expected_skill_name": "",
+    "expected_route": "knowledge_qa",
+    "expected_allowed_tools": [],
+    "ambiguous": true
+  },
+  {
+    "id": "skill_knowledge_005",
+    "bucket": "knowledge_should_not_use",
+    "input": "I want that medical AI report from the knowledge base, give me the source path.",
+    "expected_use_skill": false,
+    "expected_skill_name": "",
+    "expected_route": "knowledge_qa",
+    "expected_allowed_tools": [],
+    "ambiguous": true
+  },
+  {
+    "id": "skill_knowledge_006",
+    "bucket": "knowledge_should_not_use",
+    "input": "Which knowledge-base report mentions AI healthcare applications? Return the path.",
+    "expected_use_skill": false,
+    "expected_skill_name": "",
+    "expected_route": "knowledge_qa",
+    "expected_allowed_tools": [],
+    "ambiguous": false
+  },
+  {
+    "id": "skill_workspace_001",
+    "bucket": "workspace_should_not_use",
+    "input": "Read backend/config.py and tell me what ROUTER_MODEL is set to.",
+    "expected_use_skill": false,
+    "expected_skill_name": "",
+    "expected_route": "workspace_file_ops",
+    "expected_allowed_tools": ["read_file"],
+    "ambiguous": false
+  },
+  {
+    "id": "skill_workspace_002",
+    "bucket": "workspace_should_not_use",
+    "input": "Open workspace/USER.md and summarize it in one sentence.",
+    "expected_use_skill": false,
+    "expected_skill_name": "",
+    "expected_route": "workspace_file_ops",
+    "expected_allowed_tools": ["read_file"],
+    "ambiguous": false
+  },
+  {
+    "id": "skill_workspace_003",
+    "bucket": "workspace_should_not_use",
+    "input": "Find all benchmark JSON files under backend/storage/benchmarks.",
+    "expected_use_skill": false,
+    "expected_skill_name": "",
+    "expected_route": "workspace_file_ops",
+    "expected_allowed_tools": ["terminal"],
+    "ambiguous": false
+  },
+  {
+    "id": "skill_workspace_004",
+    "bucket": "workspace_should_not_use",
+    "input": "Run the local test file backend/tests/test_lightweight_router.py.",
+    "expected_use_skill": false,
+    "expected_skill_name": "",
+    "expected_route": "workspace_file_ops",
+    "expected_allowed_tools": ["terminal"],
+    "ambiguous": false
+  },
+  {
+    "id": "skill_workspace_005",
+    "bucket": "workspace_should_not_use",
+    "input": "Search the local workspace for that Sany versus Aerospace report and tell me where it is.",
+    "expected_use_skill": false,
+    "expected_skill_name": "",
+    "expected_route": "workspace_file_ops",
+    "expected_allowed_tools": ["terminal"],
+    "ambiguous": true
+  },
+  {
+    "id": "skill_workspace_006",
+    "bucket": "workspace_should_not_use",
+    "input": "Open that user profile file we mentioned earlier and tell me what it mainly says.",
+    "history": [{"role": "assistant", "content": "The user profile file is workspace/USER.md."}],
+    "expected_use_skill": false,
+    "expected_skill_name": "",
+    "expected_route": "workspace_file_ops",
+    "expected_allowed_tools": ["read_file"],
+    "ambiguous": true
+  },
+  {
+    "id": "skill_compute_001",
+    "bucket": "compute_should_not_use",
+    "input": "What is 37 plus 58? Answer directly.",
+    "expected_use_skill": false,
+    "expected_skill_name": "",
+    "expected_route": "direct_answer",
+    "expected_allowed_tools": [],
+    "ambiguous": false
+  },
+  {
+    "id": "skill_compute_002",
+    "bucket": "compute_should_not_use",
+    "input": "Count how many rows are in knowledge/E-commerce Data/sales_orders.xlsx.",
+    "expected_use_skill": false,
+    "expected_skill_name": "",
+    "expected_route": "computation_or_transformation",
+    "expected_allowed_tools": ["python_repl"],
+    "ambiguous": false
+  },
+  {
+    "id": "skill_compute_003",
+    "bucket": "compute_should_not_use",
+    "input": "Rewrite this paragraph in a shorter style without using tools.",
+    "expected_use_skill": false,
+    "expected_skill_name": "",
+    "expected_route": "direct_answer",
+    "expected_allowed_tools": [],
+    "ambiguous": false
+  },
+  {
+    "id": "skill_compute_004",
+    "bucket": "compute_should_not_use",
+    "input": "Run this Python code and show me the result: print(sum([1, 2, 3])).",
+    "expected_use_skill": false,
+    "expected_skill_name": "",
+    "expected_route": "computation_or_transformation",
+    "expected_allowed_tools": ["python_repl"],
+    "ambiguous": false
+  },
+  {
+    "id": "skill_direct_001",
+    "bucket": "direct_should_not_use",
+    "input": "Explain what BM25 is in one short paragraph.",
+    "expected_use_skill": false,
+    "expected_skill_name": "",
+    "expected_route": "direct_answer",
+    "expected_allowed_tools": [],
+    "ambiguous": false
+  },
+  {
+    "id": "skill_direct_002",
+    "bucket": "direct_should_not_use",
+    "input": "Translate this sentence into English without using tools: 知识库检索可以提升答案可靠性。",
+    "expected_use_skill": false,
+    "expected_skill_name": "",
+    "expected_route": "direct_answer",
+    "expected_allowed_tools": [],
+    "ambiguous": false
+  },
+  {
+    "id": "skill_mixed_001",
+    "bucket": "mixed_should_not_use",
+    "input": "Search the local workspace for that refund FAQ and tell me where it is.",
+    "expected_use_skill": false,
+    "expected_skill_name": "",
+    "expected_route": "workspace_file_ops",
+    "expected_allowed_tools": ["terminal"],
+    "ambiguous": true
+  },
+  {
+    "id": "skill_mixed_002",
+    "bucket": "mixed_should_not_use",
+    "input": "That report we talked about earlier, give me the source path.",
+    "history": [{"role": "assistant", "content": "We were discussing an AI healthcare report in the knowledge base."}],
+    "expected_use_skill": false,
+    "expected_skill_name": "",
+    "expected_route": "knowledge_qa",
+    "expected_allowed_tools": [],
+    "ambiguous": true
+  },
+  {
+    "id": "skill_mixed_003",
+    "bucket": "mixed_should_use",
+    "input": "Could you look up that official pricing page online and give me the link?",
+    "expected_use_skill": true,
+    "expected_skill_name": "web-search",
+    "expected_route": "web_lookup",
+    "expected_allowed_tools": ["fetch_url"],
+    "ambiguous": true
+  },
+  {
+    "id": "skill_mixed_004",
+    "bucket": "mixed_should_use",
+    "input": "Please check the weather in Berlin online and summarize it briefly.",
+    "expected_use_skill": true,
+    "expected_skill_name": "get_weather",
+    "expected_route": "web_lookup",
+    "expected_allowed_tools": ["fetch_url"],
+    "ambiguous": true
+  }
+]

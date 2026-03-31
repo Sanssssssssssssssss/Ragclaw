@@ -1,0 +1,189 @@
+from __future__ import annotations
+
+import sys
+import unittest
+from pathlib import Path
+from unittest.mock import AsyncMock, patch
+
+BACKEND_DIR = Path(__file__).resolve().parents[1]
+if str(BACKEND_DIR) not in sys.path:
+    sys.path.insert(0, str(BACKEND_DIR))
+
+from graph.agent import AgentManager
+from graph.execution_strategy import parse_execution_strategy
+from graph.lightweight_router import RoutingDecision, deterministic_route
+
+
+class LightweightRouterTests(unittest.IsolatedAsyncioTestCase):
+    def setUp(self) -> None:
+        self.manager = AgentManager()
+        self.manager.initialize(BACKEND_DIR)
+
+    def test_deterministic_route_honors_tool_whitelist(self) -> None:
+        strategy = parse_execution_strategy("Only use python_repl. Do not use any other tools.")
+        decision = deterministic_route(
+            message="Only use python_repl. Do not use any other tools.",
+            strategy=strategy,
+            tool_names=("fetch_url", "python_repl", "read_file", "terminal"),
+            is_knowledge_query=False,
+            prefer_tool_agent=True,
+        )
+        self.assertIsNotNone(decision)
+        self.assertEqual(decision.intent, "computation_or_transformation")
+        self.assertEqual(decision.allowed_tools, ("python_repl",))
+        self.assertEqual(decision.subtype, "code_execution_request")
+
+    def test_known_file_prefers_read_file_only(self) -> None:
+        strategy = parse_execution_strategy("Read backend/config.py and summarize router_model.")
+        decision = deterministic_route(
+            message="Read backend/config.py and summarize router_model.",
+            strategy=strategy,
+            tool_names=("fetch_url", "python_repl", "read_file", "terminal"),
+            is_knowledge_query=False,
+            prefer_tool_agent=True,
+        )
+        self.assertIsNotNone(decision)
+        self.assertEqual(decision.intent, "workspace_file_ops")
+        self.assertEqual(decision.subtype, "read_existing_file")
+        self.assertEqual(decision.allowed_tools, ("read_file",))
+
+    def test_workspace_search_prefers_terminal_only(self) -> None:
+        strategy = parse_execution_strategy("Find all markdown files under backend/tests.")
+        decision = deterministic_route(
+            message="Find all markdown files under backend/tests.",
+            strategy=strategy,
+            tool_names=("fetch_url", "python_repl", "read_file", "terminal"),
+            is_knowledge_query=False,
+            prefer_tool_agent=True,
+        )
+        self.assertIsNotNone(decision)
+        self.assertEqual(decision.intent, "workspace_file_ops")
+        self.assertEqual(decision.subtype, "search_workspace_file")
+        self.assertEqual(decision.allowed_tools, ("terminal",))
+
+    def test_file_backed_calculation_prefers_python_only(self) -> None:
+        strategy = parse_execution_strategy("Count how many rows are in knowledge/E-commerce Data/sales_orders.xlsx.")
+        decision = deterministic_route(
+            message="Count how many rows are in knowledge/E-commerce Data/sales_orders.xlsx.",
+            strategy=strategy,
+            tool_names=("fetch_url", "python_repl", "read_file", "terminal"),
+            is_knowledge_query=False,
+            prefer_tool_agent=True,
+        )
+        self.assertIsNotNone(decision)
+        self.assertEqual(decision.intent, "computation_or_transformation")
+        self.assertEqual(decision.subtype, "file_backed_calculation")
+        self.assertEqual(decision.allowed_tools, ("python_repl",))
+
+    def test_text_transformation_stays_direct(self) -> None:
+        strategy = parse_execution_strategy("Rewrite this paragraph in a shorter style.")
+        decision = deterministic_route(
+            message="Rewrite this paragraph in a shorter style.",
+            strategy=strategy,
+            tool_names=("fetch_url", "python_repl", "read_file", "terminal"),
+            is_knowledge_query=False,
+            prefer_tool_agent=False,
+        )
+        self.assertIsNotNone(decision)
+        self.assertEqual(decision.intent, "direct_answer")
+        self.assertEqual(decision.subtype, "pure_text_transformation")
+        self.assertEqual(decision.allowed_tools, ())
+
+    async def test_resolve_routing_skips_llm_when_rules_are_clear(self) -> None:
+        with patch.object(self.manager._lightweight_router, "route", new_callable=AsyncMock) as mocked_route:
+            _strategy, decision = await self.manager.resolve_routing(
+                "Answer directly without tools or retrieval: explain the difference between RAG and fine-tuning.",
+                [],
+            )
+        mocked_route.assert_not_awaited()
+        self.assertEqual(decision.intent, "direct_answer")
+        self.assertEqual(decision.allowed_tools, ())
+
+    async def test_resolve_routing_uses_llm_for_ambiguous_message(self) -> None:
+        mocked_decision = RoutingDecision(
+            intent="knowledge_qa",
+            needs_tools=False,
+            needs_retrieval=True,
+            allowed_tools=(),
+            confidence=0.72,
+            reason_short="document-seeking query",
+            source="llm_router",
+            prompt_tokens=55,
+            output_tokens=22,
+        )
+        with patch.object(self.manager._lightweight_router, "route", new=AsyncMock(return_value=mocked_decision)):
+            _strategy, decision = await self.manager.resolve_routing(
+                "I want that refund-rules material, but I'm not sure which route it should take.",
+                [],
+            )
+        self.assertEqual(decision.intent, "knowledge_qa")
+        self.assertTrue(decision.needs_retrieval)
+        self.assertEqual(decision.source, "llm_router")
+
+    async def test_constraints_filter_router_tool_choice(self) -> None:
+        mocked_decision = RoutingDecision(
+            intent="workspace_file_ops",
+            needs_tools=True,
+            needs_retrieval=False,
+            allowed_tools=("read_file", "terminal"),
+            confidence=0.66,
+            reason_short="workspace path request",
+            source="llm_router",
+            subtype="search_workspace_file",
+        )
+        with patch.object(self.manager._lightweight_router, "route", new=AsyncMock(return_value=mocked_decision)):
+            _strategy, decision = await self.manager.resolve_routing(
+                "Only use terminal to list files under knowledge/Financial Report Data.",
+                [],
+            )
+        self.assertEqual(decision.intent, "workspace_file_ops")
+        self.assertEqual(decision.allowed_tools, ("terminal",))
+
+    async def test_low_confidence_ambiguous_router_escalates(self) -> None:
+        small_decision = RoutingDecision(
+            intent="workspace_file_ops",
+            needs_tools=True,
+            needs_retrieval=False,
+            allowed_tools=("read_file", "terminal"),
+            confidence=0.42,
+            reason_short="unclear mixed request",
+            source="llm_router_small",
+            prompt_tokens=40,
+            output_tokens=20,
+            model_name="kimi-k2",
+            subtype="search_workspace_file",
+        )
+        large_decision = RoutingDecision(
+            intent="knowledge_qa",
+            needs_tools=False,
+            needs_retrieval=True,
+            allowed_tools=(),
+            confidence=0.81,
+            reason_short="document seeking request",
+            source="llm_router_large",
+            prompt_tokens=60,
+            output_tokens=30,
+            model_name="kimi-k2.5",
+        )
+
+        with (
+            patch.object(self.manager._lightweight_router, "_build_small_model", return_value=(object(), "kimi-k2")),
+            patch.object(self.manager._lightweight_router, "_build_large_model", return_value=object()),
+            patch.object(
+                self.manager._lightweight_router,
+                "_invoke_router",
+                new=AsyncMock(side_effect=[small_decision, large_decision]),
+            ),
+        ):
+            _strategy, decision = await self.manager.resolve_routing(
+                "I want that medical AI report we talked about before.",
+                [],
+            )
+
+        self.assertEqual(decision.intent, "knowledge_qa")
+        self.assertTrue(decision.escalated)
+        self.assertEqual(decision.source, "llm_router_large")
+
+
+if __name__ == "__main__":
+    unittest.main()
