@@ -212,3 +212,18 @@
 - Completed: T-125 Separate session-trace token volume from model-call token usage in backend token accounting and frontend display.
 - Completed: T-126 Add a local debug script `backend/scripts/print_knowledge_token_breakdown.py` that prints both token views plus per-stage retrieval breakdown for one fixed knowledge question.
 - Next: T-127 Decide whether the next cheapest token reduction comes from trimming persisted retrieval-step payloads, limiting saved results per stage, or shrinking answer-time knowledge context.
+## 2026-03-29 Thirty-Eighth Update
+- Completed: T-127 Add a dedicated OpenDataLoader PDF integration module with preflight checks, batch conversion, mirrored derived outputs, and semantic JSON-driven chunk construction.
+- Completed: T-128 Switch the default PDF ingestion path from the legacy page-based parser to OpenDataLoader while keeping `PDF_PARSER_BACKEND=legacy` as the explicit rollback path.
+- Completed: T-129 Extend PDF chunk metadata and benchmark/debug outputs so original-PDF citations retain page/bbox/element information and parser/build stats become observable.
+- Next: T-130 Re-run the targeted PDF benchmark gate once the Bailian embedding account is healthy again so a fresh `vector_ready=true` rebuild can confirm whether OpenDataLoader should remain the default parser.
+## 2026-03-30 Thirty-Ninth Update
+- Completed: T-130 Regroup OpenDataLoader PDF text chunks into section-aware neighborhoods so average PDF chunk length rises materially above the first migration baseline.
+- Completed: T-131 Strengthen OpenDataLoader parent composition for grouped text, tables with nearby context, and figure-caption relationships without reverting to page-hard-split evidence.
+- Completed: T-132 Rebuild the knowledge index with the new PDF chunk composition and rerun the targeted PDF benchmark slices plus compare / multi-hop / negation token profiling.
+- Next: T-133 Investigate why fuzzy and cross-file PDF slices still regress under the new chunk composition even though compare grounding improves, and determine whether the next cheapest fix is retrieval-source preference or question-type routing rather than more chunk growth.
+## 2026-03-30 Fortieth Update
+- Completed: T-133 Add PDF family-overview recall plus question-type-specific family filtering so fuzzy and cross-file PDF questions pick the right report families before chunk competition.
+- Completed: T-134 Add stronger source-type bias so PDF semantic/table evidence outranks `data_structure.md` and most legacy txt helpers in final evidence selection.
+- Completed: T-135 Re-run the targeted PDF benchmark slices and capture final-evidence source-type/source-family diagnostics for the retrieval-side cleanup.
+- Next: T-136 Fix compare / negation / multi-hop grounding against already-correct PDF evidence selection instead of continuing to tune parser hookup or chunk size.

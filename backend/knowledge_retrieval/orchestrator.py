@@ -39,10 +39,7 @@ class KnowledgeOrchestrator:
     def _matched_entities(self, query_plan: QueryPlan, evidences: list[Evidence]) -> int:
         if not query_plan.entity_hints:
             return 0
-        joined = "\n\n".join(
-            " ".join([item.source_path, item.locator, item.snippet])
-            for item in evidences
-        ).lower()
+        joined = "\n\n".join(" ".join([item.source_path, item.locator, item.snippet]) for item in evidences).lower()
         return sum(1 for entity in query_plan.entity_hints if entity.lower() in joined)
 
     def _dedupe_evidence_pool(self, evidences: list[Evidence]) -> list[Evidence]:
@@ -62,10 +59,109 @@ class KnowledgeOrchestrator:
             variants.append(" ".join([entity, "财报", "第三季度报告", "Q3", "2025"]).strip())
         return QueryPlan(
             original_query=query,
-            question_type="direct_fact",
+            question_type=query_plan.question_type if query_plan.question_type in {"compare", "negation", "multi_hop"} else "direct_fact",
             query_variants=[item for item in variants if item],
             entity_hints=[entity],
             keyword_hints=keyword_hints,
+        )
+
+    def _family_overview_query_plan(self, query_plan: QueryPlan, entity: str | None = None) -> QueryPlan:
+        if entity:
+            original = " ".join([entity] + query_plan.keyword_hints[:5]).strip()
+            variants = [original]
+            canonical = " ".join([entity] + query_plan.keyword_hints[:3] + ["财报", "报告"]).strip()
+            if canonical and canonical not in variants:
+                variants.append(canonical)
+            return QueryPlan(
+                original_query=original,
+                question_type=query_plan.question_type,
+                query_variants=variants,
+                entity_hints=[entity],
+                keyword_hints=list(query_plan.keyword_hints),
+            )
+        return QueryPlan(
+            original_query=query_plan.original_query,
+            question_type=query_plan.question_type,
+            query_variants=list(query_plan.query_variants),
+            entity_hints=list(query_plan.entity_hints),
+            keyword_hints=list(query_plan.keyword_hints),
+        )
+
+    def _collect_family_overview_evidences(
+        self,
+        query_plan: QueryPlan,
+        *,
+        top_k: int,
+    ) -> tuple[list[Evidence], RetrievalStep | None]:
+        if query_plan.question_type not in {"fuzzy", "cross_file_aggregation", "compare"}:
+            return [], None
+
+        targeted: list[Evidence] = []
+        if query_plan.question_type == "cross_file_aggregation" and query_plan.entity_hints:
+            for entity in query_plan.entity_hints[:4]:
+                entity_plan = self._family_overview_query_plan(query_plan, entity=entity)
+                entity_result = hybrid_retriever.retrieve(
+                    entity_plan.original_query,
+                    top_k=max(top_k, 3),
+                    query_plan=entity_plan,
+                    chunk_types=["family_overview"],
+                )
+                overview_candidates = reciprocal_rank_fusion(
+                    [entity_result.vector_evidences, entity_result.bm25_evidences],
+                    top_k=max(top_k, 3),
+                )
+                best = next(
+                    (
+                        item
+                        for item in overview_candidates
+                        if entity.lower() in f"{item.source_path} {item.snippet}".lower()
+                    ),
+                    overview_candidates[0] if overview_candidates else None,
+                )
+                if best is None:
+                    continue
+                targeted.append(
+                    Evidence(
+                        source_path=best.source_path,
+                        source_type=best.source_type,
+                        locator=best.locator,
+                        snippet=best.snippet,
+                        channel="fused",
+                        score=float(best.score or 0.0) + 0.4,
+                        parent_id=best.parent_id,
+                        query_variant=entity_plan.original_query,
+                        supporting_children=best.supporting_children,
+                        page=best.page,
+                        bbox=best.bbox,
+                        element_type=best.element_type,
+                        section_title=best.section_title,
+                        derived_json_path=best.derived_json_path,
+                        derived_markdown_path=best.derived_markdown_path,
+                        chunk_type=best.chunk_type,
+                    )
+                )
+        else:
+            overview_result = hybrid_retriever.retrieve(
+                query_plan.original_query,
+                top_k=max(top_k, 4),
+                query_plan=self._family_overview_query_plan(query_plan),
+                chunk_types=["family_overview"],
+            )
+            targeted = reciprocal_rank_fusion(
+                [overview_result.vector_evidences, overview_result.bm25_evidences],
+                top_k=max(top_k, 4),
+            )
+
+        if not targeted:
+            return [], None
+
+        deduped = self._dedupe_evidence_pool(targeted)
+        return deduped, RetrievalStep(
+            kind="knowledge",
+            stage="family_overview",
+            title="Family-level overview recall",
+            message="A lightweight PDF-family overview pass selected likely report families before chunk-level retrieval.",
+            results=deduped,
         )
 
     def _collect_entity_targeted_evidences(
@@ -73,6 +169,7 @@ class KnowledgeOrchestrator:
         query_plan: QueryPlan,
         *,
         top_k: int,
+        path_filters: list[str] | None = None,
     ) -> tuple[list[Evidence], RetrievalStep | None]:
         if query_plan.question_type != "cross_file_aggregation" or not query_plan.entity_hints:
             return [], None
@@ -80,7 +177,12 @@ class KnowledgeOrchestrator:
         targeted: list[Evidence] = []
         for entity in query_plan.entity_hints[:4]:
             entity_plan = self._entity_targeted_query_plan(entity, query_plan)
-            entity_result = hybrid_retriever.retrieve(entity_plan.original_query, top_k=max(top_k, 3), query_plan=entity_plan)
+            entity_result = hybrid_retriever.retrieve(
+                entity_plan.original_query,
+                top_k=max(top_k, 3),
+                query_plan=entity_plan,
+                path_filters=path_filters,
+            )
             fused = reciprocal_rank_fusion(
                 [entity_result.vector_evidences, entity_result.bm25_evidences],
                 top_k=max(top_k * 2, 6),
@@ -107,6 +209,13 @@ class KnowledgeOrchestrator:
                     parent_id=best.parent_id,
                     query_variant=entity_plan.original_query,
                     supporting_children=best.supporting_children,
+                    page=best.page,
+                    bbox=best.bbox,
+                    element_type=best.element_type,
+                    section_title=best.section_title,
+                    derived_json_path=best.derived_json_path,
+                    derived_markdown_path=best.derived_markdown_path,
+                    chunk_type=best.chunk_type,
                 )
             )
 
@@ -121,8 +230,150 @@ class KnowledgeOrchestrator:
             results=targeted,
         )
 
+    def _collect_compare_targeted_evidences(
+        self,
+        query_plan: QueryPlan,
+        *,
+        top_k: int,
+        path_filters: list[str] | None = None,
+    ) -> tuple[list[Evidence], RetrievalStep | None]:
+        if query_plan.question_type != "compare" or len(query_plan.entity_hints) < 2:
+            return [], None
+
+        targeted: list[Evidence] = []
+        for entity in query_plan.entity_hints[:4]:
+            entity_plan = self._entity_targeted_query_plan(entity, query_plan)
+            entity_result = hybrid_retriever.retrieve(
+                entity_plan.original_query,
+                top_k=max(top_k, 3),
+                query_plan=entity_plan,
+                path_filters=path_filters,
+            )
+            fused = reciprocal_rank_fusion(
+                [entity_result.vector_evidences, entity_result.bm25_evidences],
+                top_k=max(top_k * 2, 6),
+            )
+            reranked = rerank_evidences(
+                entity_plan,
+                fused,
+                top_k=max(top_k, 3),
+                preferred_families=path_filters,
+            )
+            best = next(
+                (
+                    evidence
+                    for evidence in reranked
+                    if entity.lower() in f"{evidence.source_path} {evidence.snippet}".lower()
+                ),
+                reranked[0] if reranked else None,
+            )
+            if best is None:
+                continue
+            targeted.append(
+                Evidence(
+                    source_path=best.source_path,
+                    source_type=best.source_type,
+                    locator=best.locator,
+                    snippet=best.snippet,
+                    channel=best.channel,
+                    score=float(best.score or 0.0) + 0.3,
+                    parent_id=best.parent_id,
+                    query_variant=entity_plan.original_query,
+                    supporting_children=best.supporting_children,
+                    page=best.page,
+                    bbox=best.bbox,
+                    element_type=best.element_type,
+                    section_title=best.section_title,
+                    derived_json_path=best.derived_json_path,
+                    derived_markdown_path=best.derived_markdown_path,
+                    chunk_type=best.chunk_type,
+                )
+            )
+
+        if not targeted:
+            return [], None
+
+        return targeted, RetrievalStep(
+            kind="knowledge",
+            stage="compare_targeted",
+            title="Compare-targeted retrieval",
+            message="Entity-aware retrieval reserved one value-rich candidate per comparison target before final ranking.",
+            results=targeted,
+        )
+
+    def _collect_focus_targeted_evidences(
+        self,
+        query_plan: QueryPlan,
+        *,
+        top_k: int,
+        path_filters: list[str] | None = None,
+    ) -> tuple[list[Evidence], RetrievalStep | None]:
+        if query_plan.question_type not in {"negation", "multi_hop"} or not query_plan.entity_hints:
+            return [], None
+
+        targeted: list[Evidence] = []
+        for entity in query_plan.entity_hints[:3]:
+            entity_plan = self._entity_targeted_query_plan(entity, query_plan)
+            entity_result = hybrid_retriever.retrieve(
+                entity_plan.original_query,
+                top_k=max(top_k, 4),
+                query_plan=entity_plan,
+                path_filters=path_filters,
+            )
+            fused = reciprocal_rank_fusion(
+                [entity_result.vector_evidences, entity_result.bm25_evidences],
+                top_k=max(top_k * 2, 6),
+            )
+            reranked = rerank_evidences(
+                entity_plan,
+                fused,
+                top_k=max(top_k, 3),
+                preferred_families=path_filters,
+            )
+            best = next(
+                (
+                    evidence
+                    for evidence in reranked
+                    if entity.lower() in f"{evidence.source_path} {evidence.snippet}".lower()
+                ),
+                reranked[0] if reranked else None,
+            )
+            if best is None:
+                continue
+            targeted.append(
+                Evidence(
+                    source_path=best.source_path,
+                    source_type=best.source_type,
+                    locator=best.locator,
+                    snippet=best.snippet,
+                    channel=best.channel,
+                    score=float(best.score or 0.0) + 0.25,
+                    parent_id=best.parent_id,
+                    query_variant=entity_plan.original_query,
+                    supporting_children=best.supporting_children,
+                    page=best.page,
+                    bbox=best.bbox,
+                    element_type=best.element_type,
+                    section_title=best.section_title,
+                    derived_json_path=best.derived_json_path,
+                    derived_markdown_path=best.derived_markdown_path,
+                    chunk_type=best.chunk_type,
+                )
+            )
+
+        if not targeted:
+            return [], None
+
+        return targeted, RetrievalStep(
+            kind="knowledge",
+            stage="focused_targeted",
+            title="Focused targeted retrieval",
+            message="Entity-aware targeted retrieval pulled PDF-family candidates for the requested focus question before final ranking.",
+            results=targeted,
+        )
+
     def _has_negative_evidence(self, evidences: list[Evidence]) -> bool:
-        negative_terms = ("亏损", "未盈利", "净利润为负", "利润为负", "负", "下降")
+        negative_terms = ("亏损", "未盈利", "净利润为负", "利润为负", "负值", "下降")
         for evidence in evidences:
             snippet = str(evidence.snippet or "")
             if any(term in snippet for term in negative_terms):
@@ -210,7 +461,27 @@ class KnowledgeOrchestrator:
         top_k: int = 4,
     ) -> OrchestratedRetrievalResult:
         query_plan = build_query_plan(query)
-        hybrid_result = hybrid_retriever.retrieve(query, top_k=top_k, query_plan=query_plan)
+        overview_evidences, overview_step = self._collect_family_overview_evidences(query_plan, top_k=top_k)
+        preferred_families = [item.source_path for item in overview_evidences]
+        family_path_filters: list[str] | None = None
+        if query_plan.question_type in {"fuzzy", "cross_file_aggregation", "compare"} and preferred_families:
+            family_path_filters = preferred_families
+
+        hybrid_result = hybrid_retriever.retrieve(
+            query,
+            top_k=top_k,
+            query_plan=query_plan,
+            path_filters=family_path_filters,
+        )
+        if family_path_filters and not hybrid_result.vector_evidences and not hybrid_result.bm25_evidences:
+            hybrid_result = hybrid_retriever.retrieve(
+                query,
+                top_k=top_k,
+                query_plan=query_plan,
+                path_filters=None,
+            )
+            family_path_filters = None
+
         steps: list[RetrievalStep] = [
             RetrievalStep(
                 kind="knowledge",
@@ -229,6 +500,8 @@ class KnowledgeOrchestrator:
                     message=" | ".join(hybrid_result.query_variants[:5]),
                 )
             )
+        if overview_step is not None:
+            steps.append(overview_step)
 
         if hybrid_result.vector_evidences:
             steps.append(
@@ -251,9 +524,28 @@ class KnowledgeOrchestrator:
                 )
             )
 
-        entity_targeted, entity_step = self._collect_entity_targeted_evidences(query_plan, top_k=top_k)
+        entity_targeted, entity_step = self._collect_entity_targeted_evidences(
+            query_plan,
+            top_k=top_k,
+            path_filters=family_path_filters,
+        )
         if entity_step is not None:
             steps.append(entity_step)
+
+        compare_targeted, compare_step = self._collect_compare_targeted_evidences(
+            query_plan,
+            top_k=top_k,
+            path_filters=family_path_filters,
+        )
+        if compare_step is not None:
+            steps.append(compare_step)
+        focus_targeted, focus_step = self._collect_focus_targeted_evidences(
+            query_plan,
+            top_k=top_k,
+            path_filters=family_path_filters,
+        )
+        if focus_step is not None:
+            steps.append(focus_step)
 
         fused = reciprocal_rank_fusion(
             [hybrid_result.vector_evidences, hybrid_result.bm25_evidences],
@@ -270,8 +562,13 @@ class KnowledgeOrchestrator:
                 )
             )
 
-        candidate_pool = self._dedupe_evidence_pool(fused + entity_targeted)
-        reranked = rerank_evidences(query_plan, candidate_pool, top_k=max(top_k * 3, 12))
+        candidate_pool = self._dedupe_evidence_pool(fused + entity_targeted + compare_targeted + focus_targeted)
+        reranked = rerank_evidences(
+            query_plan,
+            candidate_pool,
+            top_k=max(top_k * 3, 12),
+            preferred_families=preferred_families,
+        )
         if reranked:
             steps.append(
                 RetrievalStep(
@@ -316,8 +613,8 @@ class KnowledgeOrchestrator:
 
         status, reason = self._determine_status(
             query_plan,
-            vector_evidences=hybrid_result.vector_evidences + entity_targeted,
-            bm25_evidences=hybrid_result.bm25_evidences + entity_targeted,
+            vector_evidences=hybrid_result.vector_evidences + entity_targeted + compare_targeted + focus_targeted,
+            bm25_evidences=hybrid_result.bm25_evidences + entity_targeted + compare_targeted + focus_targeted,
             final_evidences=final_evidences,
         )
 

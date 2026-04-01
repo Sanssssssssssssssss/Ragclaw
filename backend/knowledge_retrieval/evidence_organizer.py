@@ -92,7 +92,7 @@ def _selection_bonus(item: Evidence, question_type: str) -> tuple[int, int]:
     ).lower()
     numeric_bonus = 1 if re.search(r"-?\d[\d,]*(?:\.\d+)?", text) else 0
     if question_type == "negation":
-        negative_bonus = 1 if any(term in text for term in ("亏损", "未盈利", "净利润为负", "利润为负", "-", "负数")) else 0
+        negative_bonus = 1 if any(term in text for term in ("亏损", "未盈利", "净利润为负", "利润为负", "负数", "-")) else 0
         metric_bonus = 1 if any(term in text for term in ("净利润", "利润总额")) else 0
         return (negative_bonus + metric_bonus, numeric_bonus)
     if question_type == "compare":
@@ -104,6 +104,31 @@ def _selection_bonus(item: Evidence, question_type: str) -> tuple[int, int]:
         metric_bonus = 1 if any(term in text for term in ("净利润", "营业收入", "利润总额", "同比")) else 0
         return (reason_bonus + metric_bonus, numeric_bonus)
     return (0, numeric_bonus)
+
+
+def _semantic_rank(item: Evidence, question_type: str) -> int:
+    path = str(item.source_path or "").lower()
+    chunk_type = str(item.chunk_type or "").strip().lower()
+    normalized_chunk_type = "text" if chunk_type == "text-group" else chunk_type
+    if path.endswith("data_structure.md"):
+        return -3
+    if normalized_chunk_type == "family_overview":
+        return 1 if question_type in {"fuzzy", "cross_file_aggregation"} else -2
+    if item.source_type == "pdf":
+        if normalized_chunk_type == "table":
+            return 4
+        if normalized_chunk_type in {"text", "figure-caption"}:
+            return 3
+        return 2
+    if path.endswith("_extracted.txt"):
+        return 1
+    if path.endswith(".txt"):
+        return 0
+    return 0
+
+
+def _numeric_signal(text: str) -> int:
+    return len(re.findall(r"-?\d[\d,]*(?:\.\d+)?%?", str(text or "")))
 
 
 def merge_parent_evidences(
@@ -153,6 +178,13 @@ def merge_parent_evidences(
                 parent_id=lead.parent_id,
                 query_variant=lead.query_variant,
                 supporting_children=len(selected_children),
+                page=lead.page,
+                bbox=lead.bbox,
+                element_type=lead.element_type,
+                section_title=lead.section_title,
+                derived_json_path=lead.derived_json_path,
+                derived_markdown_path=lead.derived_markdown_path,
+                chunk_type=lead.chunk_type,
             )
         )
 
@@ -171,15 +203,11 @@ def diversify_evidences(
         return []
 
     max_per_source_family = 1
+
     def family_sort_key(item: Evidence) -> tuple[float, int, int, int]:
-        path = str(item.source_path or "").lower()
-        pdf_preference = 0
-        if path.endswith(".pdf"):
-            pdf_preference = 2
-        elif path.endswith("_extracted.txt"):
-            pdf_preference = 1
+        semantic_preference = _semantic_rank(item, question_type)
         type_bonus, numeric_bonus = _selection_bonus(item, question_type)
-        return (float(item.score or 0.0), type_bonus, numeric_bonus, pdf_preference)
+        return (float(item.score or 0.0), semantic_preference, type_bonus, numeric_bonus)
 
     family_best: dict[str, list[Evidence]] = defaultdict(list)
     for evidence in evidences:
@@ -193,6 +221,7 @@ def diversify_evidences(
     ordered.sort(
         key=lambda item: (
             float(item.score or 0.0),
+            _semantic_rank(item, question_type),
             *_selection_bonus(item, question_type),
             1 if str(item.source_path or "").lower().endswith(".pdf") else 0,
         ),
@@ -201,6 +230,15 @@ def diversify_evidences(
     counts: dict[str, int] = defaultdict(int)
     diversified: list[Evidence] = []
     deferred: list[Evidence] = []
+
+    def has_same_family_semantic(target: Evidence) -> bool:
+        family = _source_family(target.source_path)
+        return any(
+            _source_family(existing.source_path) == family
+            and existing is not target
+            and _semantic_rank(existing, question_type) >= 3
+            for existing in ordered
+        )
 
     if question_type in {"compare", "cross_file_aggregation"} and entity_hints:
         for entity in entity_hints:
@@ -226,6 +264,27 @@ def diversify_evidences(
         if evidence in diversified:
             continue
         family = _source_family(evidence.source_path)
+        lowered_path = str(evidence.source_path or "").lower()
+        evidence_text = " ".join([str(evidence.locator or ""), str(evidence.snippet or "")])
+        if (
+            str(evidence.chunk_type or "").strip().lower() == "family_overview"
+            and any(
+                _source_family(existing.source_path) == family
+                and str(existing.chunk_type or "").strip().lower() != "family_overview"
+                for existing in ordered
+            )
+        ):
+            deferred.append(evidence)
+            continue
+        if lowered_path.endswith("data_structure.md") and any(_semantic_rank(existing, question_type) >= 2 for existing in ordered):
+            deferred.append(evidence)
+            continue
+        if question_type in {"compare", "negation", "multi_hop"} and lowered_path.endswith(".txt") and has_same_family_semantic(evidence):
+            deferred.append(evidence)
+            continue
+        if question_type == "compare" and _numeric_signal(evidence_text) == 0 and has_same_family_semantic(evidence):
+            deferred.append(evidence)
+            continue
         if counts[family] < max_per_source_family:
             diversified.append(evidence)
             counts[family] += 1

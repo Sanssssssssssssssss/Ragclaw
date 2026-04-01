@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections import defaultdict
+from collections import Counter, defaultdict
 import re
 import unicodedata
 from typing import Any
@@ -228,6 +228,28 @@ def _evaluate_rag_checks(
     return {"subtype": subtype or None}
 
 
+def _final_evidence_category(result: dict[str, Any]) -> str:
+    source_path = str(result.get("source_path", "") or "").lower()
+    source_type = str(result.get("source_type", "") or "").strip().lower()
+    chunk_type = str(result.get("chunk_type", "") or "").strip().lower()
+    normalized_chunk_type = "text" if chunk_type == "text-group" else chunk_type
+    if source_path.endswith("data_structure.md"):
+        return "structure_doc"
+    if source_type == "pdf":
+        if normalized_chunk_type == "table":
+            return "pdf_table"
+        if normalized_chunk_type == "family_overview":
+            return "pdf_family_overview"
+        if normalized_chunk_type in {"text", "figure-caption"}:
+            return "pdf_semantic"
+        return "pdf_other"
+    if source_path.endswith("_extracted.txt"):
+        return "legacy_extracted_txt"
+    if source_path.endswith(".txt"):
+        return "legacy_txt"
+    return f"{source_type or 'unknown'}"
+
+
 def _aggregate_boolean_rate(items: list[dict[str, Any]], extractor) -> dict[str, dict[str, float | int]]:
     grouped: dict[str, list[bool]] = defaultdict(list)
     for item in items:
@@ -409,6 +431,18 @@ def evaluate_case(case: dict[str, Any], trace: dict[str, Any], indexed_types: se
     final_answer_required = bool(case.get("should_have_final_answer", False))
     final_answer_non_empty = bool(final_answer.strip())
     final_answer_pass = (not final_answer_required) or final_answer_non_empty
+    final_evidence_results = list(trace.get("final_evidence_results", []) or [])
+    final_evidence_categories = [_final_evidence_category(item) for item in final_evidence_results]
+    final_evidence_source_paths = [
+        normalize_source_path(str(item.get("source_path", "") or ""))
+        for item in final_evidence_results
+        if normalize_source_path(str(item.get("source_path", "") or ""))
+    ]
+    final_evidence_source_families = _normalize_source_families(final_evidence_source_paths)
+    pdf_semantic_count = sum(1 for item in final_evidence_categories if item in {"pdf_semantic", "pdf_table", "pdf_other"})
+    legacy_txt_count = sum(1 for item in final_evidence_categories if item in {"legacy_txt", "legacy_extracted_txt"})
+    structure_doc_count = sum(1 for item in final_evidence_categories if item == "structure_doc")
+    total_final_evidences = len(final_evidence_categories)
 
     must_include = [str(item) for item in case.get("must_include", []) if str(item).strip()]
     must_not_include = [str(item) for item in case.get("must_not_include", []) if str(item).strip()]
@@ -476,6 +510,12 @@ def evaluate_case(case: dict[str, Any], trace: dict[str, Any], indexed_types: se
         "retrieval_source_families": normalized_retrieval_families,
         "top_k_sources": normalized_top_k_sources,
         "top_k_source_families": normalized_top_k_families,
+        "final_evidence_sources": final_evidence_source_paths,
+        "final_evidence_source_families": final_evidence_source_families,
+        "final_evidence_source_types": final_evidence_categories,
+        "final_evidence_pdf_semantic_ratio": (pdf_semantic_count / total_final_evidences) if total_final_evidences else None,
+        "final_evidence_legacy_txt_ratio": (legacy_txt_count / total_final_evidences) if total_final_evidences else None,
+        "final_evidence_structure_doc_ratio": (structure_doc_count / total_final_evidences) if total_final_evidences else None,
         "gold_sources": normalized_gold_sources,
         "gold_source_families": normalized_gold_families,
         "source_coverage": source_coverage,
@@ -567,6 +607,31 @@ def summarize_results(case_results: list[dict[str, Any]]) -> dict[str, Any]:
         for item in retrieval_cases
         if item.get("source_coverage") is not None
     ]
+    final_evidence_category_counts = Counter(
+        category
+        for item in executed
+        for category in item.get("final_evidence_source_types", [])
+    )
+    final_evidence_family_counts = Counter(
+        family
+        for item in executed
+        for family in item.get("final_evidence_source_families", [])
+    )
+    pdf_semantic_ratios = [
+        float(item.get("final_evidence_pdf_semantic_ratio"))
+        for item in executed
+        if item.get("final_evidence_pdf_semantic_ratio") is not None
+    ]
+    legacy_txt_ratios = [
+        float(item.get("final_evidence_legacy_txt_ratio"))
+        for item in executed
+        if item.get("final_evidence_legacy_txt_ratio") is not None
+    ]
+    structure_doc_ratios = [
+        float(item.get("final_evidence_structure_doc_ratio"))
+        for item in executed
+        if item.get("final_evidence_structure_doc_ratio") is not None
+    ]
 
     return {
         "total_cases": len(case_results),
@@ -621,6 +686,11 @@ def summarize_results(case_results: list[dict[str, Any]]) -> dict[str, Any]:
         "judge_unsupported_claim_rate": _rate_or_none(
             [item in judge_unsupported_cases for item in judge_executed_cases]
         ),
+        "final_evidence_source_type_distribution": dict(final_evidence_category_counts),
+        "final_evidence_source_family_distribution": dict(final_evidence_family_counts),
+        "final_evidence_pdf_semantic_ratio": _avg_or_none(pdf_semantic_ratios),
+        "final_evidence_legacy_txt_ratio": _avg_or_none(legacy_txt_ratios),
+        "final_evidence_structure_doc_ratio": _avg_or_none(structure_doc_ratios),
         "by_subtype": _aggregate_boolean_rate(executed, lambda item: item.get("subtype")),
         "by_question_type": _question_type_summary(case_results),
         "by_difficulty": _aggregate_boolean_rate(executed, lambda item: item.get("difficulty")),

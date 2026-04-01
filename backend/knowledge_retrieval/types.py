@@ -19,6 +19,13 @@ class Evidence:
     parent_id: str | None = None
     query_variant: str | None = None
     supporting_children: int | None = None
+    page: int | None = None
+    bbox: list[float] | None = None
+    element_type: str | None = None
+    section_title: str | None = None
+    derived_json_path: str | None = None
+    derived_markdown_path: str | None = None
+    chunk_type: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)

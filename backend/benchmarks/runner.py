@@ -49,6 +49,7 @@ PROJECT_ROOT = BACKEND_DIR.parent
 DEFAULT_BASE_URL = "http://127.0.0.1:8015"
 OUTPUT_DIR = BACKEND_DIR / "storage" / "benchmarks"
 KNOWLEDGE_MANIFEST_PATH = BACKEND_DIR / "storage" / "knowledge" / "manifest.json"
+KNOWLEDGE_INGESTION_ERRORS_PATH = BACKEND_DIR / "storage" / "knowledge" / "derived" / "ingestion_errors.json"
 DEFAULT_CASE_DELAY_SECONDS = 3.0
 DEFAULT_RATE_LIMIT_RETRY_BASE_SECONDS = 4.0
 DEFAULT_MAX_RATE_LIMIT_RETRIES = 2
@@ -140,21 +141,28 @@ class BenchmarkRunner:
         return response.json()
 
     def indexed_source_types(self) -> set[str]:
-        if not KNOWLEDGE_MANIFEST_PATH.exists():
-            return set()
-        payload = json.loads(KNOWLEDGE_MANIFEST_PATH.read_text(encoding="utf-8"))
-        counts = Counter()
-        for item in payload.get("documents", []):
-            source_type = str(item.get("source_type", "")).strip().lower()
-            if source_type:
-                counts[source_type] += 1
-        return set(counts)
+        return set(self.manifest_source_type_counts())
 
     def manifest_source_type_counts(self) -> dict[str, int]:
+        if KNOWLEDGE_INGESTION_ERRORS_PATH.exists():
+            try:
+                payload = json.loads(KNOWLEDGE_INGESTION_ERRORS_PATH.read_text(encoding="utf-8"))
+                counts = payload.get("stats", {}).get("source_type_counts", {})
+                if isinstance(counts, dict) and counts:
+                    return {
+                        str(key).strip().lower(): int(value)
+                        for key, value in counts.items()
+                        if str(key).strip()
+                    }
+            except Exception:
+                pass
+
         if not KNOWLEDGE_MANIFEST_PATH.exists():
             return {}
-        payload = json.loads(KNOWLEDGE_MANIFEST_PATH.read_text(encoding="utf-8"))
+
         counts = Counter()
+        with KNOWLEDGE_MANIFEST_PATH.open("r", encoding="utf-8") as handle:
+            payload = json.load(handle)
         for item in payload.get("documents", []):
             source_type = str(item.get("source_type", "")).strip().lower()
             if source_type:
@@ -248,6 +256,11 @@ class BenchmarkRunner:
             prioritized_steps = [retrieval_steps[final_knowledge_step_index]] + [
                 step for index, step in enumerate(retrieval_steps) if index != final_knowledge_step_index
             ]
+        final_evidence_results = (
+            list(retrieval_steps[final_knowledge_step_index].get("results", []) or [])
+            if final_knowledge_step_index is not None
+            else []
+        )
 
         for step in prioritized_steps:
             kind = str(step.get("kind", "")).strip().lower()
@@ -292,6 +305,7 @@ class BenchmarkRunner:
             "memory_used": memory_used,
             "retrieval_sources": retrieval_sources,
             "retrieval_steps": retrieval_steps,
+            "final_evidence_results": final_evidence_results,
             "tool_calls": tool_calls,
             "tool_outputs": tool_outputs,
             "support_corpus": "\n\n".join(retrieval_snippets + tool_outputs),

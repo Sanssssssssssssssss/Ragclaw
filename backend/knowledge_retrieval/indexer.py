@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import math
+import os
 import re
 import threading
 import time
@@ -11,6 +12,8 @@ from pathlib import Path
 from typing import Any
 
 from config import get_settings
+from knowledge_retrieval.evidence_organizer import source_family
+from knowledge_retrieval.opendataloader_pdf import OpenDataLoaderPdfResult, build_pdf_documents_with_opendataloader
 from knowledge_retrieval.types import Evidence, IndexStatus
 from pydantic import PrivateAttr
 
@@ -20,6 +23,10 @@ ALNUM_PATTERN = re.compile(r"[A-Za-z0-9_]+")
 CHINESE_BLOCK_PATTERN = re.compile(r"[\u4e00-\u9fff]+")
 SUPPORTED_FILE_SUFFIXES = {".md", ".json", ".txt", ".pdf", ".xlsx", ".xls"}
 TEXT_FILE_ENCODINGS = ("utf-8", "utf-8-sig", "gb18030", "gbk")
+PDF_OVERVIEW_SECTION_LIMIT = 6
+PDF_OVERVIEW_TABLE_LIMIT = 4
+PDF_OVERVIEW_FIGURE_LIMIT = 3
+PDF_OVERVIEW_SNIPPET_LIMIT = 3
 
 
 def _load_llama_index_components():
@@ -99,6 +106,7 @@ class KnowledgeIndexer:
         self._vector_index: Any | None = None
         self._documents: list[dict[str, Any]] = []
         self._build_errors: list[dict[str, str]] = []
+        self._build_stats: dict[str, Any] = {}
         self._lock = threading.Lock()
         self._building = False
         self._last_built_at: float | None = None
@@ -117,6 +125,12 @@ class KnowledgeIndexer:
         self._vector_index = None
         self._vector_ready = False
         self._load_manifest()
+
+    def _pdf_parser_backend(self) -> str:
+        configured = os.getenv("PDF_PARSER_BACKEND", "opendataloader").strip().lower()
+        if configured == "legacy":
+            return "legacy"
+        return "opendataloader"
 
     def warm_start(self) -> None:
         if self.base_dir is None:
@@ -193,6 +207,9 @@ class KnowledgeIndexer:
     def is_building(self) -> bool:
         return self._building
 
+    def build_stats(self) -> dict[str, Any]:
+        return dict(self._build_stats)
+
     def rebuild_index(self, *, build_vector: bool = True) -> None:
         if self.base_dir is None:
             return
@@ -219,10 +236,26 @@ class KnowledgeIndexer:
 
     def _build_documents(self) -> list[dict[str, Any]]:
         if not self._knowledge_dir.exists():
+            self._build_stats = {}
             return []
 
         documents: list[dict[str, Any]] = []
         self._build_errors = []
+        self._build_stats = {
+            "pdf_parser_backend": self._pdf_parser_backend(),
+            "source_type_counts": {},
+            "pdf_parser": {
+                "parsed_pdf_count": 0,
+                "failed_pdf_count": 0,
+                "failure_reasons": {},
+                "chunk_counts": {"text": 0, "table": 0, "figure_caption": 0},
+                "avg_chunk_length": 0.0,
+                "page_available_rate": 0.0,
+                "bbox_available_rate": 0.0,
+                "structure_modes": {"struct_tree": 0, "heuristic": 0, "unknown": 0},
+            },
+        }
+        pdf_paths: list[Path] = []
         for path in sorted(self._knowledge_dir.rglob("*")):
             if not path.is_file():
                 continue
@@ -237,15 +270,192 @@ class KnowledgeIndexer:
                 elif suffix == ".txt":
                     documents.extend(self._split_text(path))
                 elif suffix == ".pdf":
-                    documents.extend(self._split_pdf(path))
+                    pdf_paths.append(path)
                 elif suffix == ".xlsx":
                     documents.extend(self._split_excel(path))
                 elif suffix == ".xls":
                     self._record_build_error(path, "parse", "Legacy .xls ingestion is not supported; save the workbook as .xlsx.")
             except Exception as exc:
                 self._record_build_error(path, "parse", str(exc))
+
+        if pdf_paths:
+            pdf_result = self._split_pdfs(pdf_paths)
+            documents.extend(pdf_result.documents)
+            self._build_errors.extend(pdf_result.errors)
+            if pdf_result.stats:
+                self._build_stats["pdf_parser"] = pdf_result.stats
+            documents.extend(self._build_pdf_family_overviews(pdf_result.documents))
+
+        source_type_counts = Counter(str(item.get("source_type", "")).strip().lower() for item in documents if item.get("source_type"))
+        self._build_stats["source_type_counts"] = dict(sorted(source_type_counts.items()))
         self._write_ingestion_errors()
         return documents
+
+    def _build_pdf_family_overviews(self, documents: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        grouped: dict[str, list[dict[str, Any]]] = {}
+        for item in documents:
+            if str(item.get("source_type", "")).strip().lower() != "pdf":
+                continue
+            family = source_family(str(item.get("source_path", "") or ""))
+            if not family:
+                continue
+            grouped.setdefault(family, []).append(item)
+
+        overviews: list[dict[str, Any]] = []
+        for family, items in grouped.items():
+            source_path = next(
+                (
+                    str(item.get("source_path", "") or "")
+                    for item in items
+                    if str(item.get("source_path", "") or "").lower().endswith(".pdf")
+                ),
+                family,
+            )
+            title = Path(source_path).stem
+            pages = sorted({int(item.get("page")) for item in items if isinstance(item.get("page"), int)})
+            section_titles = [
+                section
+                for section in dict.fromkeys(
+                    str(item.get("section_title", "") or "").strip()
+                    for item in items
+                    if str(item.get("section_title", "") or "").strip()
+                )
+            ][:PDF_OVERVIEW_SECTION_LIMIT]
+            table_titles = [
+                locator
+                for locator in dict.fromkeys(
+                    str(item.get("locator", "") or "").strip()
+                    for item in items
+                    if str(item.get("chunk_type", "") or "") == "table" and str(item.get("locator", "") or "").strip()
+                )
+            ][:PDF_OVERVIEW_TABLE_LIMIT]
+            figure_titles = [
+                snippet
+                for snippet in dict.fromkeys(
+                    " ".join(str(item.get("snippet", "") or "").split())[:180]
+                    for item in items
+                    if str(item.get("chunk_type", "") or "") == "figure-caption" and str(item.get("snippet", "") or "").strip()
+                )
+            ][:PDF_OVERVIEW_FIGURE_LIMIT]
+            snippet_samples = [
+                snippet
+                for snippet in dict.fromkeys(
+                    " ".join(str(item.get("snippet", "") or "").split())[:180]
+                    for item in items
+                    if str(item.get("chunk_type", "") or "") in {"text", "text-group", "table"} and str(item.get("snippet", "") or "").strip()
+                )
+            ][:PDF_OVERVIEW_SNIPPET_LIMIT]
+
+            period_hints = sorted(
+                {
+                    match.group(0)
+                    for match in re.finditer(r"(20\d{2}|Q[1-4]|前三季度|第三季度|年初至报告期末|本报告期)", title, flags=re.IGNORECASE)
+                }
+            )
+            entity_hints = [
+                token
+                for token in dict.fromkeys(re.findall(r"[\u4e00-\u9fff]{2,16}(?:集团|重工|动力|科技|汽车|股份有限公司|公司|报告)", title))
+                if token
+            ]
+            overview_lines = [
+                f"Source PDF: {source_path}",
+                f"Source family: {family}",
+                f"Title: {title}",
+            ]
+            if entity_hints:
+                overview_lines.append("Entity hints: " + " | ".join(entity_hints[:4]))
+            if period_hints:
+                overview_lines.append("Period hints: " + " | ".join(period_hints[:6]))
+            if pages:
+                overview_lines.append("Pages: " + ", ".join(str(page) for page in pages[:8]))
+            if section_titles:
+                overview_lines.append("Sections: " + " | ".join(section_titles))
+            if table_titles:
+                overview_lines.append("Table titles: " + " | ".join(table_titles))
+            if figure_titles:
+                overview_lines.append("Figure captions: " + " | ".join(figure_titles))
+            if snippet_samples:
+                overview_lines.append("Key snippets: " + " | ".join(snippet_samples))
+
+            overviews.append(
+                {
+                    "doc_id": f"{source_path}::family_overview",
+                    "parent_id": f"{source_path}::family_overview",
+                    "source_path": source_path,
+                    "source_type": "pdf",
+                    "locator": "family overview",
+                    "text": "\n".join(overview_lines),
+                    "parent_text": "\n".join(overview_lines),
+                    "page": pages[0] if pages else None,
+                    "bbox": None,
+                    "element_type": "overview",
+                    "section_title": title,
+                    "chunk_type": "family_overview",
+                }
+            )
+        return overviews
+
+    def _split_pdfs(self, paths: list[Path]) -> OpenDataLoaderPdfResult:
+        if self._pdf_parser_backend() == "legacy":
+            documents: list[dict[str, Any]] = []
+            errors: list[dict[str, str]] = []
+            chunk_lengths: list[int] = []
+            page_count = 0
+            bbox_count = 0
+            for path in paths:
+                before_errors = len(self._build_errors)
+                chunks = self._split_pdf_legacy(path)
+                documents.extend(chunks)
+                chunk_lengths.extend(len(str(item.get("text", "") or "")) for item in chunks)
+                page_count += sum(1 for item in chunks if item.get("page") is not None)
+                bbox_count += sum(1 for item in chunks if item.get("bbox") is not None)
+                if len(self._build_errors) > before_errors:
+                    errors.extend(self._build_errors[before_errors:])
+            total_chunks = len(documents)
+            stats = {
+                "backend": "legacy",
+                "parsed_pdf_count": len({str(item.get('source_path', '')) for item in documents}),
+                "failed_pdf_count": len(errors),
+                "failure_reasons": dict(Counter(item.get("message", "") for item in errors)),
+                "chunk_counts": {"text": total_chunks, "table": 0, "figure_caption": 0},
+                "avg_chunk_length": (sum(chunk_lengths) / len(chunk_lengths)) if chunk_lengths else 0.0,
+                "page_available_rate": (page_count / total_chunks) if total_chunks else 0.0,
+                "bbox_available_rate": (bbox_count / total_chunks) if total_chunks else 0.0,
+                "structure_modes": {"struct_tree": 0, "heuristic": len(paths), "unknown": 0},
+            }
+            return OpenDataLoaderPdfResult(documents=documents, errors=[], stats=stats)
+
+        try:
+            return build_pdf_documents_with_opendataloader(
+                base_dir=self.base_dir or Path("."),
+                pdf_paths=paths,
+                derived_root=self._derived_dir / "opendataloader",
+            )
+        except Exception as exc:
+            message = str(exc).strip() or exc.__class__.__name__
+            errors = [
+                {
+                    "source_path": self._relative_path(path),
+                    "stage": "pdf_preflight",
+                    "message": message,
+                }
+                for path in paths
+            ]
+            stats = {
+                "backend": "opendataloader",
+                "parsed_pdf_count": 0,
+                "failed_pdf_count": len(paths),
+                "failure_reasons": {message: len(paths)},
+                "chunk_counts": {"text": 0, "table": 0, "figure_caption": 0},
+                "avg_chunk_length": 0.0,
+                "page_available_rate": 0.0,
+                "bbox_available_rate": 0.0,
+                "structure_modes": {"struct_tree": 0, "heuristic": 0, "unknown": len(paths)},
+            }
+            return OpenDataLoaderPdfResult(documents=[], errors=errors, stats=stats)
+
+    def _split_pdf(self, path: Path) -> list[dict[str, Any]]:
+        return self._split_pdfs([path]).documents
 
     def _record_build_error(self, path: Path, stage: str, message: str) -> None:
         self._build_errors.append(
@@ -258,7 +468,7 @@ class KnowledgeIndexer:
 
     def _write_ingestion_errors(self) -> None:
         self._ingestion_errors_path.write_text(
-            json.dumps({"errors": self._build_errors}, ensure_ascii=False, indent=2),
+            json.dumps({"errors": self._build_errors, "stats": self._build_stats}, ensure_ascii=False, indent=2),
             encoding="utf-8",
         )
 
@@ -431,7 +641,7 @@ class KnowledgeIndexer:
             metadata={"file_type": "txt"},
         )
 
-    def _split_pdf(self, path: Path) -> list[dict[str, Any]]:
+    def _split_pdf_legacy(self, path: Path) -> list[dict[str, Any]]:
         try:
             from pypdf import PdfReader  # pylint: disable=import-outside-toplevel
         except ImportError:
@@ -459,6 +669,10 @@ class KnowledgeIndexer:
                     metadata={
                         "file_type": "pdf",
                         "page": page_number,
+                        "bbox": None,
+                        "element_type": "page",
+                        "chunk_type": "text",
+                        "section_title": None,
                         "total_pages": total_pages,
                     },
                 )
@@ -587,6 +801,7 @@ class KnowledgeIndexer:
             "built_at": time.time(),
             "documents": self._documents,
             "errors": self._build_errors,
+            "stats": self._build_stats,
         }
         self._manifest_path.write_text(
             json.dumps(payload, ensure_ascii=False, indent=2),
@@ -596,6 +811,7 @@ class KnowledgeIndexer:
     def _load_manifest(self) -> None:
         if not self._manifest_path.exists():
             self._documents = []
+            self._build_stats = {}
             self._bm25_ready = False
             return
         try:
@@ -603,11 +819,14 @@ class KnowledgeIndexer:
         except json.JSONDecodeError:
             self._documents = []
             self._build_errors = []
+            self._build_stats = {}
             self._bm25_ready = False
             return
         self._documents = list(payload.get("documents", []))
         raw_errors = payload.get("errors", [])
         self._build_errors = raw_errors if isinstance(raw_errors, list) else []
+        raw_stats = payload.get("stats", {})
+        self._build_stats = raw_stats if isinstance(raw_stats, dict) else {}
         self._last_built_at = payload.get("built_at")
         self._vector_ready = False
         self._prepare_bm25_stats()
@@ -637,17 +856,26 @@ class KnowledgeIndexer:
             self._vector_ready = False
             return
 
+        def vector_metadata(item: dict[str, Any]) -> dict[str, Any]:
+            metadata: dict[str, Any] = {
+                "source_path": str(item.get("source_path", "") or ""),
+                "source_type": str(item.get("source_type", "") or ""),
+                "parent_id": str(item.get("parent_id", "") or "")[:120] or None,
+                "page": item.get("page"),
+                "bbox": item.get("bbox"),
+                "element_type": str(item.get("element_type", "") or "")[:80] or None,
+                "section_title": str(item.get("section_title", "") or "")[:80] or None,
+                "chunk_type": str(item.get("chunk_type", "") or "")[:40] or None,
+            }
+            return {key: value for key, value in metadata.items() if value not in (None, "")}
+
         try:
             Document, LlamaSettings, _, VectorStoreIndex, _, _, _, _ = _load_llama_index_components()
             LlamaSettings.embed_model = self._build_embed_model()
             documents = [
                 Document(
                     text=str(item["text"]),
-                    metadata={
-                        key: value
-                        for key, value in item.items()
-                        if key not in {"text", "parent_text", "tokens"}
-                    },
+                    metadata=vector_metadata(item),
                 )
                 for item in self._documents
             ]
@@ -699,12 +927,20 @@ class KnowledgeIndexer:
                 return True
         return False
 
+    def _matches_chunk_type_filters(self, chunk_type: str | None, chunk_types: list[str] | None) -> bool:
+        if not chunk_types:
+            return True
+        normalized = str(chunk_type or "").strip().lower()
+        allowed = {str(item).strip().lower() for item in chunk_types if str(item).strip()}
+        return normalized in allowed
+
     def retrieve_vector(
         self,
         query: str,
         *,
         top_k: int = 4,
         path_filters: list[str] | None = None,
+        chunk_types: list[str] | None = None,
     ) -> list[Evidence]:
         self._ensure_loaded()
         if self._vector_index is None and self._supports_embeddings() and any(self._vector_dir.glob("*")):
@@ -725,18 +961,40 @@ class KnowledgeIndexer:
             source_path = str(metadata.get("source_path", ""))
             if not self._matches_path_filters(source_path, path_filters):
                 continue
+            chunk_type = str(metadata.get("chunk_type", "") or "") or None
+            if not self._matches_chunk_type_filters(chunk_type, chunk_types):
+                continue
             text = getattr(node, "text", "") or getattr(node, "get_content", lambda: "")()
             raw_parent_id = metadata.get("parent_id")
             parent_id = str(raw_parent_id).strip() if raw_parent_id else None
+            locator = str(metadata.get("locator", "") or "").strip()
+            if not locator:
+                page = metadata.get("page")
+                section_title = str(metadata.get("section_title", "") or "").strip()
+                element_type = str(metadata.get("element_type", "") or "").strip() or "evidence"
+                locator_parts: list[str] = []
+                if page is not None:
+                    locator_parts.append(f"页 {page}")
+                if section_title:
+                    locator_parts.append(section_title)
+                locator_parts.append(element_type)
+                locator = " / ".join(locator_parts)
             payload.append(
                 Evidence(
                     source_path=source_path,
                     source_type=str(metadata.get("source_type", "unknown")),
-                    locator=str(metadata.get("locator", "")),
+                    locator=locator,
                     snippet=str(text).strip(),
                     channel="vector",
                     score=float(getattr(item, "score", 0.0) or 0.0),
                     parent_id=parent_id,
+                    page=metadata.get("page"),
+                    bbox=metadata.get("bbox"),
+                    element_type=str(metadata.get("element_type", "") or "") or None,
+                    section_title=str(metadata.get("section_title", "") or "") or None,
+                    derived_json_path=str(metadata.get("derived_json_path", "") or "") or None,
+                    derived_markdown_path=str(metadata.get("derived_markdown_path", "") or "") or None,
+                    chunk_type=chunk_type,
                 )
             )
             if len(payload) >= top_k:
@@ -750,6 +1008,7 @@ class KnowledgeIndexer:
         top_k: int = 4,
         path_filters: list[str] | None = None,
         query_hints: list[str] | None = None,
+        chunk_types: list[str] | None = None,
     ) -> list[Evidence]:
         self._ensure_loaded()
         if not self._documents or not self._bm25_ready:
@@ -761,7 +1020,10 @@ class KnowledgeIndexer:
             return []
 
         candidates = [
-            item for item in self._documents if self._matches_path_filters(str(item["source_path"]), path_filters)
+            item
+            for item in self._documents
+            if self._matches_path_filters(str(item["source_path"]), path_filters)
+            and self._matches_chunk_type_filters(str(item.get("chunk_type", "") or "") or None, chunk_types)
         ]
         if not candidates:
             candidates = list(self._documents)
@@ -804,6 +1066,13 @@ class KnowledgeIndexer:
                     channel="bm25",
                     score=score,
                     parent_id=parent_id,
+                    page=item.get("page"),
+                    bbox=item.get("bbox"),
+                    element_type=str(item.get("element_type", "") or "") or None,
+                    section_title=str(item.get("section_title", "") or "") or None,
+                    derived_json_path=str(item.get("derived_json_path", "") or "") or None,
+                    derived_markdown_path=str(item.get("derived_markdown_path", "") or "") or None,
+                    chunk_type=str(item.get("chunk_type", "") or "") or None,
                 )
             )
         return payload

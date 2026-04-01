@@ -38,7 +38,7 @@ export const ChatMessage = memo(function ChatMessage({
 
   return (
     <article
-      className={`max-w-[92%] rounded-[28px] border px-5 py-4 ${
+      className={`message-card max-w-[92%] rounded-[28px] border px-5 py-4 ${
         isUser
           ? "ml-auto border-[rgba(255,255,255,0.08)] bg-[rgba(255,255,255,0.07)] text-white"
           : "mr-auto border-[var(--color-line)] bg-[rgba(255,255,255,0.03)] text-[var(--color-ink)]"

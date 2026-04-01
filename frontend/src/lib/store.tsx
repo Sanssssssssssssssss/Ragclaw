@@ -58,6 +58,7 @@ type AppStore = {
   sessions: SessionSummary[];
   currentSessionId: string | null;
   messages: Message[];
+  streamingMessages: Message[];
   messageFeed: Message[];
   isInitializing: boolean;
   isStreaming: boolean;
@@ -115,6 +116,7 @@ type SessionStore = Pick<
 type ChatStore = Pick<
   AppStore,
   | "messages"
+  | "streamingMessages"
   | "isInitializing"
   | "isStreaming"
   | "connectionError"
@@ -313,6 +315,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
   const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
+  const [streamingMessagesState, setStreamingMessagesState] = useState<Message[]>([]);
   const [messageFeed, setMessageFeed] = useState<Message[]>([]);
   const [isInitializing, setIsInitializing] = useState(true);
   const [isStreaming, setIsStreaming] = useState(false);
@@ -333,10 +336,25 @@ export function AppProvider({ children }: { children: ReactNode }) {
     null
   );
   const initializeAppRef = useRef<() => Promise<void>>(async () => {});
+  const streamingMessagesRef = useRef<Message[]>([]);
 
   const editableFiles = useMemo(
     () => [...FIXED_FILES, ...skills.map((skill) => skill.path)],
     [skills]
+  );
+
+  /**
+   * Returns no value from one next-state or updater input and keeps streaming assistant drafts in sync with a ref.
+   */
+  const setStreamingMessages = useCallback(
+    (value: Message[] | ((previous: Message[]) => Message[])) => {
+      setStreamingMessagesState((previous) => {
+        const next = typeof value === "function" ? value(previous) : value;
+        streamingMessagesRef.current = next;
+        return next;
+      });
+    },
+    []
   );
 
   /**
@@ -367,9 +385,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
     const [history, tokens] = await Promise.all([getSessionHistory(sessionId), getSessionTokens(sessionId)]);
     const nextMessages = toUiMessages(history.messages);
     setMessages(nextMessages);
+    setStreamingMessages([]);
     setMessageFeed(buildMessageFeed(nextMessages));
     setTokenStats(tokens);
-  }, []);
+  }, [setStreamingMessages]);
 
   /**
    * Returns no value from a session id input and refreshes only aggregate token stats for the current chat.
@@ -405,10 +424,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
       await refreshSessions();
       setCurrentSessionId(created.id);
       setMessages([]);
+      setStreamingMessages([]);
       setMessageFeed([]);
       setTokenStats(null);
     });
-  }, [refreshSessions, runUserAction]);
+  }, [refreshSessions, runUserAction, setStreamingMessages]);
 
   /**
    * Returns no value from a session id input and switches the UI to a different stored session.
@@ -465,9 +485,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
     let activeAssistantIndex = -1;
 
-    setMessages((prev) => {
-      activeAssistantIndex = prev.length + 1;
-      return [...prev, userMessage, assistantMessage];
+    setMessages((prev) => [...prev, userMessage]);
+    setStreamingMessages(() => {
+      activeAssistantIndex = 0;
+      return [assistantMessage];
     });
     setIsStreaming(true);
     setConnectionError(null);
@@ -481,8 +502,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
      * Returns no value from one message-updater callback input and patches the currently streaming assistant message.
      */
     const patchAssistant = (updater: (message: Message) => Message) => {
-      setMessages((prev) =>
-        updateMessageAtPosition(prev, activeAssistantIndex, activeAssistantId, updater)
+      setStreamingMessages((previous) =>
+        updateMessageAtPosition(previous, activeAssistantIndex, activeAssistantId, updater)
       );
     };
 
@@ -584,9 +605,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
                 usage: null
               };
               activeAssistantId = nextAssistant.id;
-              setMessages((prev) => {
-                activeAssistantIndex = prev.length;
-                return [...prev, nextAssistant];
+              setStreamingMessages((previous) => {
+                activeAssistantIndex = previous.length;
+                return [...previous, nextAssistant];
               });
               return;
             }
@@ -642,15 +663,22 @@ export function AppProvider({ children }: { children: ReactNode }) {
       }));
     } finally {
       setIsStreaming(false);
-      if (!sessionId) {
-        return;
-      }
 
       if (tokenFlushHandle !== null) {
         window.clearTimeout(tokenFlushHandle);
         tokenFlushHandle = null;
       }
       flushTokenBuffer();
+
+      if (streamingMessagesRef.current.length) {
+        const finalizedMessages = streamingMessagesRef.current;
+        setMessages((previous) => [...previous, ...finalizedMessages]);
+        setStreamingMessages([]);
+      }
+
+      if (!sessionId) {
+        return;
+      }
 
       try {
         await refreshSessions();
@@ -660,7 +688,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         setConnectionError(toErrorMessage(error));
       }
     }
-  }, [currentSessionId, ensureSession, isStreaming, refreshSessionTokens, refreshSessions]);
+  }, [currentSessionId, ensureSession, isStreaming, refreshSessionTokens, refreshSessions, setStreamingMessages]);
 
   /**
    * Returns no value from no inputs and flips the memory-retrieval mode while preserving rollback on failure.
@@ -742,12 +770,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
         } else {
           setCurrentSessionId(null);
           setMessages([]);
+          setStreamingMessages([]);
           setMessageFeed([]);
           setTokenStats(null);
         }
       }
     });
-  }, [currentSessionId, refreshSessionDetails, refreshSessions, runUserAction]);
+  }, [currentSessionId, refreshSessionDetails, refreshSessions, runUserAction, setStreamingMessages]);
 
   /**
    * Returns no value from a file-path input and loads one workspace file into the inspector.
@@ -853,6 +882,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       setSessions([]);
       setCurrentSessionId(null);
       setMessages([]);
+      setStreamingMessages([]);
       setMessageFeed([]);
       setSkills([]);
       setTokenStats(null);
@@ -864,7 +894,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     } finally {
       setIsInitializing(false);
     }
-  }, [refreshSessionDetails]);
+  }, [refreshSessionDetails, setStreamingMessages]);
 
   /**
    * Returns no value from no inputs and retries the initial backend data load after a startup failure.
@@ -895,7 +925,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     const timer = window.setTimeout(() => {
       startTransition(() => {
         setMessageFeed((previous) => {
-          const next = buildMessageFeed(messages);
+          const next = buildMessageFeed([...messages, ...streamingMessagesState]);
           if (previous.length === next.length && previous.every((message, index) => message === next[index])) {
             return previous;
           }
@@ -905,7 +935,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     }, isStreaming ? 260 : 120);
 
     return () => window.clearTimeout(timer);
-  }, [messages, isStreaming]);
+  }, [messages, streamingMessagesState, isStreaming]);
 
   const sessionValue = useMemo<SessionStore>(
     () => ({
@@ -931,6 +961,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const chatValue = useMemo<ChatStore>(
     () => ({
       messages,
+      streamingMessages: streamingMessagesState,
       isInitializing,
       isStreaming,
       connectionError,
@@ -940,6 +971,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     }),
     [
       messages,
+      streamingMessagesState,
       isInitializing,
       isStreaming,
       connectionError,

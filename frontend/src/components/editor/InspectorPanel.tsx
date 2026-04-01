@@ -1,9 +1,16 @@
 "use client";
 
-import Editor from "@monaco-editor/react";
+import dynamic from "next/dynamic";
 import { Save } from "lucide-react";
+import { useEffect, useState } from "react";
 
 import { useInspectorStore } from "@/lib/store";
+
+const MonacoEditor = dynamic(() => import("@monaco-editor/react"), {
+  ssr: false
+});
+
+const EDITOR_IDLE_TIMEOUT_MS = 1500;
 
 /**
  * Returns one rendered inspector panel from no explicit inputs and provides file browsing plus inline editing.
@@ -18,6 +25,23 @@ export function InspectorPanel() {
     updateInspectorContent,
     saveInspector
   } = useInspectorStore();
+  const [editorMounted, setEditorMounted] = useState(false);
+
+  useEffect(() => {
+    if (editorMounted) {
+      return;
+    }
+
+    const activate = () => setEditorMounted(true);
+
+    if (typeof window.requestIdleCallback === "function") {
+      const idleId = window.requestIdleCallback(activate, { timeout: EDITOR_IDLE_TIMEOUT_MS });
+      return () => window.cancelIdleCallback(idleId);
+    }
+
+    const timer = window.setTimeout(activate, 900);
+    return () => window.clearTimeout(timer);
+  }, [editorMounted]);
 
   return (
     <aside className="panel flex h-full min-h-0 flex-col rounded-[28px] p-4">
@@ -43,7 +67,10 @@ export function InspectorPanel() {
                 : "ui-button px-3 py-1.5 text-xs"
             }
             key={path}
-            onClick={() => void loadInspectorFile(path)}
+            onClick={() => {
+              setEditorMounted(true);
+              void loadInspectorFile(path);
+            }}
             type="button"
           >
             {path}
@@ -51,28 +78,51 @@ export function InspectorPanel() {
         ))}
       </div>
 
-      <div className="min-h-0 flex-1 overflow-hidden rounded-[24px] border border-[var(--color-line)] bg-[#050505]">
-        <Editor
-          defaultLanguage="markdown"
-          height="100%"
-          loading={<div className="p-4 text-sm text-[var(--color-ink-soft)]">Loading editor...</div>}
-          onChange={(value) => updateInspectorContent(value ?? "")}
-          options={{
-            automaticLayout: true,
-            cursorBlinking: "solid",
-            fontFamily: "var(--font-mono)",
-            fontSize: 14,
-            minimap: { enabled: false },
-            overviewRulerBorder: false,
-            renderLineHighlight: "none",
-            scrollBeyondLastLine: false,
-            smoothScrolling: true,
-            wordWrap: "on"
-          }}
-          path={inspectorPath}
-          theme="vs-dark"
-          value={inspectorContent}
-        />
+      <div
+        className="min-h-0 flex-1 overflow-hidden rounded-[24px] border border-[var(--color-line)] bg-[#050505]"
+        onPointerDown={() => setEditorMounted(true)}
+      >
+        {editorMounted ? (
+          <MonacoEditor
+            defaultLanguage="markdown"
+            height="100%"
+            loading={<div className="p-4 text-sm text-[var(--color-ink-soft)]">Loading editor...</div>}
+            onChange={(value) => updateInspectorContent(value ?? "")}
+            options={{
+              automaticLayout: true,
+              cursorBlinking: "solid",
+              fontFamily: "var(--font-mono)",
+              fontSize: 14,
+              minimap: { enabled: false },
+              overviewRulerBorder: false,
+              renderLineHighlight: "none",
+              scrollBeyondLastLine: false,
+              smoothScrolling: true,
+              wordWrap: "on"
+            }}
+            path={inspectorPath}
+            theme="vs-dark"
+            value={inspectorContent}
+          />
+        ) : (
+          <div className="flex h-full flex-col gap-3 p-4">
+            <div>
+              <p className="text-sm text-[var(--color-ink-soft)]">
+                Editor warmup is deferred so the chat surface stays smooth during startup and streaming.
+              </p>
+              <button
+                className="ui-button mt-3"
+                onClick={() => setEditorMounted(true)}
+                type="button"
+              >
+                Load editor now
+              </button>
+            </div>
+            <pre className="mono min-h-0 flex-1 overflow-auto rounded-[20px] border border-[var(--color-line)] bg-[rgba(255,255,255,0.03)] p-4 text-sm leading-7 text-[var(--color-ink-soft)]">
+              {inspectorContent || "No file loaded yet."}
+            </pre>
+          </div>
+        )}
       </div>
     </aside>
   );

@@ -41,6 +41,13 @@ def reciprocal_rank_fusion(
                 parent_id=evidence.parent_id,
                 query_variant=evidence.query_variant,
                 supporting_children=evidence.supporting_children,
+                page=evidence.page,
+                bbox=evidence.bbox,
+                element_type=evidence.element_type,
+                section_title=evidence.section_title,
+                derived_json_path=evidence.derived_json_path,
+                derived_markdown_path=evidence.derived_markdown_path,
+                chunk_type=evidence.chunk_type,
             )
         )
     return fused

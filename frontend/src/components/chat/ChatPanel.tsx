@@ -4,7 +4,7 @@ import { memo, useEffect, useLayoutEffect, useMemo, useRef } from "react";
 
 import { ChatInput } from "@/components/chat/ChatInput";
 import { ChatMessage } from "@/components/chat/ChatMessage";
-import { type Message, useChatStore } from "@/lib/store";
+import { type Message, useChatStore, useSessionStore } from "@/lib/store";
 
 const AUTO_SCROLL_THRESHOLD = 72;
 
@@ -40,6 +40,7 @@ const StableHistory = memo(
 export function ChatPanel() {
   const {
     messages,
+    streamingMessages,
     sendMessage,
     isInitializing,
     isStreaming,
@@ -47,17 +48,15 @@ export function ChatPanel() {
     retryInitialization,
     tokenStats
   } = useChatStore();
+  const { currentSessionId } = useSessionStore();
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const stickToBottomRef = useRef(true);
   const frameRef = useRef<number | null>(null);
 
-  const lastMessage = messages[messages.length - 1];
-  const liveMessage =
-    isStreaming && lastMessage?.role === "assistant" ? lastMessage : null;
-  const historyMessages = useMemo(
-    () => (liveMessage ? messages.slice(0, -1) : messages),
-    [liveMessage, messages]
-  );
+  const lastCommittedMessage = messages[messages.length - 1];
+  const lastStreamingMessage = streamingMessages[streamingMessages.length - 1];
+  const lastMessage = lastStreamingMessage ?? lastCommittedMessage;
+  const historyMessages = useMemo(() => messages, [messages]);
 
   /**
    * Returns no value from an optional deferred flag input and keeps the scroll container pinned to the latest message.
@@ -122,6 +121,15 @@ export function ChatPanel() {
   useLayoutEffect(() => {
     syncToBottom(false);
   }, [messages.length]);
+
+  useLayoutEffect(() => {
+    if (!messages.length) {
+      return;
+    }
+
+    stickToBottomRef.current = true;
+    syncToBottom(false);
+  }, [currentSessionId, messages.length]);
 
   useLayoutEffect(() => {
     syncToBottom(true);
@@ -194,17 +202,17 @@ export function ChatPanel() {
           )}
 
           <StableHistory messages={historyMessages} />
-          {liveMessage ? (
+          {streamingMessages.map((message, index) => (
             <ChatMessage
-              content={liveMessage.content}
-              key={liveMessage.id}
-              retrievalSteps={liveMessage.retrievalSteps}
-              role={liveMessage.role}
-              streaming
-              toolCalls={liveMessage.toolCalls}
-              usage={liveMessage.usage}
+              content={message.content}
+              key={message.id}
+              retrievalSteps={message.retrievalSteps}
+              role={message.role}
+              streaming={isStreaming && index === streamingMessages.length - 1}
+              toolCalls={message.toolCalls}
+              usage={message.usage}
             />
-          ) : null}
+          ))}
         </div>
       </div>
 

@@ -75,6 +75,9 @@ class Settings:
     llm_api_key: str | None
     llm_base_url: str
     llm_thinking_type: str | None
+    router_model: str
+    router_api_key: str | None
+    router_base_url: str
     embedding_provider: str
     embedding_model: str
     embedding_api_key: str | None
@@ -191,6 +194,21 @@ def _resolve_llm_thinking_type() -> str | None:
     return _normalize_thinking_type(_first_config_value("LLM_THINKING_TYPE", "KIMI_THINKING_TYPE"))
 
 
+def _resolve_router_model() -> str:
+    return _first_config_value("ROUTER_MODEL", "KIMI_ROUTER_MODEL") or "kimi-k2"
+
+
+def _resolve_router_api_key() -> str | None:
+    return _first_api_key("ROUTER_API_KEY", "KIMI_API_KEY", "LLM_API_KEY")
+
+
+def _resolve_router_base_url() -> str:
+    return (
+        _first_config_value("ROUTER_BASE_URL", "KIMI_BASE_URL", "LLM_BASE_URL")
+        or "https://api.moonshot.cn/v1"
+    )
+
+
 def _resolve_embedding_api_key(provider: str) -> str | None:
     if provider == "local":
         return None
@@ -280,6 +298,9 @@ def get_settings() -> Settings:
         llm_api_key=_resolve_llm_api_key(llm_provider),
         llm_base_url=_resolve_llm_base_url(llm_provider),
         llm_thinking_type=_resolve_llm_thinking_type(),
+        router_model=_resolve_router_model(),
+        router_api_key=_resolve_router_api_key(),
+        router_base_url=_resolve_router_base_url(),
         embedding_provider=embedding_provider,
         embedding_model=_resolve_embedding_model(embedding_provider),
         embedding_api_key=_resolve_embedding_api_key(embedding_provider),

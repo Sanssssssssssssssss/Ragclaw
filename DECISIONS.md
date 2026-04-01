@@ -409,3 +409,42 @@
   - Status: Accepted
   - Decision: knowledge/direct-answer model completions now save per-message `usage` with prompt/output token estimates, `/api/tokens/session/{id}` now returns both `model_call_total_tokens` and `session_trace_tokens`, and the frontend header shows both values side by side.
   - Reason: the old single token number mixed the final model call with all persisted retrieval-step text, which made a one-question knowledge session appear to consume ~64k tokens even though the actual final model call was much smaller.
+## 2026-03-29 Thirty-Eighth Update
+- D-077 PDF ingestion now defaults to OpenDataLoader deterministic local mode
+  - Status: Accepted
+  - Decision: the knowledge indexer now uses a dedicated OpenDataLoader PDF integration module as the default PDF parser, batch-converts PDFs to `json,markdown`, derives semantic PDF chunks from the JSON output, and keeps the legacy page-based parser behind an explicit rollback switch `PDF_PARSER_BACKEND=legacy`.
+  - Reason: the old PDF path relied on page-based `extract_text()` hard splits, which discarded table and layout structure and limited citation quality for financial-report retrieval.
+- D-078 PDF citations remain anchored to the original source PDFs
+  - Status: Accepted
+  - Decision: OpenDataLoader-derived markdown/json files are internal-only debug and ingestion artifacts; all retrieval results and answer citations continue to use the original `knowledge/.../*.pdf` path plus page/bbox/element metadata from the JSON parse.
+  - Reason: benchmark gold sources, user-visible citations, and future PDF jump/highlight behavior should remain stable and should not expose internal derived files as first-class knowledge sources.
+- D-079 OpenDataLoader stays only if the benchmark gate remains acceptable
+  - Status: Accepted
+  - Decision: OpenDataLoader is the default parser now, but its retention is benchmark-gated; if targeted PDF retrieval/grounding clearly regresses, the rollback point is the single parser switch at the PDF-ingestion call site.
+  - Reason: parser migration should be justified by benchmark and citation quality, not by novelty alone.
+## 2026-03-30 Thirty-Ninth Update
+- D-080 OpenDataLoader PDF text chunks should be section-aware groups, not one-element fragments
+  - Status: Accepted
+  - Decision: PDF text chunks are now grouped by nearby semantic elements on the same page and in the same section, headings provide section context instead of standing alone as tiny chunks, and nearby captions can be absorbed into stronger text groups when appropriate.
+  - Reason: the first OpenDataLoader rollout produced an average PDF chunk length of only about `62.65`, which was too fragmented for compare, multi-hop, and negation grounding.
+- D-081 Parent composition should stay stronger than retrieval children but still token-conscious
+  - Status: Accepted
+  - Decision: child-level retrieval remains in place, but OpenDataLoader-derived PDF parents now cover grouped section blocks, tables plus nearby textual context, and figure/caption relationships so final evidence can be more complete without reverting to page-level hard splits.
+  - Reason: retrieval could still hit the right child chunks, but answer generation often received evidence that was too local to support stable compare and multi-hop reasoning.
+- D-082 Keep the new PDF chunk grouping only if the benchmark gate and token budget remain acceptable
+  - Status: Accepted
+  - Decision: the chunk-granularity and parent-composition changes stay only if they improve evidence quality without materially inflating the final model-call token budget; if targeted PDF slices still regress, the next fix should target retrieval-source preference rather than making chunks larger again.
+  - Reason: this round improved structure density and some grounding slices, but it also exposed that fuzzy and cross-file failures are no longer explained by chunk fragmentation alone.
+## 2026-03-30 Fortieth Update
+- D-083 PDF retrieval should recall report families first for fuzzy and cross-file questions
+  - Status: Accepted
+  - Decision: the orchestrator now runs a lightweight `family_overview` recall before chunk retrieval for `fuzzy`, `cross_file_aggregation`, and weakly for `compare`, then uses the selected PDF families as preferred inputs for later rerank and final evidence selection.
+  - Reason: OpenDataLoader semantic chunks improved compare grounding, but fuzzy and cross-file slices still failed because the system was picking the wrong PDF family before it ever chose the right chunk.
+- D-084 Source-type preference should explicitly bias toward PDF semantic/table evidence and away from legacy text helpers
+  - Status: Accepted
+  - Decision: heuristic rerank and final diversification now strongly prefer PDF semantic and table chunks, suppress `data_structure.md`, and demote same-family legacy `txt`/`_extracted.txt` when richer PDF evidence is already available.
+  - Reason: after the parser/chunking cleanup, the remaining retrieval bottleneck was no longer parser quality but source selection, especially legacy text artifacts outranking the better PDF-native evidence.
+- D-085 Retrieval-side fixes are enough to restore file selection, but not enough to fully solve compare/negation/multi-hop grounding
+  - Status: Accepted
+  - Decision: keep the new family-overview and source-preference logic because targeted PDF retrieval slices recovered to full hit/coverage, but treat the remaining compare/negation/multi-hop failures as a grounding/evidence-interpretation problem rather than continuing to force retrieval to do answer-generation work.
+  - Reason: after the latest targeted reruns, `fuzzy`, `compare`, and `cross_file_aggregation` retrieval all held at full source hit/coverage, while judge failures still came from misreading table values or overgeneralizing partial evidence rather than from missing the correct PDF family.

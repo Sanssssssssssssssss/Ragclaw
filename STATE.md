@@ -648,3 +648,75 @@
 - The frontend header now shows both counts side by side, so future debugging can distinguish:
   - "what the model likely consumed"
   - vs "how much debug/session text we are persisting"
+## 2026-03-29 Thirty-Eighth Update
+- This round migrated the main PDF ingestion path to OpenDataLoader deterministic local mode:
+  - batch conversion via the official Python API
+  - `json` as the authoritative structured source
+  - `markdown` kept only for debug/fallback inspection
+  - semantic PDF chunks derived from actual OpenDataLoader JSON fields instead of legacy page-hard-splitting
+- The new parser writes mirrored derived artifacts under `backend/storage/knowledge/derived/opendataloader/...`, but all retrieval/answer citations still point to the original PDF files.
+- Fresh OpenDataLoader build stats on this machine showed:
+  - parsed PDFs: `14`
+  - failed PDFs: `1`
+  - chunk counts: `text=5909`, `table=116`, `figure_caption=120`
+  - page availability rate: `1.0`
+  - bbox availability rate: `1.0`
+  - structure-mode split: `struct_tree=3`, `heuristic=11`
+- Targeted PDF benchmark comparison versus the legacy parser showed:
+  - targeted retrieval/grounding slices stayed broadly acceptable
+  - targeted cross-file source coverage improved to full coverage in the focused run
+  - judge grounded pass rate stayed roughly flat, so the parser migration is promising but not yet a slam-dunk win
+- Current blocker / risk:
+  - a fresh vector rebuild under the new parser is currently blocked by Bailian embedding-provider billing state (`Arrearage`), so the strongest benchmark gate should be rerun once `vector_ready=true` can be rebuilt cleanly again
+  - until then, BM25-only parser/build validation and previously warmed vector runs suggest the migration is viable, but the final keep/rollback decision should still be based on a clean fresh vector-backed rerun
+## 2026-03-30 Thirty-Ninth Update
+- This round did not change the OpenDataLoader hookup itself; it only changed how OpenDataLoader PDF elements are turned into answerable evidence blocks.
+- Fresh structure stats after regrouping PDF text chunks:
+  - parsed PDFs: `14`
+  - failed PDFs: `1`
+  - chunk counts: `text=1688`, `table=116`, `figure_caption=69`
+  - average chunk length: `215.70`
+  - average text chunk length: `184.90`
+  - average parent coverage size: `3.13`
+  - page availability rate: `1.0`
+  - bbox availability rate: `1.0`
+- Compared with the first OpenDataLoader rollout, the PDF text layer is now much less fragmented:
+  - text chunks: `5909 -> 1688`
+  - average chunk length: `62.65 -> 215.70`
+- Targeted PDF benchmark results became mixed rather than uniformly better:
+  - compare grounding improved (`judge_grounded_pass_rate 0.5 -> 1.0`)
+  - negation grounding held at `1.0`
+  - multi-hop grounding stayed flat at `0.5`
+  - fuzzy retrieval regressed to `0.0`
+  - cross-file aggregation retrieval regressed to `0.0`
+- Token impact is also mixed:
+  - compare final model-call tokens: `1099 -> 847`
+  - multi-hop final model-call tokens: `2806 -> 3131`
+  - negation final model-call tokens: `726 -> 695`
+- Current best diagnosis:
+  - chunk fragmentation is no longer the main PDF bottleneck
+  - compare benefits from the stronger grouped evidence
+  - fuzzy and cross-file failures now point more strongly to retrieval-source preference and/or question-type routing than to parser hookup or chunk size alone
+## 2026-03-30 Fortieth Update
+- This round changed only retrieval-side source selection, not the OpenDataLoader parser hookup or PDF chunking logic.
+- Fresh targeted PDF benchmark after the retrieval-side cleanup:
+  - `retrieval_source_hit_rate: 1.0`
+  - `source_coverage: 1.0`
+  - `judge_grounded_pass_rate: 0.2`
+  - `judge_unsupported_claim_rate: 0.8`
+- Final-evidence diagnostics improved materially on the retrieval side:
+  - `final_evidence_pdf_semantic_ratio: 0.80`
+  - `final_evidence_legacy_txt_ratio: 0.20`
+  - `final_evidence_structure_doc_ratio: 0.0`
+  - `data_structure.md` no longer enters final evidence in the targeted run
+- Slice-level readout:
+  - retrieval `fuzzy`: recovered and held at full hit/coverage
+  - retrieval `compare`: held at full hit/coverage
+  - retrieval `cross_file_aggregation`: recovered and held at full hit/coverage
+  - grounding `compare`: still fails even after final evidence becomes PDF-only
+  - grounding `multi_hop`: partially improved but remains unstable
+  - grounding `negation`: still fails because the model overgeneralizes a weak legacy text clue into an unsupported profitability claim
+- Current best diagnosis:
+  - file-level/family-level recall is no longer the main blocker
+  - source-type preference is much better, though a little legacy txt still leaks into some final evidence sets
+  - the remaining dominant bottleneck is grounding / evidence interpretation, especially reading the right fields from table evidence and keeping weak negation evidence conservative

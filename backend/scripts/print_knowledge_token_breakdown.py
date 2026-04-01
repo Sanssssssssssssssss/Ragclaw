@@ -168,6 +168,8 @@ async def _profile_question(manager: AgentManager, question_type_label: str, que
         print(
             f"- #{index} family={source_family(getattr(evidence, 'source_path', ''))} "
             f"source={getattr(evidence, 'source_path', '')} "
+            f"page={getattr(evidence, 'page', None)} "
+            f"type={getattr(evidence, 'element_type', None)} "
             f"children={getattr(evidence, 'supporting_children', 1) or 1} "
             f"chars={len(snippet)} tokens={count_tokens(snippet)}"
         )

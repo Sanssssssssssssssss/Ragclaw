@@ -1,0 +1,154 @@
+{
+  "file name": "sample.pdf",
+  "number of pages": 2,
+  "author": "sample",
+  "title": "Sample PDF",
+  "creation date": "2026-03-29",
+  "modification date": "2026-03-29",
+  "kids": [
+    {
+      "type": "heading",
+      "id": 10,
+      "page number": 1,
+      "bounding box": [10.0, 10.0, 200.0, 40.0],
+      "heading level": 2,
+      "content": "第一节 经营情况讨论与分析"
+    },
+    {
+      "type": "paragraph",
+      "id": 11,
+      "page number": 1,
+      "bounding box": [10.0, 50.0, 400.0, 120.0],
+      "content": "公司在本报告期实现营业收入 100 亿元，同比增长 12%。"
+    },
+    {
+      "type": "list",
+      "id": 12,
+      "level": "2",
+      "page number": 1,
+      "bounding box": [10.0, 130.0, 200.0, 180.0],
+      "number of list items": 1,
+      "numbering style": "unordered",
+      "list items": [
+        {
+          "type": "list item",
+          "id": 13,
+          "page number": 1,
+          "bounding box": [20.0, 140.0, 180.0, 160.0],
+          "content": "净利润同比增长 8%。",
+          "kids": []
+        }
+      ]
+    },
+    {
+      "type": "table",
+      "id": 20,
+      "level": "2",
+      "page number": 2,
+      "bounding box": [10.0, 200.0, 500.0, 360.0],
+      "number of rows": 2,
+      "number of columns": 2,
+      "rows": [
+        {
+          "type": "table row",
+          "row number": 1,
+          "cells": [
+            {
+              "type": "table cell",
+              "page number": 2,
+              "bounding box": [10.0, 200.0, 200.0, 240.0],
+              "row number": 1,
+              "column number": 1,
+              "row span": 1,
+              "column span": 1,
+              "kids": [
+                {
+                  "type": "paragraph",
+                  "id": 21,
+                  "page number": 2,
+                  "bounding box": [12.0, 205.0, 100.0, 220.0],
+                  "content": "项目"
+                }
+              ]
+            },
+            {
+              "type": "table cell",
+              "page number": 2,
+              "bounding box": [200.0, 200.0, 500.0, 240.0],
+              "row number": 1,
+              "column number": 2,
+              "row span": 1,
+              "column span": 1,
+              "kids": [
+                {
+                  "type": "paragraph",
+                  "id": 22,
+                  "page number": 2,
+                  "bounding box": [210.0, 205.0, 350.0, 220.0],
+                  "content": "本报告期"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "table row",
+          "row number": 2,
+          "cells": [
+            {
+              "type": "table cell",
+              "page number": 2,
+              "bounding box": [10.0, 240.0, 200.0, 280.0],
+              "row number": 2,
+              "column number": 1,
+              "row span": 1,
+              "column span": 1,
+              "kids": [
+                {
+                  "type": "paragraph",
+                  "id": 23,
+                  "page number": 2,
+                  "bounding box": [12.0, 245.0, 140.0, 260.0],
+                  "content": "营业收入"
+                }
+              ]
+            },
+            {
+              "type": "table cell",
+              "page number": 2,
+              "bounding box": [200.0, 240.0, 500.0, 280.0],
+              "row number": 2,
+              "column number": 2,
+              "row span": 1,
+              "column span": 1,
+              "kids": [
+                {
+                  "type": "paragraph",
+                  "id": 24,
+                  "page number": 2,
+                  "bounding box": [210.0, 245.0, 350.0, 260.0],
+                  "content": "100 亿元"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "image",
+      "id": 30,
+      "page number": 2,
+      "bounding box": [10.0, 370.0, 200.0, 500.0],
+      "source": "assets/sample-image-1.png"
+    },
+    {
+      "type": "caption",
+      "id": 31,
+      "page number": 2,
+      "bounding box": [10.0, 505.0, 260.0, 525.0],
+      "linked content id": 30,
+      "content": "图 1：关键经营指标趋势"
+    }
+  ]
+}

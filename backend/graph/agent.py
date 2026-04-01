@@ -74,6 +74,29 @@ def _serialize_model_messages(messages: list[dict[str, str]]) -> str:
     return "\n\n".join(parts)
 
 
+def _incremental_text(previous: str, current: str) -> str:
+    """Return only the newly appended suffix when a stream emits cumulative text snapshots."""
+
+    prev = str(previous or "")
+    curr = str(current or "")
+    if not curr:
+        return ""
+    if not prev:
+        return curr
+    if curr == prev:
+        return ""
+    if curr.startswith(prev):
+        return curr[len(prev) :]
+    if prev.startswith(curr):
+        return ""
+
+    max_overlap = min(len(prev), len(curr))
+    for overlap in range(max_overlap, 0, -1):
+        if prev.endswith(curr[:overlap]):
+            return curr[overlap:]
+    return curr
+
+
 class AgentManager:
     def __init__(self) -> None:
         self.base_dir: Path | None = None
@@ -1339,6 +1362,7 @@ class AgentManager:
 
         final_content_parts: list[str] = []
         last_ai_message = ""
+        last_streamed_model_text = ""
         pending_tools: dict[str, dict[str, str]] = {}
         recorded_tools: list[dict[str, str]] = []
 
@@ -1351,9 +1375,12 @@ class AgentManager:
                 if metadata.get("langgraph_node") != "model":
                     continue
                 text = _stringify_content(getattr(chunk, "content", ""))
+                next_chunk = _incremental_text(last_streamed_model_text, text)
                 if text:
-                    final_content_parts.append(text)
-                    yield {"type": "token", "content": text}
+                    last_streamed_model_text = text
+                if next_chunk:
+                    final_content_parts.append(next_chunk)
+                    yield {"type": "token", "content": next_chunk}
                 continue
 
             if mode != "updates":

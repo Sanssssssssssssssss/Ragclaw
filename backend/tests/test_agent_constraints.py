@@ -64,8 +64,75 @@ class AgentConstraintTests(unittest.IsolatedAsyncioTestCase):
             "\u6839\u636e\u77e5\u8bc6\u5e93\uff0c\u8bf4\u660e\u822a\u5929\u52a8\u529b 2025 Q3 \u5e76\u672a\u76c8\u5229\u7684\u8bc1\u636e\uff0c\u5e76\u7ed9\u51fa\u6765\u6e90\u3002",
             retrieval_result,
         )
-        self.assertIn("direct_negative_evidence", scaffold)
+        self.assertIn("negative_signal: direct", scaffold)
         self.assertNotIn("The knowledge index", scaffold)
+
+    def test_compare_scaffold_extracts_company_slots_from_evidence(self) -> None:
+        retrieval_result = SimpleNamespace(
+            question_type="compare",
+            entity_hints=["上汽集团", "三一重工"],
+            evidences=[
+                SimpleNamespace(
+                    source_path="knowledge/Financial Report Data/上汽集团 2025 Q3.pdf",
+                    locator="page 1 / table #57",
+                    snippet="归属于上市公司股东的净利润 本报告期 2,083,357,266.67 元 同比 644.88% 年初至报告期末 8,100,867,339.79 元 同比 17.28%",
+                ),
+                SimpleNamespace(
+                    source_path="knowledge/Financial Report Data/三一重工 2025 Q3.pdf",
+                    locator="page 3 / table #98",
+                    snippet="归属于上市公司股东的净利润 本报告期 1,919,279 千元 同比 48.18% 年初至报告期末 7,135,595 千元 同比 46.58%",
+                ),
+            ],
+        )
+        scaffold = self.manager._build_knowledge_scaffold(
+            "根据知识库，对比上汽集团与三一重工 2025 Q3 的净利润变化情况，并给出来源。",
+            retrieval_result,
+        )
+        self.assertIn("report_value_a: 2,083,357,266.67 元", scaffold)
+        self.assertIn("report_value_b: 1,919,279 千元", scaffold)
+        self.assertIn("ytd_value_b: 7,135,595 千元", scaffold)
+        self.assertNotIn("report_value_b: 当前证据未显示", scaffold)
+
+    def test_negation_scaffold_marks_weak_fragments_as_insufficient(self) -> None:
+        retrieval_result = SimpleNamespace(
+            question_type="negation",
+            evidences=[
+                SimpleNamespace(
+                    source_path="knowledge/Financial Report Data/航天动力_2025_Q3.txt",
+                    locator="段落 1",
+                    snippet="利润总额 0 不适用 主要原因 本期确认中小投资者索赔损失增加所致",
+                )
+            ],
+            reason="partial evidence",
+            status="partial",
+            fallback_used=False,
+        )
+        scaffold = self.manager._build_knowledge_scaffold(
+            "根据知识库，说明航天动力 2025 Q3 并未盈利的证据，并给出来源。",
+            retrieval_result,
+        )
+        self.assertIn("negative_signal: weak", scaffold)
+        self.assertIn("利润总额 0 不适用", scaffold)
+        self.assertNotIn("negative_signal: missing", scaffold)
+
+    def test_multi_hop_scaffold_marks_missing_second_item(self) -> None:
+        retrieval_result = SimpleNamespace(
+            question_type="multi_hop",
+            evidences=[
+                SimpleNamespace(
+                    source_path="knowledge/AI Knowledge/2026AI应用专题.pdf",
+                    locator="page 10",
+                    snippet='医疗相关产品：“依保儿”就医智能体，已与 8 省市卫健委合作。',
+                )
+            ],
+        )
+        scaffold = self.manager._build_knowledge_scaffold(
+            "根据知识库，概括 AI 应用专题中两项医疗相关产品，并给出来源。",
+            retrieval_result,
+        )
+        self.assertIn("mode: enumerated_items", scaffold)
+        self.assertIn("found_item_count: 1", scaffold)
+        self.assertIn("missing_constraints: item_2", scaffold)
 
     async def test_direct_answer_constraints_skip_tools_and_knowledge(self) -> None:
         knowledge_called = False
@@ -227,6 +294,58 @@ class AgentConstraintTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(events[-1]["type"], "done")
         self.assertIn("120", events[-1]["content"])
         self.assertIn("\u5982\u4f55\u8ba2\u8d2d", events[-1]["content"])
+
+    async def test_tool_streaming_uses_incremental_text_instead_of_repeating_snapshot(self) -> None:
+        fake_agent = FakeAgent(
+            [
+                (
+                    "messages",
+                    (
+                        SimpleNamespace(content="\u73b0\u5728\u8ba9\u6211\u8bfb\u53d6\u8fd9\u4e24\u4efd\u62a5\u544a\u7684\u5185\u5bb9\uff1a"),
+                        {"langgraph_node": "model"},
+                    ),
+                ),
+                (
+                    "messages",
+                    (
+                        SimpleNamespace(
+                            content="\u73b0\u5728\u8ba9\u6211\u8bfb\u53d6\u8fd9\u4e24\u4efd\u62a5\u544a\u7684\u5185\u5bb9\uff1a\n1. \u4e09\u4e00\u91cd\u5de5"
+                        ),
+                        {"langgraph_node": "model"},
+                    ),
+                ),
+                (
+                    "messages",
+                    (
+                        SimpleNamespace(
+                            content="\u73b0\u5728\u8ba9\u6211\u8bfb\u53d6\u8fd9\u4e24\u4efd\u62a5\u544a\u7684\u5185\u5bb9\uff1a\n1. \u4e09\u4e00\u91cd\u5de5\n2. \u822a\u5929\u52a8\u529b"
+                        ),
+                        {"langgraph_node": "model"},
+                    ),
+                ),
+            ]
+        )
+
+        with patch.object(self.manager, "_build_agent", return_value=fake_agent):
+            events = await collect_events(
+                self.manager,
+                "\u8bf7\u53ea\u7528 terminal \u8bfb\u53d6\u8fd9\u4e24\u4efd\u62a5\u544a\u7684\u5185\u5bb9\u3002",
+            )
+
+        token_events = [event["content"] for event in events if event["type"] == "token"]
+        self.assertEqual(
+            token_events,
+            [
+                "\u73b0\u5728\u8ba9\u6211\u8bfb\u53d6\u8fd9\u4e24\u4efd\u62a5\u544a\u7684\u5185\u5bb9\uff1a",
+                "\n1. \u4e09\u4e00\u91cd\u5de5",
+                "\n2. \u822a\u5929\u52a8\u529b",
+            ],
+        )
+        self.assertEqual(events[-1]["type"], "done")
+        self.assertEqual(
+            events[-1]["content"],
+            "\u73b0\u5728\u8ba9\u6211\u8bfb\u53d6\u8fd9\u4e24\u4efd\u62a5\u544a\u7684\u5185\u5bb9\uff1a\n1. \u4e09\u4e00\u91cd\u5de5\n2. \u822a\u5929\u52a8\u529b",
+        )
 
 
 if __name__ == "__main__":

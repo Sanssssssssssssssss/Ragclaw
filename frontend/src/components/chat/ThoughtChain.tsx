@@ -21,11 +21,60 @@ function formatBlock(value: string) {
   }
 }
 
+const ToolCallRow = memo(function ToolCallRow({ toolCall }: { toolCall: ToolCall }) {
+  const formattedInput = useMemo(() => formatBlock(toolCall.input), [toolCall.input]);
+  const formattedOutput = useMemo(() => formatBlock(toolCall.output), [toolCall.output]);
+  const isFinished = Boolean(toolCall.output.trim());
+
+  return (
+    <div className="rounded-2xl border border-[rgba(255,255,255,0.06)] bg-[rgba(0,0,0,0.2)] p-3">
+      <div className="mb-2 flex items-center justify-between gap-3 text-sm font-medium">
+        <span className="text-white">{toolCall.tool}</span>
+        <span
+          className={`rounded-full px-2 py-1 text-[11px] uppercase tracking-[0.16em] ${
+            isFinished
+              ? "bg-[rgba(16,163,127,0.14)] text-[#7fe7ca]"
+              : "bg-[rgba(255,255,255,0.08)] text-[var(--color-ink-soft)]"
+          }`}
+        >
+          {isFinished ? "Completed" : "Running"}
+        </span>
+      </div>
+
+      <div className="space-y-2 text-sm">
+        <div className="rounded-2xl border border-[rgba(255,255,255,0.06)] bg-[rgba(255,255,255,0.03)] p-3">
+          <div className="mb-1 font-medium uppercase tracking-[0.14em] text-[var(--color-ink-muted)]">
+            Input
+          </div>
+          <pre className="mono whitespace-pre-wrap text-[var(--color-ink-soft)]">
+            {formattedInput}
+          </pre>
+        </div>
+        <div className="rounded-2xl border border-[rgba(255,255,255,0.06)] bg-[rgba(255,255,255,0.03)] p-3">
+          <div className="mb-1 font-medium uppercase tracking-[0.14em] text-[var(--color-ink-muted)]">
+            Output
+          </div>
+          <pre className="mono whitespace-pre-wrap text-[var(--color-ink-soft)]">
+            {formattedOutput}
+          </pre>
+        </div>
+      </div>
+    </div>
+  );
+});
+
 /**
  * Returns one rendered tool-call panel from tool-call inputs and visualizes the current tool execution trace.
  */
 export const ThoughtChain = memo(function ThoughtChain({ toolCalls }: { toolCalls: ToolCall[] }) {
-  const activeTool = [...toolCalls].reverse().find((toolCall) => !toolCall.output.trim()) ?? null;
+  let activeTool: ToolCall | null = null;
+  for (let index = toolCalls.length - 1; index >= 0; index -= 1) {
+    if (!toolCalls[index].output.trim()) {
+      activeTool = toolCalls[index];
+      break;
+    }
+  }
+
   const toolNames = useMemo(
     () => Array.from(new Set(toolCalls.map((toolCall) => toolCall.tool))),
     [toolCalls]
@@ -64,48 +113,9 @@ export const ThoughtChain = memo(function ThoughtChain({ toolCalls }: { toolCall
       </summary>
 
       <div className="mt-3 space-y-3">
-        {toolCalls.map((toolCall, index) => {
-          const isFinished = Boolean(toolCall.output.trim());
-
-          return (
-            <div
-              className="rounded-2xl border border-[rgba(255,255,255,0.06)] bg-[rgba(0,0,0,0.2)] p-3"
-              key={`${toolCall.tool}-${index}`}
-            >
-              <div className="mb-2 flex items-center justify-between gap-3 text-sm font-medium">
-                <span className="text-white">{toolCall.tool}</span>
-                <span
-                  className={`rounded-full px-2 py-1 text-[11px] uppercase tracking-[0.16em] ${
-                    isFinished
-                      ? "bg-[rgba(16,163,127,0.14)] text-[#7fe7ca]"
-                      : "bg-[rgba(255,255,255,0.08)] text-[var(--color-ink-soft)]"
-                  }`}
-                >
-                  {isFinished ? "Completed" : "Running"}
-                </span>
-              </div>
-
-              <div className="space-y-2 text-sm">
-                <div className="rounded-2xl border border-[rgba(255,255,255,0.06)] bg-[rgba(255,255,255,0.03)] p-3">
-                  <div className="mb-1 font-medium uppercase tracking-[0.14em] text-[var(--color-ink-muted)]">
-                    Input
-                  </div>
-                  <pre className="mono whitespace-pre-wrap text-[var(--color-ink-soft)]">
-                    {formatBlock(toolCall.input)}
-                  </pre>
-                </div>
-                <div className="rounded-2xl border border-[rgba(255,255,255,0.06)] bg-[rgba(255,255,255,0.03)] p-3">
-                  <div className="mb-1 font-medium uppercase tracking-[0.14em] text-[var(--color-ink-muted)]">
-                    Output
-                  </div>
-                  <pre className="mono whitespace-pre-wrap text-[var(--color-ink-soft)]">
-                    {formatBlock(toolCall.output)}
-                  </pre>
-                </div>
-              </div>
-            </div>
-          );
-        })}
+        {toolCalls.map((toolCall, index) => (
+          <ToolCallRow key={`${toolCall.tool}-${index}`} toolCall={toolCall} />
+        ))}
       </div>
     </details>
   );

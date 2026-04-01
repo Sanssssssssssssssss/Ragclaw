@@ -25,6 +25,7 @@ except ImportError:  # pragma: no cover - fallback for running inside backend cw
 
 DEFAULT_BASE_URL = "http://127.0.0.1:8015"
 DEFAULT_OUTPUT_PATH = BACKEND_DIR / "storage" / "benchmarks" / "pdf_targeted_after_focus.json"
+INGESTION_ERRORS_PATH = BACKEND_DIR / "storage" / "knowledge" / "derived" / "ingestion_errors.json"
 PDF_TARGETED_SLICES: tuple[tuple[str, str], ...] = (
     ("retrieval", "cross_file_aggregation"),
     ("grounding", "compare"),
@@ -60,6 +61,10 @@ def main() -> int:
         else:
             index_status = runner.get_knowledge_index_status()
         indexed_types = runner.indexed_source_types()
+        manifest_stats = {}
+        if INGESTION_ERRORS_PATH.exists():
+            payload = json.loads(INGESTION_ERRORS_PATH.read_text(encoding="utf-8"))
+            manifest_stats = payload.get("stats", {}) if isinstance(payload, dict) else {}
 
         results: list[dict] = []
         for rag_subtype, question_type in PDF_TARGETED_SLICES:
@@ -85,6 +90,7 @@ def main() -> int:
             },
             "knowledge_index_status": index_status,
             "indexed_source_types": sorted(indexed_types),
+            "knowledge_build_stats": manifest_stats,
             "summary": summarize_results(results),
             "cases": results,
         }

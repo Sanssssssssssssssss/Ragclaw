@@ -1,9 +1,9 @@
 "use client";
 
-import { memo, useDeferredValue, useMemo } from "react";
+import { memo } from "react";
 import { MessageSquare, Plus, Trash2 } from "lucide-react";
 
-import { useChatStore, useSessionStore } from "@/lib/store";
+import { useFeedStore, useSessionStore } from "@/lib/store";
 
 /**
  * Returns one preview string from a raw text input and truncates long message bodies for the sidebar list.
@@ -38,12 +38,8 @@ const RawMessagePreview = memo(function RawMessagePreview({
 export function Sidebar() {
   const { sessions, currentSessionId, selectSession, createNewSession, removeSession } =
     useSessionStore();
-  const { messages } = useChatStore();
-  const deferredMessages = useDeferredValue(messages);
-  const previewMessages = useMemo(
-    () => deferredMessages.slice(-8).reverse(),
-    [deferredMessages]
-  );
+  const { messageFeed } = useFeedStore();
+  const previewMessages = [...messageFeed].reverse();
 
   return (
     <aside className="panel flex h-full min-h-0 flex-col rounded-[28px] p-4">

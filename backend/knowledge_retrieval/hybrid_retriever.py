@@ -34,6 +34,7 @@ class HybridRetriever:
         path_filters: list[str] | None = None,
         query_hints: list[str] | None = None,
         query_plan: QueryPlan | None = None,
+        chunk_types: list[str] | None = None,
     ) -> HybridRetrievalResult:
         plan = query_plan or build_query_plan(query)
         variants = list(plan.query_variants) or [query]
@@ -45,12 +46,14 @@ class HybridRetriever:
                 variant,
                 top_k=max(top_k * 2, top_k),
                 path_filters=path_filters,
+                chunk_types=chunk_types,
             )
             bm25_hits = knowledge_indexer.retrieve_bm25(
                 variant,
                 top_k=max(top_k * 2, top_k),
                 path_filters=path_filters,
                 query_hints=list(query_hints or []) + list(plan.keyword_hints) + list(plan.entity_hints),
+                chunk_types=chunk_types,
             )
 
             all_vector.extend(
@@ -64,6 +67,13 @@ class HybridRetriever:
                     parent_id=item.parent_id,
                     query_variant=variant,
                     supporting_children=item.supporting_children,
+                    page=item.page,
+                    bbox=item.bbox,
+                    element_type=item.element_type,
+                    section_title=item.section_title,
+                    derived_json_path=item.derived_json_path,
+                    derived_markdown_path=item.derived_markdown_path,
+                    chunk_type=item.chunk_type,
                 )
                 for item in vector_hits
             )
@@ -78,6 +88,13 @@ class HybridRetriever:
                     parent_id=item.parent_id,
                     query_variant=variant,
                     supporting_children=item.supporting_children,
+                    page=item.page,
+                    bbox=item.bbox,
+                    element_type=item.element_type,
+                    section_title=item.section_title,
+                    derived_json_path=item.derived_json_path,
+                    derived_markdown_path=item.derived_markdown_path,
+                    chunk_type=item.chunk_type,
                 )
                 for item in bm25_hits
             )

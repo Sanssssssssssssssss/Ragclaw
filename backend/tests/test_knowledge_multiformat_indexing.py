@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import sys
 import unittest
 from pathlib import Path
@@ -10,8 +11,12 @@ if str(BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(BACKEND_DIR))
 
 from knowledge_retrieval.indexer import KnowledgeIndexer
+from knowledge_retrieval.opendataloader_pdf import _build_pdf_chunks
 from knowledge_retrieval.orchestrator import knowledge_orchestrator
 from knowledge_retrieval.types import Evidence, HybridRetrievalResult
+
+
+FIXTURE_PATH = Path(__file__).resolve().parent / "fixtures" / "opendataloader_pdf_sample.json"
 
 
 class KnowledgeMultiformatIndexingTests(unittest.IsolatedAsyncioTestCase):
@@ -20,13 +25,24 @@ class KnowledgeMultiformatIndexingTests(unittest.IsolatedAsyncioTestCase):
         self.indexer.configure(BACKEND_DIR)
 
     def test_pdf_chunks_include_page_metadata(self) -> None:
-        pdf_path = BACKEND_DIR / "knowledge" / "Financial Report Data" / "三一重工 2025 Q3.pdf"
-        chunks = self.indexer._split_pdf(pdf_path)
+        payload = json.loads(FIXTURE_PATH.read_text(encoding="utf-8"))
+        chunks, _ = _build_pdf_chunks(
+            base_dir=BACKEND_DIR,
+            source_relative="knowledge/Financial Report Data/sample.pdf",
+            json_payload=payload,
+            derived_paths={
+                "derived_json_path": "storage/knowledge/derived/opendataloader/knowledge/Financial Report Data/sample/document.json",
+                "derived_markdown_path": "storage/knowledge/derived/opendataloader/knowledge/Financial Report Data/sample/document.md",
+            },
+            has_struct_tree=True,
+        )
 
         self.assertTrue(chunks)
-        self.assertEqual(chunks[0]["source_path"], "knowledge/Financial Report Data/三一重工 2025 Q3.pdf")
+        self.assertEqual(chunks[0]["source_path"], "knowledge/Financial Report Data/sample.pdf")
         self.assertEqual(chunks[0]["source_type"], "pdf")
         self.assertIn("page", chunks[0])
+        self.assertIn("bbox", chunks[0])
+        self.assertIn("element_type", chunks[0])
         self.assertEqual(chunks[0]["file_type"], "pdf")
 
     def test_excel_chunks_include_sheet_metadata(self) -> None:
@@ -44,22 +60,28 @@ class KnowledgeMultiformatIndexingTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_orchestrator_uses_formal_pdf_and_excel_retrieval_without_skill(self) -> None:
         pdf_vector = Evidence(
-            source_path="knowledge/Financial Report Data/三一重工 2025 Q3.pdf",
+            source_path="knowledge/Financial Report Data/sample.pdf",
             source_type="pdf",
-            locator="page 1 / paragraph 1",
+            locator="页 1 / heading #10",
             snippet="Revenue detail from the indexed PDF chunk.",
             channel="vector",
             score=0.9,
-            parent_id="knowledge/Financial Report Data/三一重工 2025 Q3.pdf::page::1",
+            parent_id="knowledge/Financial Report Data/sample.pdf::element::10",
+            page=1,
+            bbox=[10.0, 10.0, 200.0, 40.0],
+            element_type="heading",
         )
         pdf_bm25 = Evidence(
-            source_path="knowledge/Financial Report Data/三一重工 2025 Q3.pdf",
+            source_path="knowledge/Financial Report Data/sample.pdf",
             source_type="pdf",
-            locator="page 1 / paragraph 2",
+            locator="页 2 / table #20",
             snippet="Loss detail from the indexed PDF chunk.",
             channel="bm25",
             score=1.8,
-            parent_id="knowledge/Financial Report Data/三一重工 2025 Q3.pdf::page::1",
+            parent_id="knowledge/Financial Report Data/sample.pdf::table::20",
+            page=2,
+            bbox=[10.0, 200.0, 500.0, 360.0],
+            element_type="table",
         )
         xlsx_vector = Evidence(
             source_path="knowledge/E-commerce Data/sales_orders.xlsx",
