@@ -8,6 +8,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
 from graph.agent import agent_manager
+from harness.adapters import ChatTraceShadowState, build_chat_runtime, consume_legacy_chat_event
 
 router = APIRouter()
 
@@ -59,6 +60,19 @@ async def chat(payload: ChatRequest):
         segments: list[dict[str, Any]] = []
         current_segment = _new_segment()
         conversation_saved = False
+        runtime = None
+        run_handle = None
+        shadow_state = None
+        run_finalized = False
+
+        if getattr(agent_manager, "base_dir", None) is not None:
+            runtime = build_chat_runtime(agent_manager.base_dir)
+            run_handle = runtime.begin_run(
+                user_message=payload.message,
+                session_id=payload.session_id,
+                source="chat_api",
+            )
+            shadow_state = ChatTraceShadowState()
 
         def persist_segments(fallback_content: str | None = None) -> None:
             nonlocal current_segment, conversation_saved
@@ -97,6 +111,10 @@ async def chat(payload: ChatRequest):
         try:
             async for event in agent_manager.astream(payload.message, history):
                 event_type = event["type"]
+                if runtime is not None and run_handle is not None and shadow_state is not None:
+                    should_forward = consume_legacy_chat_event(runtime, run_handle.run_id, event, shadow_state)
+                    if not should_forward:
+                        continue
 
                 if event_type == "token":
                     current_segment["content"] += event.get("content", "")
@@ -135,6 +153,16 @@ async def chat(payload: ChatRequest):
                     if event.get("usage"):
                         current_segment["usage"] = event["usage"]
                     persist_segments()
+                    if not run_finalized and runtime is not None and run_handle is not None and shadow_state is not None:
+                        runtime.complete_run(
+                            run_handle.run_id,
+                            final_answer=shadow_state.final_answer,
+                            route_intent=shadow_state.route_intent,
+                            used_skill=shadow_state.used_skill,
+                            tool_names=tuple(shadow_state.tool_names),
+                            retrieval_sources=tuple(shadow_state.retrieval_sources),
+                        )
+                        run_finalized = True
 
                 data = {key: value for key, value in event.items() if key != "type"}
                 yield _sse(event_type, data)
@@ -148,6 +176,16 @@ async def chat(payload: ChatRequest):
                     )
         except Exception as exc:
             persist_segments(fallback_content=f"请求失败: {str(exc) or 'unknown error'}")
+            if not run_finalized and runtime is not None and run_handle is not None and shadow_state is not None:
+                runtime.fail_run(
+                    run_handle.run_id,
+                    error_message=str(exc) or "unknown error",
+                    route_intent=shadow_state.route_intent,
+                    used_skill=shadow_state.used_skill,
+                    tool_names=tuple(shadow_state.tool_names),
+                    retrieval_sources=tuple(shadow_state.retrieval_sources),
+                )
+                run_finalized = True
             yield _sse("error", {"error": str(exc)})
 
     if payload.stream:

@@ -163,6 +163,8 @@ class AgentConstraintTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(any(event["type"] == "retrieval" for event in events))
         self.assertEqual(events[-1]["type"], "done")
         self.assertIn("\u5fae\u8c03", events[-1]["content"])
+        self.assertTrue(any(event["type"] == "_harness_route" for event in events))
+        self.assertTrue(any(event["type"] == "_harness_skill" for event in events))
 
     async def test_terminal_only_constraints_skip_knowledge_and_filter_tools(self) -> None:
         knowledge_called = False

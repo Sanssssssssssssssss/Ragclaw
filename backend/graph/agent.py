@@ -1276,6 +1276,8 @@ class AgentManager:
 
         strategy, routing_decision = await self.resolve_routing(message, history)
         skill_decision = self.decide_skill(message, history, strategy, routing_decision)
+        yield {"type": "_harness_route", "decision": routing_decision.to_dict()}
+        yield {"type": "_harness_skill", "decision": skill_decision.to_dict()}
         rag_mode = runtime_config.get_rag_mode()
         augmented_history = list(history)
         if rag_mode and strategy.allow_retrieval:
