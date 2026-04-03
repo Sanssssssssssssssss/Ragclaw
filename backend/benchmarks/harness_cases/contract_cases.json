@@ -1,0 +1,88 @@
+{
+  "cases": [
+    {
+      "case_id": "contract_direct",
+      "suite": "contract",
+      "runner": "contract_lifecycle",
+      "scenario": "direct_answer",
+      "message": "contract_direct message",
+      "session_id": "contract-direct",
+      "tags": ["smoke", "direct", "contract"],
+      "difficulty": "smoke",
+      "expect": {
+        "retrieval": false,
+        "tool": false,
+        "failure": false,
+        "queue": false,
+        "answer_fragment": "contract_direct answer"
+      }
+    },
+    {
+      "case_id": "contract_knowledge",
+      "suite": "contract",
+      "runner": "contract_lifecycle",
+      "scenario": "knowledge_qa",
+      "message": "contract_knowledge message",
+      "session_id": "contract-knowledge",
+      "tags": ["smoke", "knowledge", "contract"],
+      "difficulty": "smoke",
+      "expect": {
+        "retrieval": true,
+        "tool": false,
+        "failure": false,
+        "queue": false,
+        "answer_fragment": "contract_knowledge answer"
+      }
+    },
+    {
+      "case_id": "contract_tool",
+      "suite": "contract",
+      "runner": "contract_lifecycle",
+      "scenario": "tool_path",
+      "message": "contract_tool message",
+      "session_id": "contract-tool",
+      "tags": ["smoke", "tool", "contract"],
+      "difficulty": "smoke",
+      "expect": {
+        "retrieval": false,
+        "tool": true,
+        "failure": false,
+        "queue": false,
+        "answer_fragment": "a.txt"
+      }
+    },
+    {
+      "case_id": "contract_failure",
+      "suite": "contract",
+      "runner": "contract_lifecycle",
+      "scenario": "direct_answer",
+      "message": "contract_failure message",
+      "session_id": "contract-failure",
+      "tags": ["failure", "contract"],
+      "difficulty": "smoke",
+      "expect": {
+        "retrieval": false,
+        "tool": false,
+        "failure": true,
+        "queue": false
+      }
+    },
+    {
+      "case_id": "contract_queue",
+      "suite": "contract",
+      "runner": "contract_lifecycle",
+      "scenario": "direct_answer",
+      "message": "contract_queue message",
+      "session_id": "contract-queued",
+      "tags": ["queue", "contract"],
+      "difficulty": "smoke",
+      "expect": {
+        "retrieval": false,
+        "tool": false,
+        "failure": false,
+        "queue": true,
+        "answer_fragment": "contract_queue answer"
+      }
+    }
+  ]
+}

@@ -1,0 +1,825 @@
+from __future__ import annotations
+
+import asyncio
+import json
+import tempfile
+import time
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
+from pathlib import Path
+from types import SimpleNamespace
+from typing import Any, Literal
+from unittest.mock import patch
+
+from graph.agent import AgentManager
+from graph.execution_strategy import ExecutionStrategy
+from graph.lightweight_router import RoutingDecision
+from graph.skill_gate import SkillDecision
+from harness.executors import HarnessExecutors
+from harness.graders import KnowledgeAnswerGrader
+from harness.policy import SessionSerialQueue
+from harness.runtime import HarnessRuntime, RuntimeDependencies
+from harness.trace_store import RunTraceStore
+from knowledge_retrieval.types import Evidence, OrchestratedRetrievalResult, RetrievalStep
+
+
+SuiteName = Literal["contract", "integration", "scalable", "all"]
+RunnerName = Literal["contract_lifecycle", "integration_lifecycle", "route_skill", "guard"]
+
+
+DEFAULT_CASE_FILES: dict[str, Path] = {
+    "contract": Path(__file__).resolve().parent / "harness_cases" / "contract_cases.json",
+    "integration": Path(__file__).resolve().parent / "harness_cases" / "integration_cases.json",
+    "scalable": Path(__file__).resolve().parent / "harness_cases" / "scalable_cases.json",
+}
+
+
+@dataclass(frozen=True)
+class BenchmarkCase:
+    case_id: str
+    suite: str
+    runner: RunnerName
+    difficulty: str = "smoke"
+    tags: tuple[str, ...] = ()
+    scenario: str = ""
+    message: str = ""
+    session_id: str = ""
+    answer: str = ""
+    expect: dict[str, Any] = field(default_factory=dict)
+    retrieval_result: dict[str, Any] | None = None
+
+
+def _load_cases_from_file(path: Path) -> list[BenchmarkCase]:
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    loaded: list[BenchmarkCase] = []
+    for raw in payload.get("cases", []):
+        loaded.append(
+            BenchmarkCase(
+                case_id=str(raw["case_id"]),
+                suite=str(raw.get("suite", path.stem.replace("_cases", ""))),
+                runner=str(raw["runner"]),  # type: ignore[arg-type]
+                difficulty=str(raw.get("difficulty", "smoke")),
+                tags=tuple(str(tag) for tag in raw.get("tags", [])),
+                scenario=str(raw.get("scenario", "")),
+                message=str(raw.get("message", "")),
+                session_id=str(raw.get("session_id", "")),
+                answer=str(raw.get("answer", "")),
+                expect=dict(raw.get("expect", {})),
+                retrieval_result=dict(raw["retrieval_result"]) if raw.get("retrieval_result") is not None else None,
+            )
+        )
+    return loaded
+
+
+def resolve_case_files(suite: str, extra_case_files: list[str] | None = None) -> list[Path]:
+    paths: list[Path] = []
+    if suite == "all":
+        paths.extend(DEFAULT_CASE_FILES.values())
+    else:
+        paths.append(DEFAULT_CASE_FILES[suite])
+    for item in extra_case_files or []:
+        paths.append(Path(item))
+    deduped: list[Path] = []
+    seen: set[Path] = set()
+    for path in paths:
+        resolved = path.resolve()
+        if resolved not in seen:
+            seen.add(resolved)
+            deduped.append(resolved)
+    return deduped
+
+
+def load_cases(
+    *,
+    suite: str,
+    extra_case_files: list[str] | None = None,
+    tag: str | None = None,
+    limit: int | None = None,
+) -> list[BenchmarkCase]:
+    cases: list[BenchmarkCase] = []
+    for path in resolve_case_files(suite, extra_case_files):
+        cases.extend(_load_cases_from_file(path))
+    if suite != "all":
+        cases = [case for case in cases if case.suite == suite]
+    if tag:
+        cases = [case for case in cases if tag in case.tags]
+    if limit is not None:
+        cases = cases[: max(0, int(limit))]
+    return cases
+
+
+def _safe_rate(numerator: int, denominator: int) -> float:
+    if denominator <= 0:
+        return 0.0
+    return round(numerator / denominator, 4)
+
+
+def _result_metric_average(results: list[dict[str, Any]], key: str) -> float | None:
+    applicable = [item[key] for item in results if item.get(key) is not None]
+    if not applicable:
+        return None
+    true_count = sum(1 for item in applicable if bool(item))
+    return _safe_rate(true_count, len(applicable))
+
+
+def summarize_results(results: list[dict[str, Any]]) -> dict[str, Any]:
+    total = len(results)
+    passed = sum(1 for item in results if item.get("status") == "passed")
+    summary: dict[str, Any] = {
+        "total_cases": total,
+        "passed_cases": passed,
+        "failed_cases": total - passed,
+        "route_trace_presence": _result_metric_average(results, "route_trace_present"),
+        "retrieval_trace_presence": _result_metric_average(results, "retrieval_trace_present"),
+        "tool_trace_presence": _result_metric_average(results, "tool_trace_present"),
+        "guard_presence": _result_metric_average(results, "guard_present"),
+        "completion_integrity": _result_metric_average(results, "completion_integrity"),
+        "queue_integrity": _result_metric_average(results, "queue_integrity"),
+        "trace_completeness": _result_metric_average(results, "trace_completeness"),
+        "final_answer_presence": _result_metric_average(results, "final_answer_present"),
+        "route_correctness": _result_metric_average(results, "route_correct"),
+        "skill_decision_correctness": _result_metric_average(results, "skill_correct"),
+        "guard_correctness": _result_metric_average(results, "guard_correct"),
+        "tool_result_to_final_answer_reflection": _result_metric_average(results, "tool_result_reflected"),
+    }
+
+    numeric_cases = [item for item in results if item.get("counts_numeric") is True]
+    locator_cases = [item for item in results if item.get("counts_locator") is True]
+    numeric_blocked = sum(1 for item in numeric_cases if item.get("actual_guard"))
+    locator_blocked = sum(1 for item in locator_cases if item.get("actual_guard"))
+    summary["unsupported_numeric_hallucination_rate"] = (
+        round(1.0 - (numeric_blocked / len(numeric_cases)), 4) if numeric_cases else None
+    )
+    summary["unsupported_locator_hallucination_rate"] = (
+        round(1.0 - (locator_blocked / len(locator_cases)), 4) if locator_cases else None
+    )
+    return summary
+
+
+def _trace_event_names(trace: dict[str, Any]) -> list[str]:
+    return [str(item.get("name", "")) for item in trace.get("events", [])]
+
+
+class _NoRouterAllowed:
+    async def route(self, **_kwargs):
+        raise AssertionError("benchmark unexpectedly required the LLM router")
+
+
+class _BenchmarkToolMessage:
+    def __init__(
+        self,
+        *,
+        message_type: str,
+        content: str = "",
+        tool_calls=None,
+        tool_call_id: str = "",
+        name: str = "",
+    ) -> None:
+        self.type = message_type
+        self.content = content
+        self.tool_calls = list(tool_calls or [])
+        self.tool_call_id = tool_call_id
+        self.name = name
+
+
+class _BenchmarkToolAgent:
+    def __init__(self, case_id: str, tool_output: str = "a.txt\nb.txt") -> None:
+        self._case_id = case_id
+        self._tool_output = tool_output
+
+    async def astream(self, _inputs, stream_mode=None):
+        call_id = f"{self._case_id}-tool"
+        yield (
+            "updates",
+            {
+                "tool_node": {
+                    "messages": [
+                        _BenchmarkToolMessage(
+                            message_type="ai",
+                            tool_calls=[{"id": call_id, "name": "terminal", "args": {"command": "Get-ChildItem"}}],
+                        )
+                    ]
+                }
+            },
+        )
+        yield (
+            "updates",
+            {
+                "tool_node": {
+                    "messages": [
+                        _BenchmarkToolMessage(
+                            message_type="tool",
+                            content=self._tool_output,
+                            tool_call_id=call_id,
+                            name="terminal",
+                        )
+                    ]
+                }
+            },
+        )
+
+
+class ContractBenchmarkAgentManager(AgentManager):
+    """Controlled provider for fast contract regressions, still executed through real HarnessExecutors."""
+
+    def __init__(self, case_specs: dict[str, BenchmarkCase]) -> None:
+        super().__init__()
+        self._case_specs = case_specs
+        self.base_dir = Path(__file__).resolve().parents[1]
+        self.tools = [SimpleNamespace(name="terminal"), SimpleNamespace(name="fetch_url")]
+        self._lightweight_router = _NoRouterAllowed()
+
+    def _spec_for_message(self, message: str) -> BenchmarkCase:
+        return self._case_specs[str(message or "").strip()]
+
+    async def resolve_routing(self, message: str, history: list[dict[str, Any]]) -> tuple[ExecutionStrategy, RoutingDecision]:
+        spec = self._spec_for_message(message)
+        if spec.scenario == "knowledge_qa":
+            return (
+                ExecutionStrategy(allow_tools=False, allow_knowledge=True, allow_retrieval=True),
+                RoutingDecision(
+                    intent="knowledge_qa",
+                    needs_tools=False,
+                    needs_retrieval=True,
+                    allowed_tools=(),
+                    confidence=1.0,
+                    reason_short=spec.scenario,
+                    source="benchmark",
+                    subtype="",
+                ),
+            )
+        if spec.scenario == "tool_path":
+            return (
+                ExecutionStrategy(allow_tools=True, allow_knowledge=False, allow_retrieval=False),
+                RoutingDecision(
+                    intent="workspace_file_ops",
+                    needs_tools=True,
+                    needs_retrieval=False,
+                    allowed_tools=("terminal",),
+                    confidence=1.0,
+                    reason_short=spec.scenario,
+                    source="benchmark",
+                    subtype="search_workspace_file",
+                ),
+            )
+        return (
+            ExecutionStrategy(allow_tools=False, allow_knowledge=False, allow_retrieval=False, force_direct_answer=True),
+            RoutingDecision(
+                intent="direct_answer",
+                needs_tools=False,
+                needs_retrieval=False,
+                allowed_tools=(),
+                confidence=1.0,
+                reason_short=spec.scenario,
+                source="benchmark",
+                subtype="",
+            ),
+        )
+
+    def decide_skill(
+        self,
+        message: str,
+        history: list[dict[str, Any]],
+        strategy: ExecutionStrategy,
+        routing_decision: RoutingDecision,
+    ) -> SkillDecision:
+        return SkillDecision(False, "", 0.0, "contract benchmark disables skills")
+
+    def _runtime_rag_mode(self) -> bool:
+        return False
+
+    def _knowledge_system_prompt(self) -> str:
+        return "Contract benchmark knowledge prompt"
+
+    async def _astream_model_answer(
+        self,
+        messages: list[dict[str, str]],
+        extra_instructions: list[str] | None = None,
+        system_prompt_override: str | None = None,
+    ):
+        spec = self._spec_for_message(messages[-1]["content"])
+        if spec.expect.get("failure"):
+            raise RuntimeError(f"{spec.case_id} failed")
+        final_text = str(spec.expect.get("answer_fragment", "") or f"{spec.case_id} answer")
+        if spec.expect.get("queue") or spec.case_id.endswith("_holder"):
+            await asyncio.sleep(0.1)
+        midpoint = max(1, len(final_text) // 2)
+        yield {"type": "token", "content": final_text[:midpoint]}
+        yield {"type": "token", "content": final_text[midpoint:]}
+        yield {"type": "done", "content": final_text, "usage": {"input_tokens": 10, "output_tokens": 4}}
+
+    def _resolve_tools_for_strategy(self, strategy: ExecutionStrategy) -> list[Any]:
+        if not strategy.allow_tools:
+            return []
+        return [tool for tool in self.tools if getattr(tool, "name", "") == "terminal"]
+
+    def _build_agent(self, extra_instructions=None, tools_override=None):
+        return _BenchmarkToolAgent("contract_tool")
+
+    def _build_knowledge_scaffold(self, message: str, retrieval_result) -> str:
+        return ""
+
+    def _knowledge_answer_instructions(self, retrieval_result) -> list[str]:
+        return ["Use the evidence only."]
+
+
+class IntegrationBenchmarkSupport:
+    """Minimal controlled doubles around a real AgentManager capability path."""
+
+    def __init__(self, case_specs: dict[str, BenchmarkCase]) -> None:
+        self.case_specs = case_specs
+
+    def spec_for_message(self, message: str) -> BenchmarkCase:
+        normalized = str(message or "").strip()
+        for case in self.case_specs.values():
+            if case.message == normalized:
+                return case
+        raise KeyError(f"unknown benchmark case message: {message}")
+
+    async def model_answer(self, messages: list[dict[str, str]], extra_instructions=None, system_prompt_override=None):
+        spec = self.spec_for_message(messages[-1]["content"])
+        if spec.expect.get("failure"):
+            raise RuntimeError(f"{spec.case_id} failed")
+        if spec.scenario == "knowledge_qa":
+            final_text = "knowledge_case answer"
+        elif spec.scenario == "guarded_knowledge":
+            final_text = "Revenue was 100 billion based on page 7."
+        elif spec.scenario == "tool_path" and extra_instructions and any("tool calls already succeeded" in item.lower() for item in extra_instructions):
+            final_text = "Found files: a.txt and b.txt."
+        elif spec.case_id == "integration_queue_holder":
+            final_text = "Queue holder answer."
+        else:
+            final_text = str(spec.expect.get("answer_fragment", "") or spec.case_id)
+        if spec.case_id == "integration_queue_holder":
+            await asyncio.sleep(0.1)
+        midpoint = max(1, len(final_text) // 2)
+        yield {"type": "token", "content": final_text[:midpoint]}
+        yield {"type": "token", "content": final_text[midpoint:]}
+        yield {"type": "done", "content": final_text, "usage": {"input_tokens": 10, "output_tokens": 4}}
+
+    async def knowledge_astream(self, message: str):
+        spec = self.spec_for_message(message)
+        snippet = "knowledge_case answer"
+        question_type = "direct_fact"
+        if spec.scenario == "guarded_knowledge":
+            snippet = "Revenue was 10 billion."
+            question_type = "compare"
+        evidence = Evidence(
+            source_path="knowledge/report.pdf",
+            source_type="pdf",
+            locator="page 1",
+            snippet=snippet,
+            channel="fused",
+            score=0.9,
+        )
+        step = RetrievalStep(
+            kind="knowledge",
+            stage="fused",
+            title="Knowledge retrieval",
+            message="benchmark retrieval",
+            results=[evidence],
+        )
+        result = OrchestratedRetrievalResult(
+            status="success",
+            evidences=[evidence],
+            steps=[step],
+            reason="benchmark retrieval",
+            question_type=question_type,
+            entity_hints=["benchmark"],
+        )
+        yield {"type": "orchestrated_result", "result": result}
+
+    def build_agent(self, extra_instructions=None, tools_override=None):
+        return _BenchmarkToolAgent("integration_tool")
+
+
+def _lifecycle_case_result(case: BenchmarkCase, trace: dict[str, Any], elapsed_ms: int) -> dict[str, Any]:
+    event_names = _trace_event_names(trace)
+    outcome = trace.get("outcome") or {}
+    final_answer = str(outcome.get("final_answer", "") or "")
+    expect = case.expect
+    route_present = "route.decided" in event_names
+    retrieval_present = "retrieval.started" in event_names and "retrieval.completed" in event_names
+    tool_present = "tool.started" in event_names and "tool.completed" in event_names
+    guard_present = "guard.failed" in event_names
+    final_answer_present = "answer.completed" in event_names and bool(final_answer.strip())
+    completion_integrity = (
+        ("run.failed" in event_names and outcome.get("status") == "failed")
+        if expect.get("failure")
+        else ("run.completed" in event_names and outcome.get("status") == "completed")
+    )
+    queue_integrity = (("run.queued" in event_names and "run.dequeued" in event_names) if expect.get("queue") else True)
+    tool_reflection = (str(expect.get("answer_fragment", "") or "") in final_answer) if expect.get("answer_fragment") else True
+    route_correct = True if not expect.get("route_intent") else outcome.get("route_intent") == expect.get("route_intent")
+    skill_correct = True if "skill_name" not in expect else (outcome.get("used_skill", "") or "") == str(expect.get("skill_name", ""))
+    guard_correct = True if "guard" not in expect else guard_present == bool(expect.get("guard"))
+    trace_completeness = route_present and completion_integrity and queue_integrity and tool_reflection and route_correct and skill_correct and guard_correct
+    if not expect.get("failure"):
+        trace_completeness = trace_completeness and final_answer_present
+    if expect.get("retrieval"):
+        trace_completeness = trace_completeness and retrieval_present
+    if expect.get("tool"):
+        trace_completeness = trace_completeness and tool_present
+
+    missing: list[str] = []
+    if not route_present:
+        missing.append("route_trace_missing")
+    if expect.get("retrieval") and not retrieval_present:
+        missing.append("retrieval_trace_missing")
+    if expect.get("tool") and not tool_present:
+        missing.append("tool_trace_missing")
+    if not completion_integrity:
+        missing.append("completion_integrity_failed")
+    if not queue_integrity:
+        missing.append("queue_integrity_failed")
+    if not tool_reflection:
+        missing.append("answer_reflection_failed")
+    if not route_correct:
+        missing.append("route_incorrect")
+    if not skill_correct:
+        missing.append("skill_incorrect")
+    if not guard_correct:
+        missing.append("guard_incorrect")
+
+    return {
+        "case_id": case.case_id,
+        "suite": case.suite,
+        "runner": case.runner,
+        "scenario": case.scenario,
+        "tags": list(case.tags),
+        "difficulty": case.difficulty,
+        "run_id": trace["metadata"]["run_id"],
+        "status": "passed" if trace_completeness else "failed",
+        "failure_reason": ",".join(missing),
+        "route_trace_present": route_present,
+        "retrieval_trace_present": retrieval_present if expect.get("retrieval") else None,
+        "tool_trace_present": tool_present if expect.get("tool") else None,
+        "guard_present": guard_present if "guard" in expect else None,
+        "completion_integrity": completion_integrity,
+        "queue_integrity": queue_integrity if expect.get("queue") else None,
+        "final_answer_present": final_answer_present if not expect.get("failure") else None,
+        "tool_result_reflected": tool_reflection if expect.get("answer_fragment") else None,
+        "route_correct": route_correct if "route_intent" in expect else None,
+        "skill_correct": skill_correct if "skill_name" in expect else None,
+        "guard_correct": guard_correct if "guard" in expect else None,
+        "trace_completeness": trace_completeness,
+        "latency_ms": elapsed_ms,
+        "event_names": event_names,
+        "outcome": outcome,
+        "counts_numeric": None,
+        "counts_locator": None,
+        "actual_guard": None,
+    }
+
+
+async def _fake_contract_knowledge_astream(message: str, case_specs: dict[str, BenchmarkCase]):
+    case = case_specs[str(message or "").strip()]
+    snippet = str(case.expect.get("answer_fragment", "") or f"{case.case_id} answer")
+    evidence = Evidence(
+        source_path="knowledge/report.pdf",
+        source_type="pdf",
+        locator="page 1",
+        snippet=snippet,
+        channel="fused",
+        score=0.9,
+    )
+    step = RetrievalStep(
+        kind="knowledge",
+        stage="fused",
+        title="Knowledge retrieval",
+        message="contract retrieval",
+        results=[evidence],
+    )
+    result = OrchestratedRetrievalResult(
+        status="success",
+        evidences=[evidence],
+        steps=[step],
+        reason="contract retrieval",
+        question_type="direct_fact",
+        entity_hints=["contract"],
+    )
+    yield {"type": "orchestrated_result", "result": result}
+
+
+async def _run_case_through_runtime(
+    *,
+    runtime: HarnessRuntime,
+    executor: HarnessExecutors,
+    case: BenchmarkCase,
+    history: list[dict[str, Any]] | None = None,
+    suppress_failures: bool = True,
+) -> tuple[str, int]:
+    started = time.perf_counter()
+    events = [
+        event
+        async for event in runtime.run_with_executor(
+            user_message=case.message,
+            session_id=case.session_id or None,
+            source="benchmark",
+            executor=executor,
+            history=list(history or []),
+            suppress_failures=suppress_failures,
+        )
+    ]
+    elapsed_ms = int((time.perf_counter() - started) * 1000)
+    if not events:
+        raise RuntimeError(f"no events produced for case {case.case_id}")
+    return events[0].run_id, elapsed_ms
+
+
+async def _run_contract_lifecycle_cases(cases: list[BenchmarkCase]) -> list[dict[str, Any]]:
+    case_specs = {case.message: case for case in cases}
+    with tempfile.TemporaryDirectory() as temp_dir:
+        root = Path(temp_dir)
+        runtime = HarnessRuntime(
+            RuntimeDependencies(
+                trace_store=RunTraceStore(root / "runs"),
+                queue=SessionSerialQueue(lambda: datetime.now(timezone.utc).isoformat()),
+            )
+        )
+        manager = ContractBenchmarkAgentManager(case_specs)
+        executor = HarnessExecutors(manager)
+        results: list[dict[str, Any]] = []
+
+        queue_holders: dict[str, BenchmarkCase] = {}
+        for case in cases:
+            if case.expect.get("queue"):
+                holder = BenchmarkCase(
+                    case_id=f"{case.case_id}_holder",
+                    suite=case.suite,
+                    runner=case.runner,
+                    scenario="direct_answer",
+                    message=f"{case.case_id}_holder message",
+                    session_id=case.session_id,
+                    tags=("queue", "holder"),
+                    difficulty=case.difficulty,
+                    expect={"answer_fragment": f"{case.case_id}_holder answer"},
+                )
+                queue_holders[case.case_id] = holder
+                case_specs[holder.message] = holder
+
+        async def _run_one(case: BenchmarkCase) -> tuple[str, int]:
+            with patch("harness.executors.knowledge_orchestrator.astream", side_effect=lambda message: _fake_contract_knowledge_astream(message, case_specs)):
+                return await _run_case_through_runtime(runtime=runtime, executor=executor, case=case)
+
+        for case in cases:
+            if case.expect.get("queue"):
+                holder = queue_holders[case.case_id]
+                holder_task = asyncio.create_task(_run_one(holder))
+                await asyncio.sleep(0.02)
+                run_id, elapsed_ms = await _run_one(case)
+                await holder_task
+            else:
+                run_id, elapsed_ms = await _run_one(case)
+            trace = runtime._deps.trace_store.read_trace(run_id)  # noqa: SLF001
+            results.append(_lifecycle_case_result(case, trace, elapsed_ms))
+        return results
+
+
+async def _run_integration_lifecycle_cases(cases: list[BenchmarkCase]) -> list[dict[str, Any]]:
+    case_specs = {case.message: case for case in cases}
+    support = IntegrationBenchmarkSupport(case_specs)
+    with tempfile.TemporaryDirectory() as temp_dir:
+        root = Path(temp_dir)
+        runtime = HarnessRuntime(
+            RuntimeDependencies(
+                trace_store=RunTraceStore(root / "runs"),
+                queue=SessionSerialQueue(lambda: datetime.now(timezone.utc).isoformat()),
+            )
+        )
+        manager = AgentManager()
+        manager.base_dir = Path(__file__).resolve().parents[1]
+        manager.tools = [
+            SimpleNamespace(name="fetch_url"),
+            SimpleNamespace(name="read_file"),
+            SimpleNamespace(name="terminal"),
+            SimpleNamespace(name="python_repl"),
+        ]
+        manager._lightweight_router = _NoRouterAllowed()
+        manager._astream_model_answer = support.model_answer  # type: ignore[method-assign]
+        manager._build_agent = support.build_agent  # type: ignore[method-assign]
+        executor = HarnessExecutors(manager)
+        results: list[dict[str, Any]] = []
+
+        queue_holders: dict[str, BenchmarkCase] = {}
+        for case in cases:
+            if case.expect.get("queue"):
+                holder = BenchmarkCase(
+                    case_id="integration_queue_holder",
+                    suite=case.suite,
+                    runner=case.runner,
+                    scenario="direct_answer",
+                    message=f"{case.case_id} queue holder message",
+                    session_id=case.session_id,
+                    tags=("queue", "holder"),
+                    difficulty=case.difficulty,
+                    expect={"route_intent": "direct_answer", "answer_fragment": "Queue holder answer."},
+                )
+                queue_holders[case.case_id] = holder
+                case_specs[holder.message] = holder
+
+        async def _run_one(case: BenchmarkCase) -> tuple[str, int]:
+            with patch("harness.executors.memory_indexer.retrieve", return_value=[]), patch(
+                "harness.executors.knowledge_orchestrator.astream",
+                side_effect=support.knowledge_astream,
+            ):
+                return await _run_case_through_runtime(runtime=runtime, executor=executor, case=case)
+
+        for case in cases:
+            if case.expect.get("queue"):
+                holder = queue_holders[case.case_id]
+                holder_task = asyncio.create_task(_run_one(holder))
+                await asyncio.sleep(0.02)
+                run_id, elapsed_ms = await _run_one(case)
+                await holder_task
+            else:
+                run_id, elapsed_ms = await _run_one(case)
+            trace = runtime._deps.trace_store.read_trace(run_id)  # noqa: SLF001
+            results.append(_lifecycle_case_result(case, trace, elapsed_ms))
+        return results
+
+
+async def _run_route_skill_cases(cases: list[BenchmarkCase]) -> list[dict[str, Any]]:
+    manager = AgentManager()
+    manager.tools = [
+        SimpleNamespace(name="fetch_url"),
+        SimpleNamespace(name="read_file"),
+        SimpleNamespace(name="terminal"),
+        SimpleNamespace(name="python_repl"),
+    ]
+    manager._lightweight_router = _NoRouterAllowed()
+    results: list[dict[str, Any]] = []
+    for case in cases:
+        started = time.perf_counter()
+        strategy, decision = await manager.resolve_routing(case.message, [])
+        skill_decision = manager.decide_skill(case.message, [], strategy, decision)
+        route_ok = decision.intent == str(case.expect.get("route_intent", "") or "")
+        skill_ok = (skill_decision.skill_name or "") == str(case.expect.get("skill_name", "") or "") and bool(skill_decision.use_skill) == bool(case.expect.get("skill_name"))
+        elapsed_ms = int((time.perf_counter() - started) * 1000)
+        results.append(
+            {
+                "case_id": case.case_id,
+                "suite": case.suite,
+                "runner": case.runner,
+                "scenario": case.scenario,
+                "tags": list(case.tags),
+                "difficulty": case.difficulty,
+                "status": "passed" if route_ok and skill_ok else "failed",
+                "failure_reason": "" if route_ok and skill_ok else "route_or_skill_mismatch",
+                "route_trace_present": None,
+                "retrieval_trace_present": None,
+                "tool_trace_present": None,
+                "guard_present": None,
+                "completion_integrity": True,
+                "queue_integrity": None,
+                "final_answer_present": None,
+                "tool_result_reflected": None,
+                "route_correct": route_ok,
+                "skill_correct": skill_ok,
+                "guard_correct": None,
+                "trace_completeness": route_ok and skill_ok,
+                "latency_ms": elapsed_ms,
+                "event_names": [],
+                "outcome": {
+                    "route_intent": decision.intent,
+                    "used_skill": skill_decision.skill_name,
+                    "allowed_tools": list(decision.allowed_tools),
+                },
+                "counts_numeric": None,
+                "counts_locator": None,
+                "actual_guard": None,
+            }
+        )
+    return results
+
+
+def _dict_to_retrieval_result(payload: dict[str, Any]) -> OrchestratedRetrievalResult:
+    evidences = [
+        Evidence(
+            source_path=str(item.get("source_path", "") or ""),
+            source_type=str(item.get("source_type", "pdf") or "pdf"),
+            locator=str(item.get("locator", "") or ""),
+            snippet=str(item.get("snippet", "") or ""),
+            channel=str(item.get("channel", "fused") or "fused"),  # type: ignore[arg-type]
+            score=float(item.get("score")) if item.get("score") is not None else None,
+        )
+        for item in payload.get("evidences", []) or []
+    ]
+    return OrchestratedRetrievalResult(
+        status=str(payload.get("status", "success") or "success"),
+        evidences=evidences,
+        steps=[],
+        fallback_used=bool(payload.get("fallback_used", False)),
+        reason=str(payload.get("reason", "") or ""),
+        question_type=str(payload.get("question_type", "direct_fact") or "direct_fact"),
+        entity_hints=[str(item) for item in payload.get("entity_hints", []) or []],
+    )
+
+
+def _run_guard_cases(cases: list[BenchmarkCase]) -> list[dict[str, Any]]:
+    grader = KnowledgeAnswerGrader(AgentManager())
+    results: list[dict[str, Any]] = []
+    for case in cases:
+        started = time.perf_counter()
+        retrieval_result = _dict_to_retrieval_result(case.retrieval_result or {})
+        decision = grader.grade(case.answer, retrieval_result)
+        actual_trigger = decision.guard_result.details.get("trigger", "") if decision.guard_result is not None else ""
+        expect_guard = bool(case.expect.get("guard"))
+        expected_trigger = str(case.expect.get("trigger", "") or "")
+        guard_ok = decision.downgraded == expect_guard and actual_trigger == expected_trigger
+        elapsed_ms = int((time.perf_counter() - started) * 1000)
+        results.append(
+            {
+                "case_id": case.case_id,
+                "suite": case.suite,
+                "runner": case.runner,
+                "scenario": case.scenario,
+                "tags": list(case.tags),
+                "difficulty": case.difficulty,
+                "status": "passed" if guard_ok else "failed",
+                "failure_reason": "" if guard_ok else "guard_mismatch",
+                "route_trace_present": None,
+                "retrieval_trace_present": None,
+                "tool_trace_present": None,
+                "guard_present": decision.downgraded,
+                "completion_integrity": True,
+                "queue_integrity": None,
+                "final_answer_present": bool(str(decision.final_answer or "").strip()),
+                "tool_result_reflected": None,
+                "route_correct": None,
+                "skill_correct": None,
+                "guard_correct": guard_ok,
+                "trace_completeness": guard_ok,
+                "latency_ms": elapsed_ms,
+                "event_names": [],
+                "outcome": {
+                    "final_answer": decision.final_answer,
+                    "trigger": actual_trigger,
+                },
+                "counts_numeric": bool(case.expect.get("counts_numeric")),
+                "counts_locator": bool(case.expect.get("counts_locator")),
+                "actual_guard": decision.downgraded,
+            }
+        )
+    return results
+
+
+async def run_selected_benchmark(
+    *,
+    suite: SuiteName = "contract",
+    extra_case_files: list[str] | None = None,
+    tag: str | None = None,
+    limit: int | None = None,
+    output_path: str | Path | None = None,
+) -> dict[str, Any]:
+    started_at = datetime.now(timezone.utc).isoformat()
+    selected_cases = load_cases(suite=suite, extra_case_files=extra_case_files, tag=tag, limit=limit)
+    grouped: dict[str, list[BenchmarkCase]] = {}
+    for case in selected_cases:
+        grouped.setdefault(case.suite, []).append(case)
+
+    payload: dict[str, Any] = {
+        "started_at": started_at,
+        "selection": {
+            "suite": suite,
+            "tag": tag,
+            "limit": limit,
+            "case_files": [str(path) for path in resolve_case_files(suite, extra_case_files)],
+        },
+        "summary": {},
+        "suites": {},
+        "cases": [],
+    }
+
+    all_results: list[dict[str, Any]] = []
+    for suite_name, suite_cases in grouped.items():
+        suite_results: list[dict[str, Any]] = []
+        runners = {case.runner for case in suite_cases}
+        for runner in ("contract_lifecycle", "integration_lifecycle", "route_skill", "guard"):
+            if runner not in runners:
+                continue
+            runner_cases = [case for case in suite_cases if case.runner == runner]
+            if runner == "contract_lifecycle":
+                suite_results.extend(await _run_contract_lifecycle_cases(runner_cases))
+            elif runner == "integration_lifecycle":
+                suite_results.extend(await _run_integration_lifecycle_cases(runner_cases))
+            elif runner == "route_skill":
+                suite_results.extend(await _run_route_skill_cases(runner_cases))
+            elif runner == "guard":
+                suite_results.extend(_run_guard_cases(runner_cases))
+
+        payload["suites"][suite_name] = {
+            "summary": summarize_results(suite_results),
+            "cases": suite_results,
+        }
+        all_results.extend(suite_results)
+
+    payload["summary"] = summarize_results(all_results)
+    payload["cases"] = all_results
+    payload["completed_at"] = datetime.now(timezone.utc).isoformat()
+
+    if output_path is not None:
+        path = Path(output_path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    return payload

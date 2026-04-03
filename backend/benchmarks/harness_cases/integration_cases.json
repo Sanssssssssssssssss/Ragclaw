@@ -1,0 +1,100 @@
+{
+  "cases": [
+    {
+      "case_id": "integration_direct",
+      "suite": "integration",
+      "runner": "integration_lifecycle",
+      "scenario": "direct_answer",
+      "message": "Explain what TCP is in one paragraph. Do not use tools.",
+      "session_id": "integration-direct",
+      "tags": ["smoke", "direct", "integration"],
+      "difficulty": "smoke",
+      "expect": {
+        "route_intent": "direct_answer",
+        "skill_name": "",
+        "retrieval": false,
+        "tool": false,
+        "failure": false,
+        "queue": false,
+        "answer_fragment": "TCP"
+      }
+    },
+    {
+      "case_id": "integration_knowledge",
+      "suite": "integration",
+      "runner": "integration_lifecycle",
+      "scenario": "knowledge_qa",
+      "message": "Based on the knowledge base, which report mentions SANY?",
+      "session_id": "integration-knowledge",
+      "tags": ["smoke", "knowledge", "integration"],
+      "difficulty": "smoke",
+      "expect": {
+        "route_intent": "knowledge_qa",
+        "skill_name": "",
+        "retrieval": true,
+        "tool": false,
+        "failure": false,
+        "queue": false,
+        "answer_fragment": "knowledge_case answer"
+      }
+    },
+    {
+      "case_id": "integration_tool",
+      "suite": "integration",
+      "runner": "integration_lifecycle",
+      "scenario": "tool_path",
+      "message": "Read the workspace directory and list the files.",
+      "session_id": "integration-tool",
+      "tags": ["smoke", "tool", "integration"],
+      "difficulty": "smoke",
+      "expect": {
+        "route_intent": "workspace_file_ops",
+        "skill_name": "",
+        "retrieval": false,
+        "tool": true,
+        "failure": false,
+        "queue": false,
+        "answer_fragment": "a.txt"
+      }
+    },
+    {
+      "case_id": "integration_guarded",
+      "suite": "integration",
+      "runner": "integration_lifecycle",
+      "scenario": "guarded_knowledge",
+      "message": "Based on the knowledge base, what is the exact revenue number?",
+      "session_id": "integration-guard",
+      "tags": ["guard", "knowledge", "integration"],
+      "difficulty": "medium",
+      "expect": {
+        "route_intent": "knowledge_qa",
+        "skill_name": "",
+        "retrieval": true,
+        "tool": false,
+        "failure": false,
+        "queue": false,
+        "guard": true,
+        "answer_fragment": "当前知识库命中了相关来源"
+      }
+    },
+    {
+      "case_id": "integration_queue",
+      "suite": "integration",
+      "runner": "integration_lifecycle",
+      "scenario": "direct_answer",
+      "message": "Explain HTTP in one sentence. Do not use tools.",
+      "session_id": "integration-queued",
+      "tags": ["queue", "integration"],
+      "difficulty": "medium",
+      "expect": {
+        "route_intent": "direct_answer",
+        "skill_name": "",
+        "retrieval": false,
+        "tool": false,
+        "failure": false,
+        "queue": true,
+        "answer_fragment": "HTTP"
+      }
+    }
+  ]
+}
