@@ -14,9 +14,10 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from benchmarks.harness_benchmark_lib import run_selected_benchmark
+from benchmarks.storage_layout import harness_output_path
 
 
-DEFAULT_OUTPUT_PATH = BACKEND_DIR / "storage" / "benchmarks" / "harness_benchmark_latest.json"
+DEFAULT_OUTPUT_PATH = harness_output_path()
 
 
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:

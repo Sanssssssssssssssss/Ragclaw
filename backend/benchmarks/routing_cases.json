@@ -22,7 +22,7 @@
 
   {"id":"compute_001","bucket":"computation_or_transformation","input":"读取 knowledge/E-commerce Data/faq.json，统计总记录数，并给出前 3 条 question。","expected_intent":"computation_or_transformation","expected_allowed_tools":["python_repl"]},
   {"id":"compute_002","bucket":"computation_or_transformation","input":"Count how many rows are in knowledge/E-commerce Data/sales_orders.xlsx and summarize the columns.","expected_intent":"computation_or_transformation","expected_allowed_tools":["python_repl"]},
-  {"id":"compute_003","bucket":"computation_or_transformation","input":"解析 backend/storage/benchmarks/latest.json，统计 skipped_cases 数量。","expected_intent":"computation_or_transformation","expected_allowed_tools":["python_repl"]},
+  {"id":"compute_003","bucket":"computation_or_transformation","input":"解析 backend/storage/benchmarks/rag/general/latest.json，统计 skipped_cases 数量。","expected_intent":"computation_or_transformation","expected_allowed_tools":["python_repl"]},
   {"id":"compute_004","bucket":"computation_or_transformation","input":"计算 knowledge/E-commerce Data/faq.json 里 question 字段去重后有多少种。","expected_intent":"computation_or_transformation","expected_allowed_tools":["python_repl"]},
   {"id":"compute_005","bucket":"computation_or_transformation","input":"Parse backend/config.json and tell me whether rag_mode is enabled.","expected_intent":"computation_or_transformation","expected_allowed_tools":["python_repl"]},
   {"id":"compute_006","bucket":"computation_or_transformation","input":"转换 knowledge/E-commerce Data/faq.json 的前 5 条记录为紧凑表格。","expected_intent":"computation_or_transformation","expected_allowed_tools":["python_repl"]},

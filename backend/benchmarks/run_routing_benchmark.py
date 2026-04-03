@@ -17,10 +17,11 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from graph.agent import AgentManager
+from benchmarks.storage_layout import routing_output_path
 
 
 DEFAULT_CASES_PATH = Path(__file__).resolve().with_name("routing_cases.json")
-DEFAULT_OUTPUT_PATH = BACKEND_DIR / "storage" / "benchmarks" / "routing_benchmark_latest.json"
+DEFAULT_OUTPUT_PATH = routing_output_path()
 
 
 def parse_args() -> argparse.Namespace:
