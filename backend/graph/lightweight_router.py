@@ -32,6 +32,22 @@ COMPUTE_SUBTYPES = {
 
 ALL_SUBTYPES = WORKSPACE_SUBTYPES | COMPUTE_SUBTYPES
 
+ROUTER_CAPABILITY_GUIDE = """Intent guide:
+- direct_answer: explanation, summarization, translation, rewriting, or simple arithmetic that does not need external state.
+- knowledge_qa: indexed knowledge-base questions, report/source lookup, grounded report comparison, or requests that explicitly depend on retrieval evidence.
+- workspace_file_ops: local repo or workspace files, path search, reading a known file, or modifying/running something in the workspace.
+- computation_or_transformation: structured calculation, parsing, code execution, or file-backed analysis.
+- web_lookup: live/current online facts, official docs, links, news, pricing, or weather.
+
+Tool guide:
+- read_file: known file content only.
+- terminal: search/list workspace files or run workspace commands.
+- python_repl: structured computation, parsing, transforms, or code execution.
+- fetch_url: live web pages, links, docs, and weather.
+
+Prefer the narrowest route and smallest tool set that can solve the request.
+If the request is ambiguous, keep confidence lower and choose the most likely path."""
+
 WEB_LOOKUP_PATTERNS = (
     re.compile(r"https?://", re.IGNORECASE),
     re.compile(r"\b(url|website|webpage|web|online|internet|look up|search online)\b", re.IGNORECASE),
@@ -241,6 +257,15 @@ def _is_workspace_request(message: str) -> bool:
     return False
 
 
+def _has_explicit_workspace_anchor(message: str) -> bool:
+    normalized = str(message or "").strip().lower()
+    return bool(
+        re.search(r"(knowledge/|workspace/|memory/|storage/|backend/)", normalized, re.IGNORECASE)
+        or any(token in normalized for token in ("repo", "repository", "config.py", "readme", "user.md"))
+        or any(token in message for token in ("工作区", "仓库", "本地文件", "后端代码"))
+    )
+
+
 def _is_knowledge_request(message: str) -> bool:
     normalized = str(message or "").strip()
     return any(pattern.search(normalized) for pattern in KNOWLEDGE_PATTERNS)
@@ -252,6 +277,17 @@ def _has_explicit_doc_seek(message: str) -> bool:
         re.search(r"(给出|返回).{0,12}(路径|来源)", normalized)
         or re.search(r"(哪份|哪个|哪张|那个|那份).{0,30}(文档|文件|报告|财报|路径|来源)", normalized)
         or re.search(r"\b(which|what)\b.{0,24}\b(file|document|report|path|source)\b", normalized, re.IGNORECASE)
+    )
+
+
+def _has_stable_knowledge_anchor(message: str) -> bool:
+    normalized = str(message or "").strip()
+    lowered = normalized.lower()
+    return bool(
+        "knowledge base" in lowered
+        or "based on the knowledge" in lowered
+        or "from the knowledge" in lowered
+        or any(token in normalized for token in ("知识库", "根据知识库", "基于知识库", "从知识库"))
     )
 
 
@@ -304,7 +340,7 @@ def deterministic_route(
             subtype=subtype,
         )
 
-    if strategy.allow_tools and _is_workspace_request(normalized):
+    if strategy.allow_tools and _is_workspace_request(normalized) and (_has_explicit_workspace_anchor(normalized) or not explicit_doc_seek):
         subtype = _workspace_subtype(normalized)
         if (
             subtype != "modify_or_run_in_workspace"
@@ -344,7 +380,7 @@ def deterministic_route(
             term in lowered for term in ("rewrite", "summarize", "translate", "改写", "总结", "翻译")
         ) else ""
         if direct_subtype == "pure_text_transformation" or (
-            not explicit_doc_seek and not _is_workspace_request(normalized) and not _is_knowledge_request(normalized)
+            not explicit_doc_seek and not _is_workspace_request(normalized) and not _has_stable_knowledge_anchor(normalized)
         ):
             return RoutingDecision(
                 intent="direct_answer",
@@ -394,25 +430,20 @@ def deterministic_route(
             subtype=subtype,
         )
 
-    if is_knowledge_query and strategy.allow_knowledge and strategy.allow_retrieval and not prefer_tool_agent:
+    if (
+        is_knowledge_query
+        and _has_stable_knowledge_anchor(normalized)
+        and strategy.allow_knowledge
+        and strategy.allow_retrieval
+        and not prefer_tool_agent
+    ):
         return RoutingDecision(
             intent="knowledge_qa",
             needs_tools=False,
             needs_retrieval=True,
             allowed_tools=(),
             confidence=0.95,
-            reason_short="clear knowledge request",
-            source="rules",
-        )
-
-    if explicit_doc_seek and strategy.allow_knowledge and strategy.allow_retrieval and not _is_workspace_request(normalized):
-        return RoutingDecision(
-            intent="knowledge_qa",
-            needs_tools=False,
-            needs_retrieval=True,
-            allowed_tools=(),
-            confidence=0.82,
-            reason_short="document-seeking prefers knowledge",
+            reason_short="explicit knowledge-base request",
             source="rules",
         )
 
@@ -491,11 +522,13 @@ class LightweightLLMRouter:
         )
         if mode == "resolver":
             system += " Resolve ambiguity carefully and keep output minimal."
+        system += "\n" + ROUTER_CAPABILITY_GUIDE
         user = (
             f"latest_message: {message}\n"
             f"recent_context: {history_excerpt}\n"
             f"hard_constraints: {hard_constraints}\n"
-            "Return JSON with keys: intent, subtype, needs_tools, needs_retrieval, allowed_tools, confidence, reason_short."
+            "Return JSON with keys: intent, subtype, needs_tools, needs_retrieval, allowed_tools, confidence, reason_short.\n"
+            "Keep reason_short very short and do not include chain-of-thought."
         )
         return [
             {"role": "system", "content": system},

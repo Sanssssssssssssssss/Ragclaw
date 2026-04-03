@@ -89,6 +89,17 @@ class LightweightRouterTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(decision.subtype, "pure_text_transformation")
         self.assertEqual(decision.allowed_tools, ())
 
+    def test_fuzzy_doc_seeking_now_defers_to_llm_router(self) -> None:
+        strategy = parse_execution_strategy("I want that healthcare report and its source path.")
+        decision = deterministic_route(
+            message="I want that healthcare report and its source path.",
+            strategy=strategy,
+            tool_names=("fetch_url", "python_repl", "read_file", "terminal"),
+            is_knowledge_query=True,
+            prefer_tool_agent=False,
+        )
+        self.assertIsNone(decision)
+
     async def test_resolve_routing_skips_llm_when_rules_are_clear(self) -> None:
         with patch.object(self.manager._lightweight_router, "route", new_callable=AsyncMock) as mocked_route:
             _strategy, decision = await self.manager.resolve_routing(

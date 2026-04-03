@@ -113,6 +113,18 @@ def skill_inventory() -> list[dict[str, Any]]:
     return [profile.to_dict() for profile in SKILL_INVENTORY]
 
 
+def skill_prompt_cards() -> list[str]:
+    cards: list[str] = []
+    for profile in SKILL_INVENTORY:
+        if not profile.enabled:
+            continue
+        cards.append(
+            f"- {profile.skill_name}: good for {profile.good_for} "
+            f"Bad for {profile.bad_for} Requires tools: {', '.join(profile.required_tools) or 'none'}."
+        )
+    return cards
+
+
 def _has_required_tools(required_tools: tuple[str, ...], allowed_tools: tuple[str, ...]) -> bool:
     if not required_tools:
         return True
@@ -124,12 +136,16 @@ def _has_required_tools(required_tools: tuple[str, ...], allowed_tools: tuple[st
 
 def _is_weather_request(message: str) -> bool:
     normalized = str(message or "").strip()
-    return any(pattern.search(normalized) for pattern in WEATHER_PATTERNS)
+    return any(pattern.search(normalized) for pattern in WEATHER_PATTERNS) or any(
+        term in normalized for term in ("天气", "预报", "气温", "下雨", "降雨", "风力", "风速")
+    )
 
 
 def _is_web_search_request(message: str) -> bool:
     normalized = str(message or "").strip()
-    return any(pattern.search(normalized) for pattern in WEB_SEARCH_PATTERNS)
+    return any(pattern.search(normalized) for pattern in WEB_SEARCH_PATTERNS) or any(
+        term in normalized for term in ("最新", "当前", "官网", "文档", "新闻", "价格", "主页", "链接", "网上结果", "在线资料")
+    )
 
 
 def _is_localish_request(message: str, history: list[dict[str, Any]]) -> bool:
@@ -199,8 +215,9 @@ def skill_instruction(skill_name: str) -> list[str]:
     if skill_name == "web-search":
         return [
             "Use the local web-search skill workflow for this request.",
+            "Use it only for live/current online facts, official docs, links, pricing, or news.",
             "Stay on web lookup only; do not switch into workspace or knowledge-base search.",
-            "Return the final answer with the fetched links or sources.",
+            "If the fetched result is partial, answer conservatively and surface the best links or sources you actually obtained.",
         ]
     if skill_name == "get_weather":
         return [

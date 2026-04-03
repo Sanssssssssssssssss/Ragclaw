@@ -22,7 +22,7 @@ DEFAULT_OUTPUT_PATH = harness_output_path()
 
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run the layered harness benchmark suites.")
-    parser.add_argument("--suite", choices=("contract", "integration", "scalable", "all"), default="contract")
+    parser.add_argument("--suite", choices=("contract", "integration", "hard", "scalable", "all"), default="contract")
     parser.add_argument("--case-file", action="append", default=[], help="Additional case file to load.")
     parser.add_argument("--tag", default=None, help="Only run cases containing one tag.")
     parser.add_argument("--limit", type=int, default=None, help="Limit loaded cases after filtering.")

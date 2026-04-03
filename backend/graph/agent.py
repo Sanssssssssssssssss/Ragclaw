@@ -10,7 +10,7 @@ from graph.execution_strategy import ExecutionStrategy, parse_execution_strategy
 from graph.lightweight_router import RoutingDecision, LightweightLLMRouter, deterministic_route
 from graph.memory_indexer import memory_indexer
 from graph.prompt_builder import build_knowledge_system_prompt, build_system_prompt
-from graph.skill_gate import SkillDecision, SkillGate, skill_instruction
+from graph.skill_gate import SkillDecision, SkillGate, skill_instruction, skill_prompt_cards
 from graph.session_manager import SessionManager
 from knowledge_retrieval import knowledge_orchestrator
 from token_utils import count_tokens
@@ -1009,8 +1009,7 @@ class AgentManager:
             instructions.extend(
                 [
                     "For compare questions, keep company, field, and period aligned.",
-                    "Use the scaffold slot values verbatim when you write any table or bullet list.",
-                    "Do not create a second summary table with recomputed values that differ from the scaffold.",
+                    "Use the scaffold slot values directly instead of recomputing them.",
                     "Do not turn yoy percentages into absolute values or vice versa.",
                     "If one company has a missing slot, keep that company-level field as 当前证据未显示 instead of saying the whole knowledge base lacks it.",
                 ]
@@ -1020,16 +1019,14 @@ class AgentManager:
                 [
                     "For multi-hop questions, cover each requested constraint separately.",
                     "If one required constraint is missing, keep the answer partial.",
-                    "If the scaffold enumerates multiple requested items, mention each supported item separately and do not pretend a missing second item is covered.",
+                    "If the scaffold enumerates multiple requested items, mention each supported item separately.",
                 ]
             )
         if question_type == "negation":
             instructions.extend(
                 [
                     "For negation questions, only conclude losses or negative values when evidence shows them directly.",
-                    "If direct negative evidence exists, quote that supported value instead of summarizing it away.",
-                    "If the scaffold marks weak fragments only, mention those fragmentary indicators but say they are insufficient for the stronger negative conclusion.",
-                    "Do not say the evidence contains only title information when the scaffold already includes financial fragments.",
+                    "If direct negative evidence is missing, stay conservative instead of forcing a stronger conclusion.",
                 ]
             )
         return instructions
@@ -1214,14 +1211,24 @@ class AgentManager:
                 unsupported_locators=unsupported_locators,
             )
 
-        unsupported_inference_terms = self._unsupported_high_risk_inference_terms(answer, support_corpus)
-        if unsupported_inference_terms:
-            return self._build_conservative_knowledge_answer(retrieval_result)
-
         if getattr(retrieval_result, "status", "") in {"partial", "not_found"} and self._all_sources_are_directory_guides(retrieval_result):
             return self._build_conservative_knowledge_answer(retrieval_result)
 
         return answer
+
+    def _capability_decision_cards(self) -> list[str]:
+        cards = [
+            "Capability guide:",
+            "- Direct answer: use when the request can be solved from reasoning or rewriting without external state.",
+            "- Knowledge retrieval: use for indexed reports, grounded source lookup, comparisons, or evidence-bound report questions.",
+            "- read_file: use only for a known specific local file.",
+            "- terminal: use for searching/listing workspace files or running workspace commands.",
+            "- python_repl: use for structured calculations, parsing, or file-backed transforms.",
+            "- fetch_url: use for live online facts, official docs, links, and weather.",
+            "- If a tool or retrieval result is partial or noisy, answer conservatively and only reflect what it actually supports.",
+        ]
+        cards.extend(skill_prompt_cards())
+        return cards
 
     def _tool_agent_instructions(self, strategy: ExecutionStrategy, skill_decision: SkillDecision | None = None) -> list[str]:
         """Return tool-agent instructions from one execution strategy input."""
@@ -1230,7 +1237,9 @@ class AgentManager:
             "If you use any tool, you must always produce a final natural-language answer for the user after the tool results arrive.",
             "Do not stop at an action announcement such as saying you will use a tool.",
             "When tool output is sufficient, summarize the result directly and clearly.",
+            "Choose the narrowest useful capability instead of opening extra tools or switching problem types.",
         ]
+        instructions.extend(self._capability_decision_cards())
         if skill_decision and skill_decision.use_skill and skill_decision.skill_name:
             instructions.extend(skill_instruction(skill_decision.skill_name))
         instructions.extend(strategy.to_instructions())

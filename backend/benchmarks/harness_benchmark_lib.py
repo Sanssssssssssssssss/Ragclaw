@@ -16,20 +16,21 @@ from graph.execution_strategy import ExecutionStrategy
 from graph.lightweight_router import RoutingDecision
 from graph.skill_gate import SkillDecision
 from harness.executors import HarnessExecutors
-from harness.graders import KnowledgeAnswerGrader
+from harness.graders import HarnessBenchmarkJudge, KnowledgeAnswerGrader
 from harness.policy import SessionSerialQueue
 from harness.runtime import HarnessRuntime, RuntimeDependencies
 from harness.trace_store import RunTraceStore
 from knowledge_retrieval.types import Evidence, OrchestratedRetrievalResult, RetrievalStep
 
 
-SuiteName = Literal["contract", "integration", "scalable", "all"]
+SuiteName = Literal["contract", "integration", "hard", "scalable", "all"]
 RunnerName = Literal["contract_lifecycle", "integration_lifecycle", "route_skill", "guard"]
 
 
 DEFAULT_CASE_FILES: dict[str, Path] = {
     "contract": Path(__file__).resolve().parent / "harness_cases" / "contract_cases.json",
     "integration": Path(__file__).resolve().parent / "harness_cases" / "integration_cases.json",
+    "hard": Path(__file__).resolve().parent / "harness_cases" / "hard_cases.json",
     "scalable": Path(__file__).resolve().parent / "harness_cases" / "scalable_cases.json",
 }
 
@@ -141,6 +142,7 @@ def summarize_results(results: list[dict[str, Any]]) -> dict[str, Any]:
         "skill_decision_correctness": _result_metric_average(results, "skill_correct"),
         "guard_correctness": _result_metric_average(results, "guard_correct"),
         "tool_result_to_final_answer_reflection": _result_metric_average(results, "tool_result_reflected"),
+        "judge_pass_rate": _result_metric_average(results, "judge_passed"),
     }
 
     numeric_cases = [item for item in results if item.get("counts_numeric") is True]
@@ -153,6 +155,19 @@ def summarize_results(results: list[dict[str, Any]]) -> dict[str, Any]:
     summary["unsupported_locator_hallucination_rate"] = (
         round(1.0 - (locator_blocked / len(locator_cases)), 4) if locator_cases else None
     )
+    judge_dimensions: dict[str, list[bool]] = {}
+    for item in results:
+        judge = item.get("judge_result") or {}
+        dimensions = judge.get("dimensions") or {}
+        if not isinstance(dimensions, dict):
+            continue
+        for key, value in dimensions.items():
+            judge_dimensions.setdefault(str(key), []).append(bool(value))
+    if judge_dimensions:
+        summary["judge_dimensions"] = {
+            key: _safe_rate(sum(1 for value in values if value), len(values))
+            for key, values in sorted(judge_dimensions.items())
+        }
     return summary
 
 
@@ -163,6 +178,30 @@ def _trace_event_names(trace: dict[str, Any]) -> list[str]:
 class _NoRouterAllowed:
     async def route(self, **_kwargs):
         raise AssertionError("benchmark unexpectedly required the LLM router")
+
+
+class _ScenarioRouter:
+    def __init__(self, case_specs: dict[str, BenchmarkCase]) -> None:
+        self._case_specs = case_specs
+
+    async def route(self, *, message: str, **_kwargs):
+        spec = self._case_specs[str(message or "").strip()]
+        payload = dict(spec.expect.get("llm_decision", {}) or {})
+        if not payload:
+            raise AssertionError(f"benchmark case {spec.case_id} expected no LLM routing fallback")
+        return RoutingDecision(
+            intent=str(payload.get("intent", spec.expect.get("route_intent", "direct_answer"))),
+            needs_tools=bool(payload.get("needs_tools", False)),
+            needs_retrieval=bool(payload.get("needs_retrieval", False)),
+            allowed_tools=tuple(str(item) for item in payload.get("allowed_tools", []) or []),
+            confidence=float(payload.get("confidence", 0.7) or 0.7),
+            reason_short=str(payload.get("reason_short", "benchmark router")),
+            source="benchmark_llm_router",
+            ambiguity_flags=tuple(str(item) for item in payload.get("ambiguity_flags", []) or []),
+            escalated=bool(payload.get("escalated", False)),
+            model_name=str(payload.get("model_name", "benchmark-router")),
+            subtype=str(payload.get("subtype", "") or ""),
+        )
 
 
 class _BenchmarkToolMessage:
@@ -183,40 +222,41 @@ class _BenchmarkToolMessage:
 
 
 class _BenchmarkToolAgent:
-    def __init__(self, case_id: str, tool_output: str = "a.txt\nb.txt") -> None:
+    def __init__(self, case_id: str, tool_outputs: list[str] | None = None) -> None:
         self._case_id = case_id
-        self._tool_output = tool_output
+        self._tool_outputs = list(tool_outputs or ["a.txt\nb.txt"])
 
     async def astream(self, _inputs, stream_mode=None):
-        call_id = f"{self._case_id}-tool"
-        yield (
-            "updates",
-            {
-                "tool_node": {
-                    "messages": [
-                        _BenchmarkToolMessage(
-                            message_type="ai",
-                            tool_calls=[{"id": call_id, "name": "terminal", "args": {"command": "Get-ChildItem"}}],
-                        )
-                    ]
-                }
-            },
-        )
-        yield (
-            "updates",
-            {
-                "tool_node": {
-                    "messages": [
-                        _BenchmarkToolMessage(
-                            message_type="tool",
-                            content=self._tool_output,
-                            tool_call_id=call_id,
-                            name="terminal",
-                        )
-                    ]
-                }
-            },
-        )
+        for index, output in enumerate(self._tool_outputs, start=1):
+            call_id = f"{self._case_id}-tool-{index}"
+            yield (
+                "updates",
+                {
+                    "tool_node": {
+                        "messages": [
+                            _BenchmarkToolMessage(
+                                message_type="ai",
+                                tool_calls=[{"id": call_id, "name": "terminal", "args": {"command": f"Get-ChildItem #{index}"}}],
+                            )
+                        ]
+                    }
+                },
+            )
+            yield (
+                "updates",
+                {
+                    "tool_node": {
+                        "messages": [
+                            _BenchmarkToolMessage(
+                                message_type="tool",
+                                content=output,
+                                tool_call_id=call_id,
+                                name="terminal",
+                            )
+                        ]
+                    }
+                },
+            )
 
 
 class ContractBenchmarkAgentManager(AgentManager):
@@ -314,7 +354,10 @@ class ContractBenchmarkAgentManager(AgentManager):
         return [tool for tool in self.tools if getattr(tool, "name", "") == "terminal"]
 
     def _build_agent(self, extra_instructions=None, tools_override=None):
-        return _BenchmarkToolAgent("contract_tool")
+        return _BenchmarkToolAgent(
+            "contract_tool",
+            tool_outputs=list(self._spec_for_message("contract_tool message").expect.get("tool_outputs", ["a.txt\nb.txt"])),
+        )
 
     def _build_knowledge_scaffold(self, message: str, retrieval_result) -> str:
         return ""
@@ -328,6 +371,7 @@ class IntegrationBenchmarkSupport:
 
     def __init__(self, case_specs: dict[str, BenchmarkCase]) -> None:
         self.case_specs = case_specs
+        self.active_case: BenchmarkCase | None = None
 
     def spec_for_message(self, message: str) -> BenchmarkCase:
         normalized = str(message or "").strip()
@@ -336,11 +380,16 @@ class IntegrationBenchmarkSupport:
                 return case
         raise KeyError(f"unknown benchmark case message: {message}")
 
+    def set_active_case(self, case: BenchmarkCase) -> None:
+        self.active_case = case
+
     async def model_answer(self, messages: list[dict[str, str]], extra_instructions=None, system_prompt_override=None):
         spec = self.spec_for_message(messages[-1]["content"])
         if spec.expect.get("failure"):
             raise RuntimeError(f"{spec.case_id} failed")
-        if spec.scenario == "knowledge_qa":
+        if spec.expect.get("model_answer"):
+            final_text = str(spec.expect.get("model_answer"))
+        elif spec.scenario == "knowledge_qa":
             final_text = "knowledge_case answer"
         elif spec.scenario == "guarded_knowledge":
             final_text = "Revenue was 100 billion based on page 7."
@@ -359,6 +408,9 @@ class IntegrationBenchmarkSupport:
 
     async def knowledge_astream(self, message: str):
         spec = self.spec_for_message(message)
+        if spec.retrieval_result is not None:
+            yield {"type": "orchestrated_result", "result": _dict_to_retrieval_result(spec.retrieval_result)}
+            return
         snippet = "knowledge_case answer"
         question_type = "direct_fact"
         if spec.scenario == "guarded_knowledge":
@@ -390,7 +442,10 @@ class IntegrationBenchmarkSupport:
         yield {"type": "orchestrated_result", "result": result}
 
     def build_agent(self, extra_instructions=None, tools_override=None):
-        return _BenchmarkToolAgent("integration_tool")
+        spec = self.active_case
+        tool_outputs = list((spec.expect.get("tool_outputs", ["a.txt\nb.txt"]) if spec is not None else ["a.txt\nb.txt"]))
+        case_id = spec.case_id if spec is not None else "integration_tool"
+        return _BenchmarkToolAgent(case_id, tool_outputs=tool_outputs)
 
 
 def _lifecycle_case_result(case: BenchmarkCase, trace: dict[str, Any], elapsed_ms: int) -> dict[str, Any]:
@@ -469,6 +524,8 @@ def _lifecycle_case_result(case: BenchmarkCase, trace: dict[str, Any], elapsed_m
         "counts_numeric": None,
         "counts_locator": None,
         "actual_guard": None,
+        "judge_passed": None,
+        "judge_result": None,
     }
 
 
@@ -595,7 +652,7 @@ async def _run_integration_lifecycle_cases(cases: list[BenchmarkCase]) -> list[d
             SimpleNamespace(name="terminal"),
             SimpleNamespace(name="python_repl"),
         ]
-        manager._lightweight_router = _NoRouterAllowed()
+        manager._lightweight_router = _ScenarioRouter(case_specs)
         manager._astream_model_answer = support.model_answer  # type: ignore[method-assign]
         manager._build_agent = support.build_agent  # type: ignore[method-assign]
         executor = HarnessExecutors(manager)
@@ -619,6 +676,7 @@ async def _run_integration_lifecycle_cases(cases: list[BenchmarkCase]) -> list[d
                 case_specs[holder.message] = holder
 
         async def _run_one(case: BenchmarkCase) -> tuple[str, int]:
+            support.set_active_case(case)
             with patch("harness.executors.memory_indexer.retrieve", return_value=[]), patch(
                 "harness.executors.knowledge_orchestrator.astream",
                 side_effect=support.knowledge_astream,
@@ -647,7 +705,7 @@ async def _run_route_skill_cases(cases: list[BenchmarkCase]) -> list[dict[str, A
         SimpleNamespace(name="terminal"),
         SimpleNamespace(name="python_repl"),
     ]
-    manager._lightweight_router = _NoRouterAllowed()
+    manager._lightweight_router = _ScenarioRouter({case.message: case for case in cases})
     results: list[dict[str, Any]] = []
     for case in cases:
         started = time.perf_counter()
@@ -688,6 +746,8 @@ async def _run_route_skill_cases(cases: list[BenchmarkCase]) -> list[dict[str, A
                 "counts_numeric": None,
                 "counts_locator": None,
                 "actual_guard": None,
+                "judge_passed": None,
+                "judge_result": None,
             }
         )
     return results
@@ -705,10 +765,32 @@ def _dict_to_retrieval_result(payload: dict[str, Any]) -> OrchestratedRetrievalR
         )
         for item in payload.get("evidences", []) or []
     ]
+    steps_payload = payload.get("steps", None)
+    if steps_payload:
+        steps = [
+            RetrievalStep(
+                kind=str(item.get("kind", "knowledge") or "knowledge"),
+                stage=str(item.get("stage", "fused") or "fused"),
+                title=str(item.get("title", "Knowledge retrieval") or "Knowledge retrieval"),
+                message=str(item.get("message", "") or ""),
+                results=evidences,
+            )
+            for item in steps_payload
+        ]
+    else:
+        steps = [
+            RetrievalStep(
+                kind="knowledge",
+                stage="fused",
+                title="Knowledge retrieval",
+                message=str(payload.get("reason", "") or "benchmark retrieval"),
+                results=evidences,
+            )
+        ] if evidences else []
     return OrchestratedRetrievalResult(
         status=str(payload.get("status", "success") or "success"),
         evidences=evidences,
-        steps=[],
+        steps=steps,
         fallback_used=bool(payload.get("fallback_used", False)),
         reason=str(payload.get("reason", "") or ""),
         question_type=str(payload.get("question_type", "direct_fact") or "direct_fact"),
@@ -759,9 +841,31 @@ def _run_guard_cases(cases: list[BenchmarkCase]) -> list[dict[str, Any]]:
                 "counts_numeric": bool(case.expect.get("counts_numeric")),
                 "counts_locator": bool(case.expect.get("counts_locator")),
                 "actual_guard": decision.downgraded,
+                "judge_passed": None,
+                "judge_result": None,
             }
         )
     return results
+
+
+def _apply_benchmark_judge(cases: list[BenchmarkCase], results: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    judge = HarnessBenchmarkJudge()
+    case_map = {case.case_id: case for case in cases}
+    judged: list[dict[str, Any]] = []
+    for result in results:
+        enriched = dict(result)
+        case = case_map.get(str(result.get("case_id", "")))
+        if case is None:
+            judged.append(enriched)
+            continue
+        verdict = judge.judge_case(case, result)
+        enriched["judge_passed"] = verdict.passed
+        enriched["judge_result"] = verdict.to_dict()
+        if enriched.get("status") == "passed" and not verdict.passed:
+            enriched["status"] = "failed"
+            enriched["failure_reason"] = (str(enriched.get("failure_reason", "") or "") + ";judge_failed").strip(";")
+        judged.append(enriched)
+    return judged
 
 
 async def run_selected_benchmark(
@@ -789,6 +893,7 @@ async def run_selected_benchmark(
         "summary": {},
         "suites": {},
         "cases": [],
+        "judge": {},
     }
 
     all_results: list[dict[str, Any]] = []
@@ -808,14 +913,19 @@ async def run_selected_benchmark(
             elif runner == "guard":
                 suite_results.extend(_run_guard_cases(runner_cases))
 
+        judged_suite_results = _apply_benchmark_judge(suite_cases, suite_results)
         payload["suites"][suite_name] = {
-            "summary": summarize_results(suite_results),
-            "cases": suite_results,
+            "summary": summarize_results(judged_suite_results),
+            "cases": judged_suite_results,
         }
-        all_results.extend(suite_results)
+        all_results.extend(judged_suite_results)
 
     payload["summary"] = summarize_results(all_results)
     payload["cases"] = all_results
+    payload["judge"] = {
+        "pass_rate": payload["summary"].get("judge_pass_rate"),
+        "dimensions": payload["summary"].get("judge_dimensions", {}),
+    }
     payload["completed_at"] = datetime.now(timezone.utc).isoformat()
 
     if output_path is not None:

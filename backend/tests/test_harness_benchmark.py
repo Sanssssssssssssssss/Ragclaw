@@ -86,6 +86,7 @@ class HarnessBenchmarkRunnerTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(stored["summary"]["total_cases"], 5)
             self.assertIn("contract", stored["suites"])
             self.assertEqual(payload["summary"]["trace_completeness"], 1.0)
+            self.assertIn("judge", stored)
             self.assertEqual(len(stored["cases"]), 5)
 
     async def test_integration_suite_smoke_case_uses_real_runner(self) -> None:
@@ -114,6 +115,21 @@ class HarnessBenchmarkRunnerTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(payload["summary"]["total_cases"], 3)
             self.assertIn("scalable", payload["suites"])
             self.assertEqual(len(payload["cases"]), 3)
+
+    async def test_hard_suite_exposes_judge_results(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output_path = Path(temp_dir) / "hard_suite.json"
+            payload = await run_selected_benchmark(
+                suite="hard",
+                limit=2,
+                output_path=output_path,
+            )
+            self.assertEqual(payload["selection"]["suite"], "hard")
+            self.assertIn("hard", payload["suites"])
+            self.assertIn("judge_pass_rate", payload["summary"])
+            self.assertIn("judge", payload)
+            self.assertEqual(len(payload["cases"]), 2)
+            self.assertTrue(all("judge_result" in item for item in payload["cases"]))
 
 
 class HarnessBenchmarkCliTests(unittest.TestCase):

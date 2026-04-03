@@ -138,8 +138,11 @@
       "tags": ["guard", "inference", "medium"],
       "difficulty": "medium",
       "expect": {
-        "guard": true,
-        "trigger": "unsupported_inference_terms"
+        "guard": false,
+        "judge": {
+          "unsupported_terms": ["亏损", "未盈利", "为负"],
+          "must_not_contain": ["公司已经亏损"]
+        }
       },
       "retrieval_result": {
         "status": "success",
