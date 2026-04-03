@@ -19,15 +19,15 @@ For the current architecture, read:
 
 Truthful status:
 
-- Round 0-4 goals are implemented
-- lifecycle ownership has moved into the harness runtime for the live chat path
+- Round 0-7 goals are now implemented on this branch
+- live chat lifecycle ownership sits in the harness runtime
+- traces, queueing, benchmark execution, and explicit guard events are all part of the real production path
 - `AgentManager` still remains a large dependency provider, so cleanup is not fully complete
 
 ## Scope
 
-This note documents an incremental migration from the current ad hoc runtime lifecycle to a thin harness control plane.
-It is grounded in the code paths currently present in this repository as of Round 0.
-This round does not change production behavior.
+This note originally documented the migration from the ad hoc runtime lifecycle to a harness control plane.
+It is now kept as migration history; the current live architecture is described in `HARNESS_ARCHITECTURE.md`.
 
 ## Current Architecture Summary
 
@@ -35,8 +35,8 @@ This round does not change production behavior.
 
 - FastAPI startup lives in [app.py](/D:/GPT_Project/RAG_Model/backend/app.py).
 - Chat execution begins at [chat.py](/D:/GPT_Project/RAG_Model/backend/api/chat.py) `POST /api/chat`.
-- `chat.py` loads session state from [session_manager.py](/D:/GPT_Project/RAG_Model/backend/graph/session_manager.py), then streams events from `agent_manager.astream(...)`.
-- `AgentManager` in [agent.py](/D:/GPT_Project/RAG_Model/backend/graph/agent.py) is the de facto runtime owner today.
+- `chat.py` loads session state from [session_manager.py](/D:/GPT_Project/RAG_Model/backend/graph/session_manager.py), then delegates live execution to the harness runtime.
+- `AgentManager` in [agent.py](/D:/GPT_Project/RAG_Model/backend/graph/agent.py) is no longer the live runtime owner; it now acts as a capability provider and compatibility facade.
 
 ### Execution lifecycle today
 

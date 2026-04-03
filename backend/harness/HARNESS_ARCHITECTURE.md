@@ -118,8 +118,9 @@ A harness-native benchmark runner now exists at:
 
 It validates:
 
-- lifecycle trace completeness
-- route and skill decision correctness for deterministic benchmark cases
+- lifecycle trace completeness through the real harness runtime
+- lifecycle coverage through the real `HarnessExecutors` contract
+- route and skill decision correctness for deterministic production-path cases
 - guard-case accuracy
 - unsupported numeric hallucination blocking
 - unsupported locator hallucination blocking
@@ -130,4 +131,11 @@ It validates:
 
 This branch has a real harness production path for live chat.
 
-It has also partially entered Round 5 because lifecycle ownership has moved into the harness runtime, but `AgentManager` is still a large capability facade rather than a minimal provider.
+It is now truthfully supportable as Round 7 because:
+
+- live chat runs through the harness runtime as the real execution owner
+- route / retrieval / tool / answer / guard / queue lifecycle all emit canonical traced events
+- a harness-native benchmark exists and runs against the real runtime contract
+- tests cover runtime lifecycle, queueing, trace persistence, chat integration, guard behavior, and benchmark execution
+
+`AgentManager` is still a large capability facade rather than a minimal provider, but that is remaining cleanup debt rather than a blocker to Round 7.
