@@ -18,6 +18,10 @@ def harness_output_path(filename: str = "harness_benchmark_latest.json") -> Path
     return benchmark_dir("harness") / filename
 
 
+def harness_live_output_path(filename: str = "harness_live_validation_latest.json") -> Path:
+    return benchmark_dir("harness", "live") / filename
+
+
 def routing_output_path(filename: str = "routing_benchmark_latest.json") -> Path:
     return benchmark_dir("routing") / filename
 
@@ -44,6 +48,8 @@ def classify_benchmark_entry(path: Path) -> Path | None:
 
     if name.startswith("harness_benchmark"):
         return benchmark_dir("harness") / name
+    if name.startswith("harness_live_validation"):
+        return benchmark_dir("harness", "live") / name
     if name.startswith("routing_benchmark"):
         return benchmark_dir("routing") / name
     if name.startswith("skill_gate_benchmark"):

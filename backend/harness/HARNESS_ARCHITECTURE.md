@@ -4,6 +4,11 @@
 
 This branch now runs the live chat path through the harness runtime.
 
+Round 8 and Round 9 are also complete on this branch:
+
+- Round 8: obsolete legacy execution duplication has been removed, leaving the harness path as the real production path
+- Round 9: a real HTTP-level live validation runner exists to verify queueing, failure, guard, tool, and session boundaries against the running program
+
 The current architecture is:
 
 1. `backend/api/chat.py`
@@ -116,6 +121,10 @@ A harness-native benchmark runner now exists at:
 
 - `backend/benchmarks/run_harness_benchmark.py`
 
+A live production-path validation runner also exists at:
+
+- `backend/benchmarks/run_harness_live_validation.py`
+
 It validates:
 
 - lifecycle trace completeness through the real harness runtime
@@ -127,15 +136,24 @@ It validates:
 - tool-result-to-final-answer reflection
 - queue integrity
 
+The live validation runner goes one step further and exercises the actual FastAPI program over HTTP, including:
+
+- direct-answer path
+- tool path
+- guarded knowledge answer path
+- failure path
+- same-session queue contention
+
 ## Truthful migration verdict
 
 This branch has a real harness production path for live chat.
 
-It is now truthfully supportable as Round 7 because:
+It is now truthfully supportable through Round 9 because:
 
 - live chat runs through the harness runtime as the real execution owner
 - route / retrieval / tool / answer / guard / queue lifecycle all emit canonical traced events
 - a harness-native benchmark exists and runs against the real runtime contract
-- tests cover runtime lifecycle, queueing, trace persistence, chat integration, guard behavior, and benchmark execution
+- a live validation runner exercises the actual HTTP program boundary
+- tests cover runtime lifecycle, queueing, trace persistence, chat integration, guard behavior, benchmark execution, and live validation smoke coverage
 
-`AgentManager` is still a large capability facade rather than a minimal provider, but that is remaining cleanup debt rather than a blocker to Round 7.
+`AgentManager` is still a large capability facade rather than a minimal provider, but that is remaining cleanup debt rather than a blocker to Round 9.
