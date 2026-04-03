@@ -8,6 +8,8 @@ from typing import Any, Literal
 
 HarnessEventName = Literal[
     "run.started",
+    "run.queued",
+    "run.dequeued",
     "route.decided",
     "skill.decided",
     "retrieval.started",
@@ -24,6 +26,8 @@ HarnessEventName = Literal[
 
 CANONICAL_EVENT_NAMES: tuple[HarnessEventName, ...] = (
     "run.started",
+    "run.queued",
+    "run.dequeued",
     "route.decided",
     "skill.decided",
     "retrieval.started",
@@ -235,4 +239,3 @@ class HarnessEvent:
             "ts": self.ts,
             "payload": dict(self.payload),
         }
-

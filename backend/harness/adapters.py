@@ -1,218 +1,172 @@
-"""Compatibility adapters for shadow-writing harness traces from legacy chat streams."""
+"""Compatibility adapters between canonical harness events and legacy chat SSE/session semantics."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from pathlib import Path
 from typing import Any
 
-from harness.runtime import HarnessRuntime, RuntimeDependencies
-from harness.trace_store import RunTraceStore
-from harness.types import (
-    AnswerRecord,
-    RetrievalEvidenceRecord,
-    RetrievalRecord,
-    RouteDecisionRecord,
-    SkillDecisionRecord,
-    ToolCallRecord,
-)
+from harness.types import HarnessEvent
 
-INTERNAL_ROUTE_EVENT = "_harness_route"
-INTERNAL_SKILL_EVENT = "_harness_skill"
-_VALID_CHANNELS = {"memory", "skill", "vector", "bm25", "fused"}
-_VALID_RETRIEVAL_KINDS = {"memory", "knowledge"}
+
+def _new_segment() -> dict[str, Any]:
+    return {"content": "", "tool_calls": [], "retrieval_steps": [], "usage": None}
 
 
 @dataclass
-class ChatTraceShadowState:
-    route_intent: str = ""
-    used_skill: str = ""
-    tool_names: list[str] = field(default_factory=list)
-    retrieval_sources: list[str] = field(default_factory=list)
-    answer_started: bool = False
-    segment_index: int = 0
+class LegacyChatAccumulator:
+    """Accumulate canonical harness events into legacy SSE and persisted assistant segments."""
+
+    current_segment_index: int = 0
+    current_segment: dict[str, Any] = field(default_factory=_new_segment)
+    segments: list[dict[str, Any]] = field(default_factory=list)
     final_answer: str = ""
+    last_done_payload: dict[str, Any] = field(default_factory=dict)
 
-    def add_tool_name(self, tool_name: str) -> None:
-        tool = str(tool_name or "").strip()
-        if tool and tool not in self.tool_names:
-            self.tool_names.append(tool)
+    def _commit_current_segment(self) -> None:
+        if (
+            self.current_segment["content"].strip()
+            or self.current_segment["tool_calls"]
+            or self.current_segment["retrieval_steps"]
+        ):
+            self.segments.append(self.current_segment)
+        self.current_segment = _new_segment()
 
-    def add_retrieval_source(self, source_path: str) -> None:
-        source = str(source_path or "").strip()
-        if source and source not in self.retrieval_sources:
-            self.retrieval_sources.append(source)
+    def _ensure_segment(self, segment_index: int) -> list[tuple[str, dict[str, Any]]]:
+        legacy_events: list[tuple[str, dict[str, Any]]] = []
+        if segment_index > self.current_segment_index:
+            self._commit_current_segment()
+            self.current_segment_index = segment_index
+            legacy_events.append(("new_response", {}))
+        return legacy_events
 
+    def consume(self, event: HarnessEvent) -> list[tuple[str, dict[str, Any]]]:
+        payload = dict(event.payload)
+        legacy_events: list[tuple[str, dict[str, Any]]] = []
 
-def build_chat_runtime(base_dir: Path) -> HarnessRuntime:
-    trace_store = RunTraceStore(Path(base_dir) / "storage" / "runs")
-    return HarnessRuntime(RuntimeDependencies(trace_store=trace_store))
+        if event.name in {"run.queued", "run.dequeued"}:
+            legacy_events.append((event.name, payload))
+            return legacy_events
 
+        if event.name == "retrieval.completed":
+            retrieval_step = {
+                "kind": payload.get("kind", "knowledge"),
+                "stage": payload.get("stage", "unknown"),
+                "title": payload.get("title", "retrieval"),
+                "message": payload.get("message", ""),
+                "results": payload.get("results", []),
+                "status": payload.get("status", ""),
+                "reason": payload.get("reason", ""),
+            }
+            self.current_segment["retrieval_steps"].append(retrieval_step)
+            legacy_events.append(("retrieval", retrieval_step))
+            return legacy_events
 
-def _normalize_channel(value: Any) -> str:
-    candidate = str(value or "").strip().lower()
-    return candidate if candidate in _VALID_CHANNELS else "fused"
-
-
-def _normalize_retrieval_kind(value: Any) -> str:
-    candidate = str(value or "").strip().lower()
-    return candidate if candidate in _VALID_RETRIEVAL_KINDS else "knowledge"
-
-
-def _record_answer_started_if_needed(
-    runtime: HarnessRuntime,
-    run_id: str,
-    state: ChatTraceShadowState,
-) -> None:
-    if state.answer_started:
-        return
-    runtime.record_event(
-        run_id,
-        "answer.started",
-        AnswerRecord(content="", segment_index=state.segment_index, final=False).to_dict(),
-    )
-    state.answer_started = True
-
-
-def consume_legacy_chat_event(
-    runtime: HarnessRuntime,
-    run_id: str,
-    event: dict[str, Any],
-    state: ChatTraceShadowState,
-) -> bool:
-    event_type = str(event.get("type", "") or "")
-
-    if event_type == INTERNAL_ROUTE_EVENT:
-        decision = event.get("decision", {}) or {}
-        record = RouteDecisionRecord(
-            intent=str(decision.get("intent", "") or "").strip(),
-            needs_tools=bool(decision.get("needs_tools", False)),
-            needs_retrieval=bool(decision.get("needs_retrieval", False)),
-            allowed_tools=tuple(str(item).strip() for item in decision.get("allowed_tools", []) or [] if str(item).strip()),
-            confidence=float(decision.get("confidence", 0.0) or 0.0),
-            reason_short=str(decision.get("reason_short", "") or ""),
-            source=str(decision.get("source", "") or ""),
-            subtype=str(decision.get("subtype", "") or ""),
-            ambiguity_flags=tuple(
-                str(item).strip() for item in decision.get("ambiguity_flags", []) or [] if str(item).strip()
-            ),
-            escalated=bool(decision.get("escalated", False)),
-            model_name=str(decision.get("model_name", "") or ""),
-        )
-        state.route_intent = record.intent
-        runtime.record_event(run_id, "route.decided", record.to_dict())
-        return False
-
-    if event_type == INTERNAL_SKILL_EVENT:
-        decision = event.get("decision", {}) or {}
-        record = SkillDecisionRecord(
-            use_skill=bool(decision.get("use_skill", False)),
-            skill_name=str(decision.get("skill_name", "") or ""),
-            confidence=float(decision.get("confidence", 0.0) or 0.0),
-            reason_short=str(decision.get("reason_short", "") or ""),
-        )
-        if record.use_skill:
-            state.used_skill = record.skill_name
-        runtime.record_event(run_id, "skill.decided", record.to_dict())
-        return False
-
-    if event_type == "retrieval":
-        results = []
-        for item in event.get("results", []) or []:
-            if not isinstance(item, dict):
-                continue
-            source_path = str(item.get("source_path", "") or "").strip()
-            if source_path:
-                state.add_retrieval_source(source_path)
-            score = item.get("score")
-            results.append(
-                RetrievalEvidenceRecord(
-                    source_path=source_path,
-                    source_type=str(item.get("source_type", "") or "").strip(),
-                    locator=str(item.get("locator", "") or "").strip(),
-                    snippet=str(item.get("snippet", "") or ""),
-                    channel=_normalize_channel(item.get("channel", "fused")),
-                    score=float(score or 0.0) if score is not None else None,
-                    parent_id=str(item.get("parent_id", "") or "").strip() or None,
+        if event.name == "tool.started":
+            tool_call = {
+                "tool": payload.get("tool", "tool"),
+                "input": payload.get("input", ""),
+                "output": "",
+                "call_id": payload.get("call_id", ""),
+            }
+            self.current_segment["tool_calls"].append(tool_call)
+            legacy_events.append(
+                (
+                    "tool_start",
+                    {
+                        "tool": tool_call["tool"],
+                        "input": tool_call["input"],
+                        "call_id": tool_call["call_id"],
+                    },
                 )
             )
-        record = RetrievalRecord(
-            kind=_normalize_retrieval_kind(event.get("kind", "knowledge")),
-            stage=str(event.get("stage", "unknown") or "unknown"),
-            title=str(event.get("title", "") or "retrieval"),
-            message=str(event.get("message", "") or ""),
-            results=tuple(results),
-            status=str(event.get("status", "") or ""),
-            reason=str(event.get("reason", "") or ""),
-        )
-        runtime.record_event(run_id, "retrieval.completed", record.to_dict())
-        return True
+            return legacy_events
 
-    if event_type == "tool_start":
-        tool_name = str(event.get("tool", "tool") or "tool")
-        state.add_tool_name(tool_name)
-        runtime.record_event(
-            run_id,
-            "tool.started",
-            ToolCallRecord(tool=tool_name, input=str(event.get("input", "") or "")).to_dict(),
-        )
-        return True
-
-    if event_type == "tool_end":
-        tool_name = str(event.get("tool", "tool") or "tool")
-        state.add_tool_name(tool_name)
-        runtime.record_event(
-            run_id,
-            "tool.completed",
-            ToolCallRecord(
-                tool=tool_name,
-                input=str(event.get("input", "") or ""),
-                output=str(event.get("output", "") or ""),
-            ).to_dict(),
-        )
-        return True
-
-    if event_type == "new_response":
-        state.segment_index += 1
-        state.answer_started = False
-        return True
-
-    if event_type == "token":
-        content = str(event.get("content", "") or "")
-        if not content:
-            return True
-        _record_answer_started_if_needed(runtime, run_id, state)
-        runtime.record_event(
-            run_id,
-            "answer.delta",
-            AnswerRecord(content=content, segment_index=state.segment_index, final=False).to_dict(),
-        )
-        state.final_answer += content
-        return True
-
-    if event_type == "done":
-        content = str(event.get("content", "") or "").strip()
-        usage = event.get("usage", {}) or {}
-        if content and not state.answer_started:
-            _record_answer_started_if_needed(runtime, run_id, state)
-            runtime.record_event(
-                run_id,
-                "answer.delta",
-                AnswerRecord(content=content, segment_index=state.segment_index, final=False).to_dict(),
+        if event.name == "tool.completed":
+            call_id = str(payload.get("call_id", "") or "")
+            tool_name = str(payload.get("tool", "tool") or "tool")
+            output = str(payload.get("output", "") or "")
+            for item in reversed(self.current_segment["tool_calls"]):
+                if call_id and str(item.get("call_id", "") or "") == call_id:
+                    item["output"] = output
+                    break
+                if not call_id and str(item.get("tool", "") or "") == tool_name and not str(item.get("output", "") or ""):
+                    item["output"] = output
+                    break
+            legacy_events.append(
+                (
+                    "tool_end",
+                    {
+                        "tool": tool_name,
+                        "input": payload.get("input", ""),
+                        "output": output,
+                        "call_id": call_id,
+                    },
+                )
             )
-        if content:
-            state.final_answer = content
-        runtime.record_event(
-            run_id,
-            "answer.completed",
-            AnswerRecord(
-                content=state.final_answer,
-                segment_index=state.segment_index,
-                final=True,
-                input_tokens=int(usage.get("input_tokens", 0) or 0) if usage.get("input_tokens") is not None else None,
-                output_tokens=int(usage.get("output_tokens", 0) or 0) if usage.get("output_tokens") is not None else None,
-            ).to_dict(),
-        )
-        return True
+            return legacy_events
 
-    return True
+        if event.name == "answer.started":
+            segment_index = int(payload.get("segment_index", 0) or 0)
+            legacy_events.extend(self._ensure_segment(segment_index))
+            return legacy_events
+
+        if event.name == "answer.delta":
+            segment_index = int(payload.get("segment_index", 0) or 0)
+            legacy_events.extend(self._ensure_segment(segment_index))
+            content = str(payload.get("content", "") or "")
+            if content:
+                self.current_segment["content"] += content
+                self.final_answer += content
+                legacy_events.append(("token", {"content": content}))
+            return legacy_events
+
+        if event.name == "answer.completed":
+            segment_index = int(payload.get("segment_index", 0) or 0)
+            legacy_events.extend(self._ensure_segment(segment_index))
+            content = str(payload.get("content", "") or "").strip()
+            if content:
+                self.current_segment["content"] = content
+                self.final_answer = content
+            usage: dict[str, Any] = {}
+            if payload.get("input_tokens") is not None:
+                usage["input_tokens"] = int(payload["input_tokens"])
+            if payload.get("output_tokens") is not None:
+                usage["output_tokens"] = int(payload["output_tokens"])
+            if usage:
+                self.current_segment["usage"] = usage
+            self.last_done_payload = {"content": self.current_segment["content"], "usage": usage or None}
+            legacy_events.append(("done", dict(self.last_done_payload)))
+            return legacy_events
+
+        if event.name == "run.failed":
+            legacy_events.append(("error", {"error": str(payload.get("error_message", "") or "unknown error")}))
+            return legacy_events
+
+        return legacy_events
+
+    def persist(
+        self,
+        *,
+        session_manager,
+        session_id: str,
+        user_message: str,
+        error_message: str | None = None,
+    ) -> None:
+        if error_message:
+            suffix = f"请求失败: {error_message}"
+            if self.current_segment["content"].strip():
+                self.current_segment["content"] = f"{self.current_segment['content'].rstrip()}\n\n{suffix}"
+            else:
+                self.current_segment["content"] = suffix
+
+        self._commit_current_segment()
+        session_manager.save_message(session_id, "user", user_message)
+        for segment in self.segments:
+            session_manager.save_message(
+                session_id,
+                "assistant",
+                segment["content"],
+                tool_calls=segment["tool_calls"] or None,
+                retrieval_steps=segment["retrieval_steps"] or None,
+                usage=segment.get("usage") or None,
+            )

@@ -97,6 +97,33 @@ def _incremental_text(previous: str, current: str) -> str:
     return curr
 
 
+def _canonical_guard_text(text: str) -> str:
+    """Normalize guard-comparison text while preserving meaningful numeric tokens."""
+
+    normalized = str(text or "").strip().lower()
+    replacements = {
+        "％": "%",
+        "，": ",",
+        "。": ".",
+        "：": ":",
+        "；": ";",
+        "（": "(",
+        "）": ")",
+        "【": "[",
+        "】": "]",
+    }
+    for source, target in replacements.items():
+        normalized = normalized.replace(source, target)
+    return re.sub(r"\s+", "", normalized)
+
+
+def _compact_guard_text(text: str) -> str:
+    """Return a punctuation-light variant for fuzzy support checks."""
+
+    canonical = _canonical_guard_text(text)
+    return re.sub(r"[^0-9a-z\u4e00-\u9fff%]+", "", canonical)
+
+
 class AgentManager:
     def __init__(self) -> None:
         self.base_dir: Path | None = None
@@ -104,12 +131,58 @@ class AgentManager:
         self.tools = []
         self._lightweight_router = LightweightLLMRouter()
         self._skill_gate = SkillGate()
+        self._harness_runtime = None
 
     def initialize(self, base_dir: Path) -> None:
         self.base_dir = base_dir
         self.session_manager = SessionManager(base_dir)
         self.tools = get_all_tools(base_dir)
         knowledge_orchestrator.configure(base_dir, self._build_chat_model)
+        self._harness_runtime = None
+
+    def get_harness_runtime(self):
+        if self.base_dir is None:
+            raise RuntimeError("AgentManager is not initialized")
+        if self._harness_runtime is None:
+            from harness.runtime import build_harness_runtime  # pylint: disable=import-outside-toplevel
+
+            self._harness_runtime = build_harness_runtime(self.base_dir)
+        return self._harness_runtime
+
+    def create_harness_executor(self):
+        from harness.executors import HarnessExecutors  # pylint: disable=import-outside-toplevel
+
+        return HarnessExecutors(self)
+
+    def _runtime_rag_mode(self) -> bool:
+        return runtime_config.get_rag_mode()
+
+    def _knowledge_system_prompt(self) -> str:
+        return build_knowledge_system_prompt()
+
+    def _incremental_stream_text(self, previous: str, current: str) -> str:
+        return _incremental_text(previous, current)
+
+    def _harness_retrieval_evidence_records(self, results: list[dict[str, Any]]):
+        from harness.types import RetrievalEvidenceRecord  # pylint: disable=import-outside-toplevel
+
+        records: list[RetrievalEvidenceRecord] = []
+        for item in results:
+            if not isinstance(item, dict):
+                continue
+            score = item.get("score")
+            records.append(
+                RetrievalEvidenceRecord(
+                    source_path=str(item.get("source_path", "") or "").strip(),
+                    source_type=str(item.get("source_type", "") or "").strip(),
+                    locator=str(item.get("locator", "") or "").strip(),
+                    snippet=str(item.get("snippet", "") or ""),
+                    channel=str(item.get("channel", "fused") or "fused"),  # type: ignore[arg-type]
+                    score=float(score or 0.0) if score is not None else None,
+                    parent_id=str(item.get("parent_id", "") or "").strip() or None,
+                )
+            )
+        return records
 
     def _build_openai_chat_model_kwargs(self, settings) -> dict[str, Any]:
         """Return provider kwargs for ChatOpenAI using the current settings object."""
@@ -1266,7 +1339,7 @@ class AgentManager:
             },
         }
 
-    async def astream(
+    async def _astream_legacy_logic(
         self,
         message: str,
         history: list[dict[str, Any]],
@@ -1276,8 +1349,6 @@ class AgentManager:
 
         strategy, routing_decision = await self.resolve_routing(message, history)
         skill_decision = self.decide_skill(message, history, strategy, routing_decision)
-        yield {"type": "_harness_route", "decision": routing_decision.to_dict()}
-        yield {"type": "_harness_skill", "decision": skill_decision.to_dict()}
         rag_mode = runtime_config.get_rag_mode()
         augmented_history = list(history)
         if rag_mode and strategy.allow_retrieval:
@@ -1447,6 +1518,27 @@ class AgentManager:
                 yield event
             return
         yield {"type": "done", "content": final_content}
+
+    async def astream(
+        self,
+        message: str,
+        history: list[dict[str, Any]],
+    ):
+        from harness.adapters import LegacyChatAccumulator  # pylint: disable=import-outside-toplevel
+
+        runtime = self.get_harness_runtime()
+        executor = self.create_harness_executor()
+        accumulator = LegacyChatAccumulator()
+        async for harness_event in runtime.run_with_executor(
+            user_message=message,
+            session_id=None,
+            source="internal",
+            executor=executor,
+            history=history,
+            suppress_failures=True,
+        ):
+            for event_type, data in accumulator.consume(harness_event):
+                yield {"type": event_type, **data}
 
     async def generate_title(self, first_user_message: str) -> str:
         prompt = (

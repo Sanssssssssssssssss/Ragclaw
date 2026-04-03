@@ -1,5 +1,28 @@
 # Harness Migration Plan
 
+## Current branch status
+
+This document started as the Round 0 migration note.
+
+It is now retained mainly as migration history. The live production path on this branch no longer stops at shadow integration:
+
+- live chat runs through the harness runtime
+- run traces are first-class artifacts
+- per-session FIFO queueing is enabled
+- legacy SSE is now an adapter layer over canonical harness events
+- knowledge-answer guard outcomes are surfaced through `backend/harness/graders.py`
+- a harness-native benchmark runner exists at `backend/benchmarks/run_harness_benchmark.py`
+
+For the current architecture, read:
+
+- [HARNESS_ARCHITECTURE.md](/D:/GPT_Project/RAG_Model/backend/harness/HARNESS_ARCHITECTURE.md)
+
+Truthful status:
+
+- Round 0-4 goals are implemented
+- lifecycle ownership has moved into the harness runtime for the live chat path
+- `AgentManager` still remains a large dependency provider, so cleanup is not fully complete
+
 ## Scope
 
 This note documents an incremental migration from the current ad hoc runtime lifecycle to a thin harness control plane.

@@ -137,7 +137,7 @@ class AgentConstraintTests(unittest.IsolatedAsyncioTestCase):
     async def test_direct_answer_constraints_skip_tools_and_knowledge(self) -> None:
         knowledge_called = False
 
-        async def fake_model_answer(_messages, extra_instructions=None):
+        async def fake_model_answer(_messages, extra_instructions=None, system_prompt_override=None):
             self.assertIsNotNone(extra_instructions)
             self.assertTrue(any("Do not call any tools" in item for item in extra_instructions))
             yield {"type": "token", "content": "RAG \u662f\u68c0\u7d22\u589e\u5f3a\u751f\u6210\uff1b"}
@@ -163,8 +163,7 @@ class AgentConstraintTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(any(event["type"] == "retrieval" for event in events))
         self.assertEqual(events[-1]["type"], "done")
         self.assertIn("\u5fae\u8c03", events[-1]["content"])
-        self.assertTrue(any(event["type"] == "_harness_route" for event in events))
-        self.assertTrue(any(event["type"] == "_harness_skill" for event in events))
+        self.assertFalse(any(event["type"].startswith("_harness_") for event in events))
 
     async def test_terminal_only_constraints_skip_knowledge_and_filter_tools(self) -> None:
         knowledge_called = False
@@ -274,7 +273,7 @@ class AgentConstraintTests(unittest.IsolatedAsyncioTestCase):
             ]
         )
 
-        async def fake_model_answer(_messages, extra_instructions=None):
+        async def fake_model_answer(_messages, extra_instructions=None, system_prompt_override=None):
             self.assertIsNotNone(extra_instructions)
             self.assertTrue(any("Do not call more tools" in item for item in extra_instructions))
             yield {"type": "token", "content": "FAQ JSON \u4e2d\u5171\u6709 120 \u6761\u8bb0\u5f55\u3002"}

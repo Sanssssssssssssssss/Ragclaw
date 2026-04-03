@@ -1,0 +1,143 @@
+"""Explicit grader helpers used by the harness runtime."""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import Any, Protocol
+
+from harness.types import GuardResult
+
+
+class KnowledgeGuardSupport(Protocol):
+    """Agent helper surface needed by the knowledge-answer grader."""
+
+    def _knowledge_support_corpus(self, retrieval_result) -> str: ...
+
+    def _unsupported_knowledge_details(self, answer: str, support_corpus: str) -> dict[str, list[str]]: ...
+
+    def _unsupported_high_risk_inference_terms(self, answer: str, support_corpus: str) -> list[str]: ...
+
+    def _all_sources_are_directory_guides(self, retrieval_result) -> bool: ...
+
+    def _build_conservative_knowledge_answer(
+        self,
+        retrieval_result,
+        *,
+        unsupported_numbers: list[str] | None = None,
+        unsupported_locators: list[str] | None = None,
+    ) -> str: ...
+
+
+@dataclass(frozen=True)
+class KnowledgeGuardDecision:
+    """Result of grading one knowledge answer against retrieved evidence."""
+
+    final_answer: str
+    guard_result: GuardResult | None
+
+    @property
+    def downgraded(self) -> bool:
+        return self.guard_result is not None
+
+
+class KnowledgeAnswerGrader:
+    """Surface the current knowledge-answer guard as an explicit harness grader."""
+
+    def __init__(self, support: KnowledgeGuardSupport) -> None:
+        self._support = support
+
+    def grade(self, answer: str, retrieval_result) -> KnowledgeGuardDecision:
+        if retrieval_result is None:
+            return KnowledgeGuardDecision(final_answer=str(answer or ""), guard_result=None)
+
+        normalized_answer = str(answer or "").strip()
+        status = str(getattr(retrieval_result, "status", "") or "").strip().lower()
+        question_type = str(getattr(retrieval_result, "question_type", "") or "").strip().lower()
+        support_corpus = self._support._knowledge_support_corpus(retrieval_result)
+
+        if not normalized_answer:
+            return self._downgrade(
+                retrieval_result,
+                trigger="empty_answer",
+                reason="knowledge answer was empty",
+                question_type=question_type,
+                status=status,
+                original_answer=str(answer or ""),
+            )
+
+        unsupported = self._support._unsupported_knowledge_details(normalized_answer, support_corpus)
+        unsupported_numbers = unsupported.get("numbers", [])
+        unsupported_locators = unsupported.get("locators", [])
+        if unsupported_numbers or unsupported_locators:
+            return self._downgrade(
+                retrieval_result,
+                trigger="unsupported_numbers_or_locators",
+                reason="knowledge answer contained unsupported numeric or locator details",
+                question_type=question_type,
+                status=status,
+                original_answer=normalized_answer,
+                unsupported_numbers=unsupported_numbers,
+                unsupported_locators=unsupported_locators,
+            )
+
+        unsupported_inference_terms = self._support._unsupported_high_risk_inference_terms(
+            normalized_answer,
+            support_corpus,
+        )
+        if unsupported_inference_terms:
+            return self._downgrade(
+                retrieval_result,
+                trigger="unsupported_inference_terms",
+                reason="knowledge answer contained unsupported high-risk inference",
+                question_type=question_type,
+                status=status,
+                original_answer=normalized_answer,
+                unsupported_inference_terms=unsupported_inference_terms,
+            )
+
+        if status in {"partial", "not_found"} and self._support._all_sources_are_directory_guides(retrieval_result):
+            return self._downgrade(
+                retrieval_result,
+                trigger="directory_guides_only",
+                reason="knowledge answer relied on directory-guide sources only",
+                question_type=question_type,
+                status=status,
+                original_answer=normalized_answer,
+            )
+
+        return KnowledgeGuardDecision(final_answer=normalized_answer, guard_result=None)
+
+    def _downgrade(
+        self,
+        retrieval_result,
+        *,
+        trigger: str,
+        reason: str,
+        question_type: str,
+        status: str,
+        original_answer: str,
+        unsupported_numbers: list[str] | None = None,
+        unsupported_locators: list[str] | None = None,
+        unsupported_inference_terms: list[str] | None = None,
+    ) -> KnowledgeGuardDecision:
+        conservative_answer = self._support._build_conservative_knowledge_answer(
+            retrieval_result,
+            unsupported_numbers=unsupported_numbers,
+            unsupported_locators=unsupported_locators,
+        )
+        guard_result = GuardResult(
+            name="knowledge_grounding_guard",
+            passed=False,
+            reason=reason,
+            details={
+                "trigger": trigger,
+                "question_type": question_type,
+                "status": status,
+                "unsupported_numbers": list(unsupported_numbers or []),
+                "unsupported_locators": list(unsupported_locators or []),
+                "unsupported_inference_terms": list(unsupported_inference_terms or []),
+                "original_answer": original_answer,
+                "corrected_answer": conservative_answer,
+            },
+        )
+        return KnowledgeGuardDecision(final_answer=conservative_answer, guard_result=guard_result)
