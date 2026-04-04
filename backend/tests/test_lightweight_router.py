@@ -150,20 +150,7 @@ class LightweightRouterTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(decision.intent, "workspace_file_ops")
         self.assertEqual(decision.allowed_tools, ("terminal",))
 
-    async def test_low_confidence_ambiguous_router_escalates(self) -> None:
-        small_decision = RoutingDecision(
-            intent="workspace_file_ops",
-            needs_tools=True,
-            needs_retrieval=False,
-            allowed_tools=("read_file", "terminal"),
-            confidence=0.42,
-            reason_short="unclear mixed request",
-            source="llm_router_small",
-            prompt_tokens=40,
-            output_tokens=20,
-            model_name="kimi-k2",
-            subtype="search_workspace_file",
-        )
+    async def test_ambiguous_router_prefers_large_model_contract(self) -> None:
         large_decision = RoutingDecision(
             intent="knowledge_qa",
             needs_tools=False,
@@ -171,19 +158,18 @@ class LightweightRouterTests(unittest.IsolatedAsyncioTestCase):
             allowed_tools=(),
             confidence=0.81,
             reason_short="document seeking request",
-            source="llm_router_large",
+            source="llm_router",
             prompt_tokens=60,
             output_tokens=30,
             model_name="kimi-k2.5",
         )
 
         with (
-            patch.object(self.manager._lightweight_router, "_build_small_model", return_value=(object(), "kimi-k2")),
             patch.object(self.manager._lightweight_router, "_build_large_model", return_value=object()),
             patch.object(
                 self.manager._lightweight_router,
                 "_invoke_router",
-                new=AsyncMock(side_effect=[small_decision, large_decision]),
+                new=AsyncMock(return_value=large_decision),
             ),
         ):
             _strategy, decision = await self.manager.resolve_routing(
@@ -192,8 +178,8 @@ class LightweightRouterTests(unittest.IsolatedAsyncioTestCase):
             )
 
         self.assertEqual(decision.intent, "knowledge_qa")
-        self.assertTrue(decision.escalated)
-        self.assertEqual(decision.source, "llm_router_large")
+        self.assertFalse(decision.escalated)
+        self.assertEqual(decision.source, "llm_router")
 
 
 if __name__ == "__main__":

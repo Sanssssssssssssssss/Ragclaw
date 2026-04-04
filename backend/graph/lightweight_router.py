@@ -39,14 +39,23 @@ ROUTER_CAPABILITY_GUIDE = """Intent guide:
 - computation_or_transformation: structured calculation, parsing, code execution, or file-backed analysis.
 - web_lookup: live/current online facts, official docs, links, news, pricing, or weather.
 
+Decision hints:
+- Prefer knowledge_qa when the user asks for a report, source path, cited evidence, or grounded comparison.
+- Prefer workspace_file_ops only when there is a clear local/workspace anchor.
+- Prefer direct_answer when no external state is needed.
+- Prefer web_lookup only for live/current online facts or weather.
+
 Tool guide:
 - read_file: known file content only.
 - terminal: search/list workspace files or run workspace commands.
 - python_repl: structured computation, parsing, transforms, or code execution.
 - fetch_url: live web pages, links, docs, and weather.
 
-Prefer the narrowest route and smallest tool set that can solve the request.
-If the request is ambiguous, keep confidence lower and choose the most likely path."""
+Rules:
+- Prefer the narrowest route and smallest tool set that can solve the request.
+- If the request is ambiguous, lower confidence instead of inventing certainty.
+- Do not skip retrieval when the user asks for grounded evidence or report/source lookup.
+"""
 
 WEB_LOOKUP_PATTERNS = (
     re.compile(r"https?://", re.IGNORECASE),
@@ -340,7 +349,7 @@ def deterministic_route(
             subtype=subtype,
         )
 
-    if strategy.allow_tools and _is_workspace_request(normalized) and (_has_explicit_workspace_anchor(normalized) or not explicit_doc_seek):
+    if strategy.allow_tools and _is_workspace_request(normalized) and _has_explicit_workspace_anchor(normalized):
         subtype = _workspace_subtype(normalized)
         if (
             subtype != "modify_or_run_in_workspace"
@@ -379,9 +388,7 @@ def deterministic_route(
         direct_subtype = _compute_subtype(normalized) if any(
             term in lowered for term in ("rewrite", "summarize", "translate", "改写", "总结", "翻译")
         ) else ""
-        if direct_subtype == "pure_text_transformation" or (
-            not explicit_doc_seek and not _is_workspace_request(normalized) and not _has_stable_knowledge_anchor(normalized)
-        ):
+        if direct_subtype == "pure_text_transformation":
             return RoutingDecision(
                 intent="direct_answer",
                 needs_tools=False,
@@ -514,8 +521,8 @@ class LightweightLLMRouter:
         mode: str,
     ) -> list[dict[str, str]]:
         system = (
-            "You are a lightweight request router. "
-            "Return one-line JSON only. "
+            "You are a request routing model for a grounded harness runtime. "
+            "Return JSON only. "
             "Use intent from: direct_answer, knowledge_qa, workspace_file_ops, computation_or_transformation, web_lookup. "
             "Use subtype when relevant from: read_existing_file, search_workspace_file, modify_or_run_in_workspace, pure_calculation, file_backed_calculation, pure_text_transformation, code_execution_request. "
             f"Allowed tools must be from: {', '.join(tool_names)}."
@@ -528,6 +535,7 @@ class LightweightLLMRouter:
             f"recent_context: {history_excerpt}\n"
             f"hard_constraints: {hard_constraints}\n"
             "Return JSON with keys: intent, subtype, needs_tools, needs_retrieval, allowed_tools, confidence, reason_short.\n"
+            "If unsure between knowledge and workspace, keep confidence lower and choose the safer likely route.\n"
             "Keep reason_short very short and do not include chain-of-thought."
         )
         return [
@@ -684,76 +692,43 @@ class LightweightLLMRouter:
         tool_names: tuple[str, ...],
     ) -> RoutingDecision:
         settings = get_settings()
-        used_large_as_small = False
         try:
-            small_model, small_model_name = self._build_small_model()
-            if small_model_name == settings.llm_model:
-                used_large_as_small = True
-            small_decision = await self._invoke_router(
-                model=small_model,
-                model_name=small_model_name,
-                source="llm_router_small",
-                message=message,
-                history=history,
-                strategy=strategy,
-                tool_names=tool_names,
-                mode="small",
-            )
-        except Exception:
-            used_large_as_small = True
-            small_decision = await self._invoke_router(
+            primary_decision = await self._invoke_router(
                 model=self._build_large_model(),
                 model_name=settings.llm_model,
-                source="llm_router_small",
+                source="llm_router",
                 message=message,
                 history=history,
                 strategy=strategy,
                 tool_names=tool_names,
-                mode="small",
+                mode="resolver",
+            )
+        except Exception:
+            small_model, small_model_name = self._build_small_model()
+            primary_decision = await self._invoke_router(
+                model=small_model,
+                model_name=small_model_name,
+                source="llm_router_fallback",
+                message=message,
+                history=history,
+                strategy=strategy,
+                tool_names=tool_names,
+                mode="resolver",
             )
 
-        ambiguity_flags = self._ambiguity_flags(message, history, small_decision)
-        small_decision = RoutingDecision(
-            intent=small_decision.intent,
-            needs_tools=small_decision.needs_tools,
-            needs_retrieval=small_decision.needs_retrieval,
-            allowed_tools=small_decision.allowed_tools,
-            confidence=small_decision.confidence,
-            reason_short=small_decision.reason_short,
-            source=small_decision.source,
-            prompt_tokens=small_decision.prompt_tokens,
-            output_tokens=small_decision.output_tokens,
+        ambiguity_flags = self._ambiguity_flags(message, history, primary_decision)
+        return RoutingDecision(
+            intent=primary_decision.intent,
+            needs_tools=primary_decision.needs_tools,
+            needs_retrieval=primary_decision.needs_retrieval,
+            allowed_tools=primary_decision.allowed_tools,
+            confidence=primary_decision.confidence,
+            reason_short=primary_decision.reason_short,
+            source=primary_decision.source,
+            prompt_tokens=primary_decision.prompt_tokens,
+            output_tokens=primary_decision.output_tokens,
             ambiguity_flags=ambiguity_flags,
             escalated=False,
-            model_name=small_decision.model_name,
-            subtype=small_decision.subtype,
-        )
-
-        if not self._should_escalate(small_decision, ambiguity_flags, used_large_as_small):
-            return small_decision
-
-        large_decision = await self._invoke_router(
-            model=self._build_large_model(),
-            model_name=settings.llm_model,
-            source="llm_router_large",
-            message=message,
-            history=history,
-            strategy=strategy,
-            tool_names=tool_names,
-            mode="resolver",
-        )
-        return RoutingDecision(
-            intent=large_decision.intent,
-            needs_tools=large_decision.needs_tools,
-            needs_retrieval=large_decision.needs_retrieval,
-            allowed_tools=large_decision.allowed_tools,
-            confidence=large_decision.confidence,
-            reason_short=large_decision.reason_short,
-            source=large_decision.source,
-            prompt_tokens=small_decision.prompt_tokens + large_decision.prompt_tokens,
-            output_tokens=small_decision.output_tokens + large_decision.output_tokens,
-            ambiguity_flags=ambiguity_flags,
-            escalated=True,
-            model_name=large_decision.model_name,
-            subtype=large_decision.subtype,
+            model_name=primary_decision.model_name,
+            subtype=primary_decision.subtype,
         )

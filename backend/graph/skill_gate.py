@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import json
 import re
 from dataclasses import dataclass
 from typing import Any
+
+from config import get_settings
 
 
 @dataclass(frozen=True)
@@ -125,6 +128,15 @@ def skill_prompt_cards() -> list[str]:
     return cards
 
 
+def _extract_json_block(content: str) -> dict[str, Any]:
+    text = str(content or "").strip()
+    first = text.find("{")
+    last = text.rfind("}")
+    if first == -1 or last == -1 or last <= first:
+        raise ValueError("skill selector did not return JSON")
+    return json.loads(text[first : last + 1])
+
+
 def _has_required_tools(required_tools: tuple[str, ...], allowed_tools: tuple[str, ...]) -> bool:
     if not required_tools:
         return True
@@ -157,8 +169,79 @@ def _is_localish_request(message: str, history: list[dict[str, Any]]) -> bool:
 
 
 class SkillGate:
+    def __init__(self) -> None:
+        self._model = None
+
     def inventory(self) -> list[dict[str, Any]]:
         return skill_inventory()
+
+    def _build_model(self):
+        if self._model is not None:
+            return self._model
+        settings = get_settings()
+        if not settings.llm_api_key:
+            raise RuntimeError("Missing LLM API key for skill selector")
+        from langchain_openai import ChatOpenAI  # pylint: disable=import-outside-toplevel
+
+        kwargs: dict[str, Any] = {
+            "model": settings.llm_model,
+            "api_key": settings.llm_api_key,
+            "base_url": settings.llm_base_url,
+            "temperature": 0.2,
+            "max_tokens": 120,
+        }
+        if settings.llm_model == "kimi-k2.5" and settings.llm_thinking_type:
+            kwargs["extra_body"] = {"thinking": {"type": settings.llm_thinking_type}}
+            if settings.llm_thinking_type == "disabled":
+                kwargs["temperature"] = None
+        self._model = ChatOpenAI(**kwargs)
+        return self._model
+
+    def _llm_skill_decision(
+        self,
+        *,
+        message: str,
+        history: list[dict[str, Any]],
+        allowed_tools: tuple[str, ...],
+    ) -> SkillDecision:
+        cards = "\n".join(skill_prompt_cards()) or "none"
+        prompt = [
+            {
+                "role": "system",
+                "content": (
+                    "You decide whether a request should use a specialized skill. "
+                    "Return JSON only with keys: use_skill, skill_name, confidence, reason_short. "
+                    "Allowed skill_name values: '', get_weather, web-search. "
+                    "Prefer no skill unless a skill is clearly better than plain tools. "
+                    "Never select a skill that needs tools outside the allowed tool list."
+                ),
+            },
+            {
+                "role": "user",
+                "content": json.dumps(
+                    {
+                        "message": message,
+                        "recent_history": [str(item.get("content", "") or "")[:180] for item in history[-2:]],
+                        "allowed_tools": list(allowed_tools),
+                        "skills": cards,
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                ),
+            },
+        ]
+        response = self._build_model().invoke(prompt)
+        payload = _extract_json_block(str(getattr(response, "content", "") or ""))
+        use_skill = bool(payload.get("use_skill", False))
+        skill_name = str(payload.get("skill_name", "") or "").strip()
+        confidence = float(payload.get("confidence", 0.0) or 0.0)
+        reason_short = str(payload.get("reason_short", "") or "").strip()[:120] or "llm skill selector"
+        if not use_skill:
+            return SkillDecision(False, "", confidence, reason_short)
+        profile = INVENTORY_BY_NAME.get(skill_name)
+        if profile is None or not profile.enabled or not _has_required_tools(profile.required_tools, allowed_tools):
+            return SkillDecision(False, "", max(0.0, min(confidence, 0.4)), "skill rejected by rails")
+        return SkillDecision(True, skill_name, max(0.0, min(confidence, 1.0)), reason_short)
 
     def decide(
         self,
@@ -192,21 +275,24 @@ class SkillGate:
         if any(pattern.search(normalized) for pattern in KNOWLEDGE_PATTERNS):
             return SkillDecision(False, "", 0.08, "knowledge-looking request should not use skills")
 
+        try:
+            llm_decision = self._llm_skill_decision(
+                message=normalized,
+                history=history,
+                allowed_tools=allowed_tools,
+            )
+            if llm_decision.use_skill:
+                return llm_decision
+        except Exception:
+            pass
+
         weather_profile = INVENTORY_BY_NAME["get_weather"]
-        if (
-            weather_profile.enabled
-            and _is_weather_request(normalized)
-            and _has_required_tools(weather_profile.required_tools, allowed_tools)
-        ):
-            return SkillDecision(True, weather_profile.skill_name, 0.92, "explicit weather lookup")
+        if weather_profile.enabled and _is_weather_request(normalized) and _has_required_tools(weather_profile.required_tools, allowed_tools):
+            return SkillDecision(True, weather_profile.skill_name, 0.78, "weather heuristic fallback")
 
         web_profile = INVENTORY_BY_NAME["web-search"]
-        if (
-            web_profile.enabled
-            and _is_web_search_request(normalized)
-            and _has_required_tools(web_profile.required_tools, allowed_tools)
-        ):
-            return SkillDecision(True, web_profile.skill_name, 0.89, "explicit live web lookup")
+        if web_profile.enabled and _is_web_search_request(normalized) and _has_required_tools(web_profile.required_tools, allowed_tools):
+            return SkillDecision(True, web_profile.skill_name, 0.74, "web heuristic fallback")
 
         return SkillDecision(False, "", 0.12, "default to plain route and tools")
 

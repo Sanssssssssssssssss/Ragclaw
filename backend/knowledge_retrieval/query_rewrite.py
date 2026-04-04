@@ -1,14 +1,18 @@
 from __future__ import annotations
 
+import json
 import re
 from dataclasses import dataclass, field
+from typing import Any
+
+from config import get_settings
 
 
 QUESTION_TYPE_PATTERNS: tuple[tuple[str, tuple[re.Pattern[str], ...]], ...] = (
     (
         "cross_file_aggregation",
         (
-            re.compile(r"(横向比较|综合|汇总|聚合|哪些.+来源路径|哪些.+财报路径|多份.+财报)"),
+            re.compile(r"(横向比较|综合|汇总聚合|哪些.+来源路径|哪些.+财报路径|多份.+财报)"),
             re.compile(r"(across files|cross file|aggregate)", re.IGNORECASE),
         ),
     ),
@@ -22,14 +26,14 @@ QUESTION_TYPE_PATTERNS: tuple[tuple[str, tuple[re.Pattern[str], ...]], ...] = (
     (
         "multi_hop",
         (
-            re.compile(r"(同时|且|并且|以及|原因|关联|结合|既.+又)"),
+            re.compile(r"(同时|并且|以及|原因|关联|结合|既.+又)"),
             re.compile(r"\b(and|both|reason|because|together)\b", re.IGNORECASE),
         ),
     ),
     (
         "negation",
         (
-            re.compile(r"(并未|不是|非|未盈利|亏损|为负|负值|没有)"),
+            re.compile(r"(并未|不是|没有|未盈利|亏损|为负|负值)"),
             re.compile(r"\b(not|negative|loss|unprofitable)\b", re.IGNORECASE),
         ),
     ),
@@ -83,6 +87,32 @@ STOP_TERMS = {
     "报告",
 }
 EXCLUDED_ENTITY_FRAGMENTS = ("如果", "根据知识库", "对比", "比较", "横向比较", "来源路径", "三家公司", "哪些", "路径", "文档")
+QUESTION_TYPES = {"cross_file_aggregation", "compare", "multi_hop", "negation", "fuzzy", "direct_fact"}
+
+PLANNER_GUIDE = """You are a retrieval rewrite and planning module for a grounded RAG system.
+Your job is to preserve the user's intent while making retrieval easier.
+
+When to rewrite:
+- Rewrite only if it helps retrieval focus or disambiguation.
+- Preserve entities, time periods, metrics, constraints, and negation.
+- Do not add facts or assumptions not in the original query.
+
+Question type guide:
+- compare: explicit comparison between entities or values.
+- cross_file_aggregation: needs coverage across multiple files/families/entities.
+- multi_hop: requires satisfying multiple constraints together.
+- negation: asks whether something did not happen / was not true / was negative / loss-making.
+- fuzzy: document-seeking, vague source lookup, or approximate report lookup.
+- direct_fact: everything else.
+
+Return JSON only with keys:
+- question_type
+- rewrite_needed
+- query_variants
+- entity_hints
+- keyword_hints
+- planner_reason
+"""
 
 
 @dataclass(frozen=True)
@@ -92,6 +122,9 @@ class QueryPlan:
     query_variants: list[str] = field(default_factory=list)
     entity_hints: list[str] = field(default_factory=list)
     keyword_hints: list[str] = field(default_factory=list)
+    rewrite_needed: bool = False
+    planner_reason: str = ""
+    planner_source: str = "deterministic"
 
 
 def _dedupe(values: list[str]) -> list[str]:
@@ -157,7 +190,7 @@ def _canonical_rewrite(entities: list[str], keyword_hints: list[str]) -> str:
     return " ".join(_dedupe(pieces))
 
 
-def build_query_plan(query: str) -> QueryPlan:
+def _deterministic_query_plan(query: str) -> QueryPlan:
     normalized_query = str(query).strip()
     question_type = _detect_question_type(normalized_query)
     entities = _extract_entities(normalized_query)
@@ -202,4 +235,106 @@ def build_query_plan(query: str) -> QueryPlan:
         query_variants=query_variants,
         entity_hints=entities,
         keyword_hints=keyword_hints,
+        rewrite_needed=len(query_variants) > 1,
+        planner_reason="deterministic fallback plan",
+        planner_source="deterministic",
     )
+
+
+def _extract_json_block(content: str) -> dict[str, Any]:
+    text = str(content or "").strip()
+    if not text:
+        raise ValueError("planner returned empty content")
+    first = text.find("{")
+    last = text.rfind("}")
+    if first == -1 or last == -1 or last <= first:
+        raise ValueError("planner did not return JSON")
+    return json.loads(text[first : last + 1])
+
+
+def _normalize_question_type(value: str, fallback: str) -> str:
+    normalized = str(value or "").strip().lower()
+    if normalized in QUESTION_TYPES:
+        return normalized
+    return fallback
+
+
+class LLMRewritePlanner:
+    def __init__(self) -> None:
+        self._model = None
+
+    def _build_model(self):
+        if self._model is not None:
+            return self._model
+        settings = get_settings()
+        if not settings.llm_api_key:
+            raise RuntimeError("Missing API key for rewrite planner")
+        from langchain_openai import ChatOpenAI  # pylint: disable=import-outside-toplevel
+
+        kwargs: dict[str, Any] = {
+            "model": settings.llm_model,
+            "api_key": settings.llm_api_key,
+            "base_url": settings.llm_base_url,
+            "temperature": 0.2,
+            "max_tokens": 320,
+        }
+        if settings.llm_model == "kimi-k2.5" and settings.llm_thinking_type:
+            kwargs["extra_body"] = {"thinking": {"type": settings.llm_thinking_type}}
+            if settings.llm_thinking_type == "disabled":
+                kwargs["temperature"] = None
+        self._model = ChatOpenAI(**kwargs)
+        return self._model
+
+    def _prompt(self, query: str, deterministic_plan: QueryPlan) -> list[dict[str, str]]:
+        user = {
+            "original_query": query,
+            "deterministic_question_type_hint": deterministic_plan.question_type,
+            "deterministic_entity_hints": deterministic_plan.entity_hints,
+            "deterministic_keyword_hints": deterministic_plan.keyword_hints,
+            "deterministic_query_variants": deterministic_plan.query_variants[:4],
+        }
+        return [
+            {"role": "system", "content": PLANNER_GUIDE},
+            {"role": "user", "content": json.dumps(user, ensure_ascii=False, indent=2)},
+        ]
+
+    def _parse(self, raw: str, query: str, deterministic_plan: QueryPlan) -> QueryPlan:
+        payload = _extract_json_block(raw)
+        question_type = _normalize_question_type(payload.get("question_type", ""), deterministic_plan.question_type)
+        query_variants = _dedupe([str(item) for item in payload.get("query_variants", []) or [] if str(item).strip()])
+        if query not in query_variants:
+            query_variants.insert(0, query)
+        if not query_variants:
+            query_variants = deterministic_plan.query_variants
+        entity_hints = _dedupe([str(item) for item in payload.get("entity_hints", []) or [] if str(item).strip()])
+        keyword_hints = _dedupe([str(item) for item in payload.get("keyword_hints", []) or [] if str(item).strip()])
+        rewrite_needed = bool(payload.get("rewrite_needed", False) or len(query_variants) > 1)
+        planner_reason = str(payload.get("planner_reason", "") or "").strip()[:240] or "llm rewrite planner"
+        return QueryPlan(
+            original_query=str(query).strip(),
+            question_type=question_type,
+            query_variants=query_variants[:5],
+            entity_hints=entity_hints[:8] or deterministic_plan.entity_hints,
+            keyword_hints=keyword_hints[:10] or deterministic_plan.keyword_hints,
+            rewrite_needed=rewrite_needed,
+            planner_reason=planner_reason,
+            planner_source="llm",
+        )
+
+    def plan(self, query: str) -> QueryPlan:
+        deterministic_plan = _deterministic_query_plan(query)
+        response = self._build_model().invoke(self._prompt(query, deterministic_plan))
+        raw = str(getattr(response, "content", "") or "")
+        return self._parse(raw, query, deterministic_plan)
+
+
+_LLM_REWRITE_PLANNER = LLMRewritePlanner()
+
+
+def build_query_plan(query: str, *, prefer_llm: bool = False) -> QueryPlan:
+    if prefer_llm:
+        try:
+            return _LLM_REWRITE_PLANNER.plan(query)
+        except Exception:
+            pass
+    return _deterministic_query_plan(query)

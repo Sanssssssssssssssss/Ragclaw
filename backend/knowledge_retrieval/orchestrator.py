@@ -460,7 +460,7 @@ class KnowledgeOrchestrator:
         *,
         top_k: int = 4,
     ) -> OrchestratedRetrievalResult:
-        query_plan = build_query_plan(query)
+        query_plan = build_query_plan(query, prefer_llm=True)
         overview_evidences, overview_step = self._collect_family_overview_evidences(query_plan, top_k=top_k)
         preferred_families = [item.source_path for item in overview_evidences]
         family_path_filters: list[str] | None = None

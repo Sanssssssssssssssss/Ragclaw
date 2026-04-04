@@ -36,7 +36,7 @@ class HybridRetriever:
         query_plan: QueryPlan | None = None,
         chunk_types: list[str] | None = None,
     ) -> HybridRetrievalResult:
-        plan = query_plan or build_query_plan(query)
+        plan = query_plan or build_query_plan(query, prefer_llm=True)
         variants = list(plan.query_variants) or [query]
         all_vector: list[Evidence] = []
         all_bm25: list[Evidence] = []

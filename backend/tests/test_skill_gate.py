@@ -3,6 +3,7 @@ from __future__ import annotations
 import sys
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 BACKEND_DIR = Path(__file__).resolve().parents[1]
 if str(BACKEND_DIR) not in sys.path:
@@ -10,7 +11,7 @@ if str(BACKEND_DIR) not in sys.path:
 
 from graph.lightweight_router import RoutingDecision
 from graph.execution_strategy import parse_execution_strategy
-from graph.skill_gate import SkillGate
+from graph.skill_gate import SkillDecision, SkillGate
 
 
 class SkillGateTests(unittest.TestCase):
@@ -23,38 +24,48 @@ class SkillGateTests(unittest.TestCase):
         self.assertEqual(names, {"get_weather", "kb-retriever", "retry-lesson-capture", "web-search"})
 
     def test_web_lookup_latest_prefers_web_search_skill(self) -> None:
-        decision = self.gate.decide(
-            message="Look up the latest OpenAI pricing on the web and give me the official link.",
-            history=[],
-            strategy=parse_execution_strategy("Look up the latest OpenAI pricing on the web and give me the official link."),
-            routing_decision=RoutingDecision(
-                intent="web_lookup",
-                needs_tools=True,
-                needs_retrieval=False,
-                allowed_tools=("fetch_url",),
-                confidence=0.9,
-                reason_short="clear web request",
-                source="rules",
-            ),
-        )
+        with patch.object(
+            self.gate,
+            "_llm_skill_decision",
+            return_value=SkillDecision(True, "web-search", 0.93, "llm chose web-search"),
+        ):
+            decision = self.gate.decide(
+                message="Look up the latest OpenAI pricing on the web and give me the official link.",
+                history=[],
+                strategy=parse_execution_strategy("Look up the latest OpenAI pricing on the web and give me the official link."),
+                routing_decision=RoutingDecision(
+                    intent="web_lookup",
+                    needs_tools=True,
+                    needs_retrieval=False,
+                    allowed_tools=("fetch_url",),
+                    confidence=0.9,
+                    reason_short="clear web request",
+                    source="rules",
+                ),
+            )
         self.assertTrue(decision.use_skill)
         self.assertEqual(decision.skill_name, "web-search")
 
     def test_weather_prefers_get_weather_skill(self) -> None:
-        decision = self.gate.decide(
-            message="Look up today's weather in London on the web.",
-            history=[],
-            strategy=parse_execution_strategy("Look up today's weather in London on the web."),
-            routing_decision=RoutingDecision(
-                intent="web_lookup",
-                needs_tools=True,
-                needs_retrieval=False,
-                allowed_tools=("fetch_url",),
-                confidence=0.9,
-                reason_short="clear web request",
-                source="rules",
-            ),
-        )
+        with patch.object(
+            self.gate,
+            "_llm_skill_decision",
+            side_effect=RuntimeError("offline"),
+        ):
+            decision = self.gate.decide(
+                message="Look up today's weather in London on the web.",
+                history=[],
+                strategy=parse_execution_strategy("Look up today's weather in London on the web."),
+                routing_decision=RoutingDecision(
+                    intent="web_lookup",
+                    needs_tools=True,
+                    needs_retrieval=False,
+                    allowed_tools=("fetch_url",),
+                    confidence=0.9,
+                    reason_short="clear web request",
+                    source="rules",
+                ),
+            )
         self.assertTrue(decision.use_skill)
         self.assertEqual(decision.skill_name, "get_weather")
 

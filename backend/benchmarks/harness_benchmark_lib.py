@@ -684,7 +684,11 @@ async def _run_contract_lifecycle_cases(cases: list[BenchmarkCase]) -> list[dict
         return results
 
 
-async def _run_integration_lifecycle_cases(cases: list[BenchmarkCase]) -> list[dict[str, Any]]:
+async def _run_integration_lifecycle_cases(
+    cases: list[BenchmarkCase],
+    *,
+    use_live_llm_decisions: bool = True,
+) -> list[dict[str, Any]]:
     case_specs = {case.message: case for case in cases}
     support = IntegrationBenchmarkSupport(case_specs)
     with tempfile.TemporaryDirectory() as temp_dir:
@@ -703,7 +707,8 @@ async def _run_integration_lifecycle_cases(cases: list[BenchmarkCase]) -> list[d
             SimpleNamespace(name="terminal"),
             SimpleNamespace(name="python_repl"),
         ]
-        manager._lightweight_router = _ScenarioRouter(case_specs)
+        if not use_live_llm_decisions:
+            manager._lightweight_router = _ScenarioRouter(case_specs)
         manager._astream_model_answer = support.model_answer  # type: ignore[method-assign]
         manager._build_agent = support.build_agent  # type: ignore[method-assign]
         executor = HarnessExecutors(manager)
@@ -748,7 +753,11 @@ async def _run_integration_lifecycle_cases(cases: list[BenchmarkCase]) -> list[d
         return results
 
 
-async def _run_route_skill_cases(cases: list[BenchmarkCase]) -> list[dict[str, Any]]:
+async def _run_route_skill_cases(
+    cases: list[BenchmarkCase],
+    *,
+    use_live_llm_decisions: bool = True,
+) -> list[dict[str, Any]]:
     manager = AgentManager()
     manager.tools = [
         SimpleNamespace(name="fetch_url"),
@@ -756,7 +765,8 @@ async def _run_route_skill_cases(cases: list[BenchmarkCase]) -> list[dict[str, A
         SimpleNamespace(name="terminal"),
         SimpleNamespace(name="python_repl"),
     ]
-    manager._lightweight_router = _ScenarioRouter({case.message: case for case in cases})
+    if not use_live_llm_decisions:
+        manager._lightweight_router = _ScenarioRouter({case.message: case for case in cases})
     results: list[dict[str, Any]] = []
     for case in cases:
         started = time.perf_counter()
@@ -793,6 +803,13 @@ async def _run_route_skill_cases(cases: list[BenchmarkCase]) -> list[dict[str, A
                     "route_intent": decision.intent,
                     "used_skill": skill_decision.skill_name,
                     "allowed_tools": list(decision.allowed_tools),
+                    "route_source": decision.source,
+                    "route_confidence": decision.confidence,
+                    "route_reason_short": decision.reason_short,
+                    "route_subtype": decision.subtype,
+                    "route_ambiguity_flags": list(decision.ambiguity_flags),
+                    "skill_confidence": skill_decision.confidence,
+                    "skill_reason_short": skill_decision.reason_short,
                 },
                 "counts_numeric": None,
                 "counts_locator": None,
@@ -913,11 +930,15 @@ def _contains_any_terms(text: str, terms: list[str]) -> bool:
     return any(_normalized_text(term) in normalized for term in terms if str(term).strip())
 
 
-def _run_rewrite_planner_cases(cases: list[BenchmarkCase]) -> list[dict[str, Any]]:
+def _run_rewrite_planner_cases(
+    cases: list[BenchmarkCase],
+    *,
+    use_live_llm_decisions: bool = True,
+) -> list[dict[str, Any]]:
     results: list[dict[str, Any]] = []
     for case in cases:
         started = time.perf_counter()
-        plan = build_query_plan(case.message)
+        plan = build_query_plan(case.message, prefer_llm=use_live_llm_decisions)
         rewritten_query = plan.query_variants[1] if len(plan.query_variants) > 1 else plan.query_variants[0]
         expect = dict(case.expect or {})
         preserved_terms = [str(item) for item in expect.get("must_preserve_terms", []) or [] if str(item).strip()]
@@ -966,6 +987,9 @@ def _run_rewrite_planner_cases(cases: list[BenchmarkCase]) -> list[dict[str, Any
                     "rewritten_query": rewritten_query,
                     "entity_hints": list(plan.entity_hints),
                     "keyword_hints": list(plan.keyword_hints),
+                    "rewrite_needed": plan.rewrite_needed,
+                    "planner_reason": plan.planner_reason,
+                    "planner_source": plan.planner_source,
                 },
                 "counts_numeric": None,
                 "counts_locator": None,
@@ -1040,6 +1064,7 @@ async def run_selected_benchmark(
     limit: int | None = None,
     output_path: str | Path | None = None,
     use_llm_judge: bool = True,
+    use_live_llm_decisions: bool = True,
 ) -> dict[str, Any]:
     started_at = datetime.now(timezone.utc).isoformat()
     selected_cases = load_cases(suite=suite, extra_case_files=extra_case_files, tag=tag, limit=limit)
@@ -1054,6 +1079,7 @@ async def run_selected_benchmark(
             "tag": tag,
             "limit": limit,
             "case_files": [str(path) for path in resolve_case_files(suite, extra_case_files)],
+            "use_live_llm_decisions": use_live_llm_decisions,
         },
         "summary": {},
         "suites": {},
@@ -1073,13 +1099,28 @@ async def run_selected_benchmark(
             if runner == "contract_lifecycle":
                 suite_results.extend(await _run_contract_lifecycle_cases(runner_cases))
             elif runner == "integration_lifecycle":
-                suite_results.extend(await _run_integration_lifecycle_cases(runner_cases))
+                suite_results.extend(
+                    await _run_integration_lifecycle_cases(
+                        runner_cases,
+                        use_live_llm_decisions=use_live_llm_decisions,
+                    )
+                )
             elif runner == "route_skill":
-                suite_results.extend(await _run_route_skill_cases(runner_cases))
+                suite_results.extend(
+                    await _run_route_skill_cases(
+                        runner_cases,
+                        use_live_llm_decisions=use_live_llm_decisions,
+                    )
+                )
             elif runner == "guard":
                 suite_results.extend(_run_guard_cases(runner_cases))
             elif runner == "rewrite_planner":
-                suite_results.extend(_run_rewrite_planner_cases(runner_cases))
+                suite_results.extend(
+                    _run_rewrite_planner_cases(
+                        runner_cases,
+                        use_live_llm_decisions=use_live_llm_decisions,
+                    )
+                )
 
         judged_suite_results = _apply_benchmark_judge(suite_cases, suite_results, llm_judge=llm_judge)
         payload["suites"][suite_name] = {

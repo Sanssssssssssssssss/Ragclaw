@@ -131,6 +131,8 @@ class JudgeClient:
                 "partiality_honest, conflicting_evidence_honesty, "
                 "tool_or_evidence_reflection, unsupported_claim_control. "
                 "details must be an object and may include commentary, unsupported_claims, rewrite_commentary, and notes. "
+                "Judge rewrite/planner drift explicitly: preserve entities, time periods, metrics, constraints, and negation. "
+                "Judge partiality honesty explicitly: if evidence is weak, conflicting, or incomplete, overconfident answers should fail. "
                 "Be conservative: if evidence is weak or conflicting, mark overconfident answers as failing."
             ),
             prompt_payload=prompt_payload,

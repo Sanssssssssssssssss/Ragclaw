@@ -27,6 +27,7 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--tag", default=None, help="Only run cases containing one tag.")
     parser.add_argument("--limit", type=int, default=None, help="Limit loaded cases after filtering.")
     parser.add_argument("--deterministic-only", action="store_true", help="Disable the model-based benchmark judge.")
+    parser.add_argument("--stub-decisions", action="store_true", help="Use benchmark stub routing/rewrite decisions instead of live LLM decisions.")
     parser.add_argument("--output", default=str(DEFAULT_OUTPUT_PATH), help="JSON output path.")
     return parser.parse_args(argv)
 
@@ -39,6 +40,7 @@ async def run_benchmark(
     tag: str | None = None,
     limit: int | None = None,
     use_llm_judge: bool = True,
+    use_live_llm_decisions: bool = True,
 ) -> dict:
     return await run_selected_benchmark(
         suite=suite,
@@ -47,6 +49,7 @@ async def run_benchmark(
         limit=limit,
         output_path=output_path,
         use_llm_judge=use_llm_judge,
+        use_live_llm_decisions=use_live_llm_decisions,
     )
 
 
@@ -60,6 +63,7 @@ def main(argv: list[str] | None = None) -> int:
             tag=args.tag,
             limit=args.limit,
             use_llm_judge=not args.deterministic_only,
+            use_live_llm_decisions=not args.stub_decisions,
         )
     )
     print(args.output)

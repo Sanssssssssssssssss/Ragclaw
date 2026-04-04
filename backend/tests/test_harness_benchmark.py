@@ -100,6 +100,7 @@ class HarnessBenchmarkRunnerTests(unittest.IsolatedAsyncioTestCase):
                 limit=1,
                 output_path=output_path,
                 use_llm_judge=False,
+                use_live_llm_decisions=False,
             )
             self.assertEqual(payload["selection"]["suite"], "integration")
             self.assertEqual(payload["summary"]["total_cases"], 1)
@@ -115,6 +116,7 @@ class HarnessBenchmarkRunnerTests(unittest.IsolatedAsyncioTestCase):
                 limit=3,
                 output_path=output_path,
                 use_llm_judge=False,
+                use_live_llm_decisions=False,
             )
             self.assertEqual(payload["summary"]["total_cases"], 3)
             self.assertIn("scalable", payload["suites"])
@@ -128,6 +130,7 @@ class HarnessBenchmarkRunnerTests(unittest.IsolatedAsyncioTestCase):
                 limit=2,
                 output_path=output_path,
                 use_llm_judge=False,
+                use_live_llm_decisions=False,
             )
             self.assertEqual(payload["selection"]["suite"], "hard")
             self.assertIn("hard", payload["suites"])
@@ -144,6 +147,7 @@ class HarnessBenchmarkRunnerTests(unittest.IsolatedAsyncioTestCase):
                 limit=1,
                 output_path=output_path,
                 use_llm_judge=False,
+                use_live_llm_decisions=False,
             )
             self.assertEqual(payload["summary"]["total_cases"], 1)
             case = payload["cases"][0]
@@ -175,6 +179,7 @@ class HarnessBenchmarkRunnerTests(unittest.IsolatedAsyncioTestCase):
                 suite="contract",
                 limit=1,
                 output_path=output_path,
+                use_live_llm_decisions=False,
             )
             case = payload["cases"][0]
             self.assertTrue(case["llm_judge_passed"])
@@ -187,7 +192,7 @@ class HarnessBenchmarkCliTests(unittest.TestCase):
     def test_cli_basic_execution(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             output_path = Path(temp_dir) / "cli_harness_benchmark.json"
-            rc = main(["--suite", "contract", "--limit", "1", "--deterministic-only", "--output", str(output_path)])
+            rc = main(["--suite", "contract", "--limit", "1", "--deterministic-only", "--stub-decisions", "--output", str(output_path)])
             self.assertEqual(rc, 0)
             self.assertTrue(output_path.exists())
             stored = json.loads(output_path.read_text(encoding="utf-8"))
