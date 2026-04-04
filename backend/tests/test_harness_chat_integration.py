@@ -95,6 +95,11 @@ class HarnessChatIntegrationTests(unittest.TestCase):
             [
                 _event("run.started", {"session_id": "session-1"}, "evt-1"),
                 _event(
+                    "capability.completed",
+                    {"capability_id": "terminal", "capability_type": "tool", "call_id": "cap-1", "status": "success"},
+                    "evt-cap",
+                ),
+                _event(
                     "retrieval.completed",
                     {
                         "kind": "knowledge",
@@ -137,6 +142,7 @@ class HarnessChatIntegrationTests(unittest.TestCase):
         self.assertIn("event: token", body)
         self.assertIn("event: done", body)
         self.assertNotIn("_harness_route", body)
+        self.assertNotIn("event: capability", body)
         self.assertEqual(len(fake_manager.session_manager.saved_messages), 2)
 
     def test_chat_stream_persists_error_when_run_fails(self) -> None:

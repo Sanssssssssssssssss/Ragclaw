@@ -6,10 +6,12 @@ from dataclasses import dataclass
 from typing import Any
 
 from config import get_settings
+from harness.capability_registry import skill_capability_specs
 
 
 @dataclass(frozen=True)
 class SkillProfile:
+    capability_id: str
     skill_name: str
     good_for: str
     bad_for: str
@@ -22,6 +24,7 @@ class SkillProfile:
     def to_dict(self) -> dict[str, Any]:
         return {
             "skill_name": self.skill_name,
+            "capability_id": self.capability_id,
             "good_for": self.good_for,
             "bad_for": self.bad_for,
             "requires_retrieval": self.requires_retrieval,
@@ -48,48 +51,35 @@ class SkillDecision:
         }
 
 
-SKILL_INVENTORY = (
-    SkillProfile(
-        skill_name="get_weather",
-        good_for="Explicit weather lookup by city or forecast window.",
-        bad_for="General web research, local files, knowledge-base QA.",
-        requires_retrieval=False,
-        requires_tool_use=True,
-        risk_level="medium",
-        enabled=True,
-        required_tools=("fetch_url",),
-    ),
-    SkillProfile(
-        skill_name="kb-retriever",
-        good_for="Legacy local knowledge-directory search workflows.",
-        bad_for="Current formal knowledge QA path and normal document-seeking.",
-        requires_retrieval=True,
-        requires_tool_use=True,
-        risk_level="high",
-        enabled=False,
-        required_tools=("read_file", "terminal", "python_repl"),
-    ),
-    SkillProfile(
-        skill_name="retry-lesson-capture",
-        good_for="Internal post-recovery lesson capture after a failure then success.",
-        bad_for="Any user-facing request during normal execution.",
-        requires_retrieval=False,
-        requires_tool_use=True,
-        risk_level="high",
-        enabled=False,
-        required_tools=("read_file", "python_repl"),
-    ),
-    SkillProfile(
-        skill_name="web-search",
-        good_for="Explicit latest/current online facts, official docs, links, news, pricing.",
-        bad_for="Knowledge-base QA, workspace ops, direct explanations without web need.",
-        requires_retrieval=False,
-        requires_tool_use=True,
-        risk_level="medium",
-        enabled=True,
-        required_tools=("fetch_url",),
-    ),
-)
+_SKILL_NAME_OVERRIDES = {
+    "skill.get_weather": "get_weather",
+    "skill.kb_retriever": "kb-retriever",
+    "skill.retry_lesson_capture": "retry-lesson-capture",
+    "skill.web_search": "web-search",
+}
+
+
+def _skill_inventory() -> tuple[SkillProfile, ...]:
+    profiles: list[SkillProfile] = []
+    for spec in skill_capability_specs():
+        skill_name = _SKILL_NAME_OVERRIDES.get(spec.capability_id, spec.capability_id.removeprefix("skill."))
+        profiles.append(
+            SkillProfile(
+                capability_id=spec.capability_id,
+                skill_name=skill_name,
+                good_for=spec.when_to_use,
+                bad_for=spec.when_not_to_use,
+                requires_retrieval="knowledge" in spec.tags or "retrieval" in spec.tags,
+                requires_tool_use=bool(spec.required_capabilities),
+                risk_level=spec.risk_level,
+                enabled=spec.enabled,
+                required_tools=tuple(spec.required_capabilities),
+            )
+        )
+    return tuple(profiles)
+
+
+SKILL_INVENTORY = _skill_inventory()
 
 INVENTORY_BY_NAME = {profile.skill_name: profile for profile in SKILL_INVENTORY}
 

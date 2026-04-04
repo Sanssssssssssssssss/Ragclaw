@@ -12,9 +12,10 @@ from graph.memory_indexer import memory_indexer
 from graph.prompt_builder import build_knowledge_system_prompt, build_system_prompt
 from graph.skill_gate import SkillDecision, SkillGate, skill_instruction, skill_prompt_cards
 from graph.session_manager import SessionManager
+from harness.capability_registry import CapabilityRegistry
 from knowledge_retrieval import knowledge_orchestrator
 from token_utils import count_tokens
-from tools import get_all_tools
+from tools import build_tools_and_registry
 
 KNOWLEDGE_SKILL_PATTERNS = (
     re.compile(r"知识库"),
@@ -129,6 +130,7 @@ class AgentManager:
         self.base_dir: Path | None = None
         self.session_manager: SessionManager | None = None
         self.tools = []
+        self._capability_registry: CapabilityRegistry | None = None
         self._lightweight_router = LightweightLLMRouter()
         self._skill_gate = SkillGate()
         self._harness_runtime = None
@@ -136,7 +138,7 @@ class AgentManager:
     def initialize(self, base_dir: Path) -> None:
         self.base_dir = base_dir
         self.session_manager = SessionManager(base_dir)
-        self.tools = get_all_tools(base_dir)
+        self.tools, self._capability_registry = build_tools_and_registry(base_dir)
         knowledge_orchestrator.configure(base_dir, self._build_chat_model)
         self._harness_runtime = None
 
@@ -153,6 +155,11 @@ class AgentManager:
         from harness.executors import HarnessExecutors  # pylint: disable=import-outside-toplevel
 
         return HarnessExecutors(self)
+
+    def get_capability_registry(self) -> CapabilityRegistry:
+        if self._capability_registry is None:
+            raise RuntimeError("Capability registry is not initialized")
+        return self._capability_registry
 
     def _runtime_rag_mode(self) -> bool:
         return runtime_config.get_rag_mode()
@@ -1198,16 +1205,19 @@ class AgentManager:
         return final_content
 
     def _capability_decision_cards(self) -> list[str]:
-        cards = [
-            "Capability guide:",
-            "- Direct answer: use when the request can be solved from reasoning or rewriting without external state.",
-            "- Knowledge retrieval: use for indexed reports, grounded source lookup, comparisons, or evidence-bound report questions.",
-            "- read_file: use only for a known specific local file.",
-            "- terminal: use for searching/listing workspace files or running workspace commands.",
-            "- python_repl: use for structured calculations, parsing, or file-backed transforms.",
-            "- fetch_url: use for live online facts, official docs, links, and weather.",
-            "- If a tool or retrieval result is partial or noisy, answer conservatively and only reflect what it actually supports.",
-        ]
+        cards = ["Capability guide:"]
+        cards.append(
+            "- Direct answer: use when the request can be solved from reasoning or rewriting without external state."
+        )
+        cards.append(
+            "- Knowledge retrieval: use for indexed reports, grounded source lookup, comparisons, or evidence-bound report questions."
+        )
+        for spec in self.get_capability_registry().list(enabled_only=True):
+            cards.append(
+                f"- {spec.capability_id} ({spec.capability_type}): {spec.when_to_use} "
+                f"Do not use when {spec.when_not_to_use} Risk={spec.risk_level}."
+            )
+        cards.append("- If a tool or retrieval result is partial or noisy, answer conservatively and only reflect what it actually supports.")
         cards.extend(skill_prompt_cards())
         return cards
 

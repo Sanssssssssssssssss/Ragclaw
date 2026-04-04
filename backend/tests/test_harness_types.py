@@ -11,6 +11,7 @@ if str(BACKEND_DIR) not in sys.path:
 from harness.types import (
     CANONICAL_EVENT_NAMES,
     AnswerRecord,
+    CapabilityCallRecord,
     GuardResult,
     HarnessEvent,
     RetrievalEvidenceRecord,
@@ -85,6 +86,19 @@ class HarnessTypesTests(unittest.TestCase):
         self.assertEqual(tool.to_dict()["tool"], "terminal")
         self.assertEqual(answer.to_dict()["output_tokens"], 4)
 
+    def test_capability_call_record_serializes(self) -> None:
+        record = CapabilityCallRecord(
+            capability_id="terminal",
+            capability_type="tool",
+            call_id="cap-1",
+            status="success",
+            session_id="session-1",
+            latency_ms=12,
+            payload={"text": "ok"},
+        )
+        self.assertEqual(record.to_dict()["capability_type"], "tool")
+        self.assertEqual(record.to_dict()["latency_ms"], 12)
+
     def test_guard_result_serializes(self) -> None:
         result = GuardResult(name="grounding_guard", passed=False, reason="unsupported number", details={"numbers": ["123"]})
         self.assertEqual(result.to_dict()["details"]["numbers"], ["123"])
@@ -116,4 +130,3 @@ class HarnessTypesTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-

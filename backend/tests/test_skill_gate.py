@@ -22,6 +22,9 @@ class SkillGateTests(unittest.TestCase):
         inventory = self.gate.inventory()
         names = {item["skill_name"] for item in inventory}
         self.assertEqual(names, {"get_weather", "kb-retriever", "retry-lesson-capture", "web-search"})
+        capability_ids = {item["capability_id"] for item in inventory}
+        self.assertIn("skill.get_weather", capability_ids)
+        self.assertIn("skill.web_search", capability_ids)
 
     def test_web_lookup_latest_prefers_web_search_skill(self) -> None:
         with patch.object(

@@ -7,7 +7,9 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, AsyncIterator
 
 from graph.execution_strategy import ExecutionStrategy
-from graph.skill_gate import SkillDecision
+from graph.skill_gate import SkillDecision, skill_instruction
+from harness.capability_invocation import CapabilityRuntimeContext, capability_runtime_scope, invoke_capability
+from harness.capability_types import CapabilityResult
 from harness.graders import KnowledgeAnswerGrader
 from harness.types import (
     AnswerRecord,
@@ -79,193 +81,239 @@ class HarnessExecutors:
         history: list[dict[str, Any]],
     ) -> RunSummaryState:
         state = RunSummaryState()
-        strategy, routing_decision = await self._agent.resolve_routing(message, history)
-        state.route_intent = routing_decision.intent
-        await runtime.emit(
-            handle,
-            "route.decided",
-            RouteDecisionRecord(
-                intent=routing_decision.intent,
-                needs_tools=routing_decision.needs_tools,
-                needs_retrieval=routing_decision.needs_retrieval,
-                allowed_tools=tuple(routing_decision.allowed_tools),
-                confidence=routing_decision.confidence,
-                reason_short=routing_decision.reason_short,
-                source=routing_decision.source,
-                subtype=routing_decision.subtype,
-                ambiguity_flags=tuple(routing_decision.ambiguity_flags),
-                escalated=routing_decision.escalated,
-                model_name=routing_decision.model_name,
-            ).to_dict(),
+        context = CapabilityRuntimeContext(
+            runtime=runtime,
+            handle=handle,
+            registry=self._agent.get_capability_registry(),
+            governor=runtime.governor_for(handle.run_id),
         )
 
-        skill_decision = self._agent.decide_skill(message, history, strategy, routing_decision)
-        if skill_decision.use_skill:
-            state.used_skill = skill_decision.skill_name
-        await runtime.emit(
-            handle,
-            "skill.decided",
-            SkillDecisionRecord(
-                use_skill=skill_decision.use_skill,
-                skill_name=skill_decision.skill_name,
-                confidence=skill_decision.confidence,
-                reason_short=skill_decision.reason_short,
-            ).to_dict(),
-        )
-
-        rag_mode = self._agent._runtime_rag_mode()
-        augmented_history = list(history)
-        if rag_mode and strategy.allow_retrieval:
+        async with capability_runtime_scope(context):
+            strategy, routing_decision = await self._agent.resolve_routing(message, history)
+            state.route_intent = routing_decision.intent
             await runtime.emit(
                 handle,
-                "retrieval.started",
-                {"kind": "memory", "stage": "memory", "title": "Memory retrieval", "message": ""},
+                "route.decided",
+                RouteDecisionRecord(
+                    intent=routing_decision.intent,
+                    needs_tools=routing_decision.needs_tools,
+                    needs_retrieval=routing_decision.needs_retrieval,
+                    allowed_tools=tuple(routing_decision.allowed_tools),
+                    confidence=routing_decision.confidence,
+                    reason_short=routing_decision.reason_short,
+                    source=routing_decision.source,
+                    subtype=routing_decision.subtype,
+                    ambiguity_flags=tuple(routing_decision.ambiguity_flags),
+                    escalated=routing_decision.escalated,
+                    model_name=routing_decision.model_name,
+                ).to_dict(),
             )
-            retrievals = memory_indexer.retrieve(message, top_k=3)
-            if retrievals:
-                memory_step = self._agent._format_memory_retrieval_step(retrievals)
+
+            skill_decision = self._agent.decide_skill(message, history, strategy, routing_decision)
+            if skill_decision.use_skill:
+                state.used_skill = skill_decision.skill_name
+                await self._activate_skill_capability(
+                    message=message,
+                    routing_decision=routing_decision,
+                    skill_decision=skill_decision,
+                )
+            await runtime.emit(
+                handle,
+                "skill.decided",
+                SkillDecisionRecord(
+                    use_skill=skill_decision.use_skill,
+                    skill_name=skill_decision.skill_name,
+                    confidence=skill_decision.confidence,
+                    reason_short=skill_decision.reason_short,
+                ).to_dict(),
+            )
+
+            rag_mode = self._agent._runtime_rag_mode()
+            augmented_history = list(history)
+            if rag_mode and strategy.allow_retrieval:
                 await runtime.emit(
                     handle,
-                    "retrieval.completed",
-                    RetrievalRecord(
-                        kind=memory_step["kind"],
-                        stage=memory_step["stage"],
-                        title=memory_step["title"],
-                        message=memory_step["message"],
-                        results=tuple(self._agent._harness_retrieval_evidence_records(memory_step["results"])),
-                    ).to_dict(),
+                    "retrieval.started",
+                    {"kind": "memory", "stage": "memory", "title": "Memory retrieval", "message": ""},
                 )
-                state.add_retrieval_sources([item["source_path"] for item in memory_step["results"]])
-                augmented_history.append(
-                    {"role": "assistant", "content": self._agent._format_retrieval_context(retrievals)}
-                )
-
-        if routing_decision.intent == "direct_answer" or (
-            not routing_decision.needs_tools and not routing_decision.needs_retrieval
-        ):
-            messages = self._agent._build_messages(augmented_history)
-            messages.append({"role": "user", "content": message})
-            final_answer, _usage = await self._stream_model_answer(
-                runtime,
-                handle,
-                messages,
-                extra_instructions=strategy.to_instructions(),
-            )
-            state.final_answer = final_answer
-            return state
-
-        if routing_decision.intent == "knowledge_qa" and strategy.allow_knowledge and strategy.allow_retrieval:
-            await runtime.emit(
-                handle,
-                "retrieval.started",
-                {"kind": "knowledge", "stage": "knowledge", "title": "Knowledge retrieval", "message": ""},
-            )
-            knowledge_result = None
-            async for event in knowledge_orchestrator.astream(message):
-                if event.get("type") == "orchestrated_result":
-                    knowledge_result = event["result"]
-                    continue
-
-            if knowledge_result is not None:
-                for step in knowledge_result.steps:
+                retrievals = memory_indexer.retrieve(message, top_k=3)
+                if retrievals:
+                    memory_step = self._agent._format_memory_retrieval_step(retrievals)
                     await runtime.emit(
                         handle,
                         "retrieval.completed",
                         RetrievalRecord(
-                            kind=step.kind,
-                            stage=step.stage,
-                            title=step.title,
-                            message=step.message,
-                            results=tuple(self._agent._harness_retrieval_evidence_records([item.to_dict() for item in step.results])),
-                            status=getattr(knowledge_result, "status", ""),
-                            reason=getattr(knowledge_result, "reason", ""),
+                            kind=memory_step["kind"],
+                            stage=memory_step["stage"],
+                            title=memory_step["title"],
+                            message=memory_step["message"],
+                            results=tuple(self._agent._harness_retrieval_evidence_records(memory_step["results"])),
                         ).to_dict(),
                     )
-                    state.add_retrieval_sources([item.source_path for item in step.results])
-                augmented_history.append(
-                    {"role": "assistant", "content": self._agent._format_knowledge_context(knowledge_result)}
-                )
-                scaffold = self._agent._build_knowledge_scaffold(message, knowledge_result)
-                if scaffold:
-                    augmented_history.append({"role": "assistant", "content": scaffold})
-
-            messages = self._agent._build_messages(augmented_history)
-            messages.append({"role": "user", "content": message})
-            answer, usage = await self._stream_model_answer(
-                runtime,
-                handle,
-                messages,
-                extra_instructions=self._agent._knowledge_answer_instructions(knowledge_result) if knowledge_result else None,
-                system_prompt_override=self._agent._knowledge_system_prompt(),
-                stream_deltas=False,
-            )
-            final_answer = answer
-            if knowledge_result is not None:
-                guard_decision = self._knowledge_grader.grade(answer, knowledge_result)
-                final_answer = guard_decision.final_answer
-                if guard_decision.guard_result is not None:
-                    await runtime.emit(
-                        handle,
-                        "guard.failed",
-                        guard_decision.guard_result.to_dict(),
+                    state.add_retrieval_sources([item["source_path"] for item in memory_step["results"]])
+                    augmented_history.append(
+                        {"role": "assistant", "content": self._agent._format_retrieval_context(retrievals)}
                     )
-            await runtime.emit(
-                handle,
-                "answer.started",
-                AnswerRecord(content="", segment_index=runtime.current_segment_index(handle), final=False).to_dict(),
-            )
-            if final_answer:
+
+            if routing_decision.intent == "direct_answer" or (
+                not routing_decision.needs_tools and not routing_decision.needs_retrieval
+            ):
+                messages = self._agent._build_messages(augmented_history)
+                messages.append({"role": "user", "content": message})
+                final_answer, _usage = await self._stream_model_answer(
+                    runtime,
+                    handle,
+                    messages,
+                    extra_instructions=strategy.to_instructions(),
+                )
+                state.final_answer = final_answer
+                return state
+
+            if routing_decision.intent == "knowledge_qa" and strategy.allow_knowledge and strategy.allow_retrieval:
                 await runtime.emit(
                     handle,
-                    "answer.delta",
+                    "retrieval.started",
+                    {"kind": "knowledge", "stage": "knowledge", "title": "Knowledge retrieval", "message": ""},
+                )
+                knowledge_result = None
+                async for event in knowledge_orchestrator.astream(message):
+                    if event.get("type") == "orchestrated_result":
+                        knowledge_result = event["result"]
+                        continue
+
+                if knowledge_result is not None:
+                    for step in knowledge_result.steps:
+                        await runtime.emit(
+                            handle,
+                            "retrieval.completed",
+                            RetrievalRecord(
+                                kind=step.kind,
+                                stage=step.stage,
+                                title=step.title,
+                                message=step.message,
+                                results=tuple(self._agent._harness_retrieval_evidence_records([item.to_dict() for item in step.results])),
+                                status=getattr(knowledge_result, "status", ""),
+                                reason=getattr(knowledge_result, "reason", ""),
+                            ).to_dict(),
+                        )
+                        state.add_retrieval_sources([item.source_path for item in step.results])
+                    augmented_history.append(
+                        {"role": "assistant", "content": self._agent._format_knowledge_context(knowledge_result)}
+                    )
+                    scaffold = self._agent._build_knowledge_scaffold(message, knowledge_result)
+                    if scaffold:
+                        augmented_history.append({"role": "assistant", "content": scaffold})
+
+                messages = self._agent._build_messages(augmented_history)
+                messages.append({"role": "user", "content": message})
+                answer, usage = await self._stream_model_answer(
+                    runtime,
+                    handle,
+                    messages,
+                    extra_instructions=self._agent._knowledge_answer_instructions(knowledge_result) if knowledge_result else None,
+                    system_prompt_override=self._agent._knowledge_system_prompt(),
+                    stream_deltas=False,
+                )
+                final_answer = answer
+                if knowledge_result is not None:
+                    guard_decision = self._knowledge_grader.grade(answer, knowledge_result)
+                    final_answer = guard_decision.final_answer
+                    if guard_decision.guard_result is not None:
+                        await runtime.emit(
+                            handle,
+                            "guard.failed",
+                            guard_decision.guard_result.to_dict(),
+                        )
+                await runtime.emit(
+                    handle,
+                    "answer.started",
+                    AnswerRecord(content="", segment_index=runtime.current_segment_index(handle), final=False).to_dict(),
+                )
+                if final_answer:
+                    await runtime.emit(
+                        handle,
+                        "answer.delta",
+                        AnswerRecord(
+                            content=final_answer,
+                            segment_index=runtime.current_segment_index(handle),
+                            final=False,
+                        ).to_dict(),
+                    )
+                await runtime.emit(
+                    handle,
+                    "answer.completed",
                     AnswerRecord(
                         content=final_answer,
                         segment_index=runtime.current_segment_index(handle),
-                        final=False,
+                        final=True,
+                        input_tokens=int(usage.get("input_tokens", 0) or 0) if isinstance(usage, dict) and usage.get("input_tokens") is not None else None,
+                        output_tokens=int(usage.get("output_tokens", 0) or 0) if isinstance(usage, dict) and usage.get("output_tokens") is not None else None,
                     ).to_dict(),
                 )
-            await runtime.emit(
-                handle,
-                "answer.completed",
-                AnswerRecord(
-                    content=final_answer,
-                    segment_index=runtime.current_segment_index(handle),
-                    final=True,
-                    input_tokens=int(usage.get("input_tokens", 0) or 0) if isinstance(usage, dict) and usage.get("input_tokens") is not None else None,
-                    output_tokens=int(usage.get("output_tokens", 0) or 0) if isinstance(usage, dict) and usage.get("output_tokens") is not None else None,
-                ).to_dict(),
-            )
-            state.final_answer = final_answer
-            return state
+                state.final_answer = final_answer
+                return state
 
-        allowed_tools = self._agent._resolve_tools_for_strategy(strategy)
-        if routing_decision.allowed_tools:
-            allowed_names = set(routing_decision.allowed_tools)
-            allowed_tools = [tool for tool in allowed_tools if getattr(tool, "name", "") in allowed_names]
-        if not allowed_tools:
-            messages = self._agent._build_messages(augmented_history)
-            messages.append({"role": "user", "content": message})
-            final_answer, _usage = await self._stream_model_answer(
+            allowed_tools = self._agent._resolve_tools_for_strategy(strategy)
+            if routing_decision.allowed_tools:
+                allowed_names = set(routing_decision.allowed_tools)
+                allowed_tools = [tool for tool in allowed_tools if getattr(tool, "name", "") in allowed_names]
+            if not allowed_tools:
+                messages = self._agent._build_messages(augmented_history)
+                messages.append({"role": "user", "content": message})
+                final_answer, _usage = await self._stream_model_answer(
+                    runtime,
+                    handle,
+                    messages,
+                    extra_instructions=strategy.to_instructions(),
+                )
+                state.final_answer = final_answer
+                return state
+
+            final_answer = await self._stream_tool_path(
                 runtime,
                 handle,
-                messages,
-                extra_instructions=strategy.to_instructions(),
+                message=message,
+                augmented_history=augmented_history,
+                strategy=strategy,
+                skill_decision=skill_decision,
+                allowed_tools=allowed_tools,
+                state=state,
             )
             state.final_answer = final_answer
             return state
 
-        final_answer = await self._stream_tool_path(
-            runtime,
-            handle,
-            message=message,
-            augmented_history=augmented_history,
-            strategy=strategy,
-            skill_decision=skill_decision,
-            allowed_tools=allowed_tools,
-            state=state,
+    async def _activate_skill_capability(
+        self,
+        *,
+        message: str,
+        routing_decision: "RoutingDecision",
+        skill_decision: SkillDecision,
+    ) -> None:
+        skill_key = skill_decision.skill_name.replace("-", "_")
+        spec = self._agent.get_capability_registry().get(f"skill.{skill_key}")
+        await invoke_capability(
+            spec=spec,
+            payload={
+                "message": message,
+                "allowed_capabilities": list(getattr(routing_decision, "allowed_tools", ()) or ()),
+            },
+            execute_async=self._build_skill_runner(spec, skill_decision),
         )
-        state.final_answer = final_answer
-        return state
+
+    def _build_skill_runner(self, spec, skill_decision: SkillDecision):
+        async def _runner(_payload: dict[str, Any]) -> CapabilityResult:
+            return CapabilityResult(
+                status="success",
+                payload={
+                    "capability_id": spec.capability_id,
+                    "guidance": skill_instruction(skill_decision.skill_name),
+                    "reason_short": skill_decision.reason_short,
+                    "confidence": skill_decision.confidence,
+                },
+                partial=False,
+            )
+
+        return _runner
 
     async def _stream_model_answer(
         self,

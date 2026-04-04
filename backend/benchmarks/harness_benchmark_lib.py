@@ -20,6 +20,7 @@ from harness.graders import HarnessBenchmarkJudge, HarnessLLMJudge, KnowledgeAns
 from harness.policy import SessionSerialQueue
 from harness.runtime import HarnessRuntime, RuntimeDependencies
 from harness.trace_store import RunTraceStore
+from harness.capability_registry import build_capability_registry
 from knowledge_retrieval.query_rewrite import build_query_plan
 from knowledge_retrieval.types import Evidence, OrchestratedRetrievalResult, RetrievalStep
 
@@ -144,6 +145,8 @@ def summarize_results(results: list[dict[str, Any]]) -> dict[str, Any]:
         "route_trace_presence": _result_metric_average(results, "route_trace_present"),
         "retrieval_trace_presence": _result_metric_average(results, "retrieval_trace_present"),
         "tool_trace_presence": _result_metric_average(results, "tool_trace_present"),
+        "capability_trace_presence": _result_metric_average(results, "capability_trace_present"),
+        "capability_governance_visibility": _result_metric_average(results, "capability_governance_visible"),
         "guard_presence": _result_metric_average(results, "guard_present"),
         "completion_integrity": _result_metric_average(results, "completion_integrity"),
         "queue_integrity": _result_metric_average(results, "queue_integrity"),
@@ -311,6 +314,7 @@ class ContractBenchmarkAgentManager(AgentManager):
         self._case_specs = case_specs
         self.base_dir = Path(__file__).resolve().parents[1]
         self.tools = [SimpleNamespace(name="terminal"), SimpleNamespace(name="fetch_url")]
+        self._capability_registry = build_capability_registry(self.tools)
         self._lightweight_router = _NoRouterAllowed()
 
     def _spec_for_message(self, message: str) -> BenchmarkCase:
@@ -500,6 +504,19 @@ def _lifecycle_case_result(case: BenchmarkCase, trace: dict[str, Any], elapsed_m
     route_present = "route.decided" in event_names
     retrieval_present = "retrieval.started" in event_names and "retrieval.completed" in event_names
     tool_present = "tool.started" in event_names and "tool.completed" in event_names
+    capability_governance_visible = any(
+        name in event_names for name in ("capability.retry", "capability.blocked", "capability.failed")
+    ) or any(
+        str(item.get("name", "")) == "run.completed" and "capability_governance" in dict(item.get("payload", {}))
+        for item in trace.get("events", [])
+    )
+    capability_present = (
+        "capability.started" in event_names and (
+            "capability.completed" in event_names
+            or "capability.failed" in event_names
+            or "capability.blocked" in event_names
+        )
+    ) or capability_governance_visible
     guard_present = "guard.failed" in event_names
     final_answer_present = "answer.completed" in event_names and bool(final_answer.strip())
     completion_integrity = (
@@ -560,6 +577,8 @@ def _lifecycle_case_result(case: BenchmarkCase, trace: dict[str, Any], elapsed_m
         "route_trace_present": route_present,
         "retrieval_trace_present": retrieval_present if expect.get("retrieval") else None,
         "tool_trace_present": tool_present if expect.get("tool") else None,
+        "capability_trace_present": capability_present if (expect.get("tool") or expect.get("skill_name")) else None,
+        "capability_governance_visible": capability_governance_visible if (expect.get("tool") or expect.get("skill_name")) else None,
         "guard_present": guard_present if "guard" in expect else None,
         "completion_integrity": completion_integrity,
         "queue_integrity": queue_integrity if expect.get("queue") else None,
@@ -707,6 +726,7 @@ async def _run_integration_lifecycle_cases(
             SimpleNamespace(name="terminal"),
             SimpleNamespace(name="python_repl"),
         ]
+        manager._capability_registry = build_capability_registry(manager.tools)  # noqa: SLF001
         if not use_live_llm_decisions:
             manager._lightweight_router = _ScenarioRouter(case_specs)
         manager._astream_model_answer = support.model_answer  # type: ignore[method-assign]
@@ -765,6 +785,7 @@ async def _run_route_skill_cases(
         SimpleNamespace(name="terminal"),
         SimpleNamespace(name="python_repl"),
     ]
+    manager._capability_registry = build_capability_registry(manager.tools)  # noqa: SLF001
     if not use_live_llm_decisions:
         manager._lightweight_router = _ScenarioRouter({case.message: case for case in cases})
     results: list[dict[str, Any]] = []

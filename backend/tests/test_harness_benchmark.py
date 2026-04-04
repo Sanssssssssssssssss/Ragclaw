@@ -74,6 +74,7 @@ class HarnessBenchmarkCaseLoadingTests(unittest.TestCase):
         self.assertEqual(summary["route_trace_presence"], 1.0)
         self.assertEqual(summary["unsupported_numeric_hallucination_rate"], 0.0)
         self.assertEqual(summary["unsupported_locator_hallucination_rate"], 1.0)
+        self.assertIn("capability_trace_presence", summary)
 
 
 class HarnessBenchmarkRunnerTests(unittest.IsolatedAsyncioTestCase):

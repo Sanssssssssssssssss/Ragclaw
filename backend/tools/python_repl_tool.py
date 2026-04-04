@@ -12,6 +12,8 @@ from langchain_core.callbacks.manager import AsyncCallbackManagerForToolRun, Cal
 from langchain_core.tools import BaseTool
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr
 
+from harness.capability_types import CapabilityResult
+
 PYTHON_REPL_PREAMBLE = """from pathlib import Path
 import json
 import math
@@ -199,6 +201,11 @@ class PythonReplTool(BaseTool):
     ) -> str:
         """Returns execution output from one code string input and runs the snippet inside the backend workspace."""
 
+        return self.render_capability_result(self.execute_capability({"code": code}))
+
+    def execute_capability(self, payload: dict[str, str]) -> CapabilityResult:
+        code = str(payload.get("code", "") or "")
+
         env = os.environ.copy()
         env["PYTHONUTF8"] = "1"
         env["PYTHONIOENCODING"] = "utf-8"
@@ -215,11 +222,34 @@ class PythonReplTool(BaseTool):
                 check=False,
             )
         except subprocess.TimeoutExpired:
-            return "Timed out after 15 seconds."
+            return CapabilityResult(
+                status="failed",
+                payload={},
+                partial=False,
+                error_type="timeout",
+                error_message="Timed out after 15 seconds.",
+                retryable=False,
+            )
         combined = (completed.stdout or "") + (completed.stderr or "")
         if completed.returncode != 0:
-            return self._format_error_output(combined)
-        return (combined.strip() or "[no output]")[:5000]
+            return CapabilityResult(
+                status="failed",
+                payload={},
+                partial=False,
+                error_type="execution_error",
+                error_message=self._format_error_output(combined),
+                retryable=False,
+            )
+        return CapabilityResult(
+            status="success",
+            payload={"text": (combined.strip() or "[no output]")[:5000]},
+            partial=False,
+        )
+
+    def render_capability_result(self, result: CapabilityResult) -> str:
+        if result.payload.get("text"):
+            return str(result.payload.get("text", ""))
+        return result.error_message or "[no output]"
 
     async def _arun(
         self,
@@ -228,4 +258,8 @@ class PythonReplTool(BaseTool):
     ) -> str:
         """Returns async execution output from one code string input and delegates the sync REPL runner to a worker thread."""
 
-        return await asyncio.to_thread(self._run, code, None)
+        result = await self.aexecute_capability({"code": code})
+        return self.render_capability_result(result)
+
+    async def aexecute_capability(self, payload: dict[str, str]) -> CapabilityResult:
+        return await asyncio.to_thread(self.execute_capability, payload)

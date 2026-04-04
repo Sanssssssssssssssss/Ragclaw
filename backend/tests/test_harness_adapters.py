@@ -29,6 +29,17 @@ class HarnessAdapterTests(unittest.TestCase):
         events += accumulator.consume(_event("skill.decided", {"use_skill": False, "skill_name": ""}, "evt-2"))
         self.assertEqual(events, [])
 
+    def test_capability_events_do_not_leak_to_legacy_sse(self) -> None:
+        accumulator = LegacyChatAccumulator()
+        events = accumulator.consume(
+            _event(
+                "capability.completed",
+                {"capability_id": "terminal", "capability_type": "tool", "call_id": "cap-1", "status": "success"},
+                "evt-3",
+            )
+        )
+        self.assertEqual(events, [])
+
     def test_answer_delta_and_completed_stay_coherent(self) -> None:
         accumulator = LegacyChatAccumulator()
         outputs = []

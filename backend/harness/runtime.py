@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any, AsyncIterator, Callable
 from uuid import uuid4
 
+from harness.capability_governance import CapabilityBudgetPolicy, CapabilityGovernor
 from harness.policy import SessionSerialQueue
 from harness.trace_store import RunTracePaths, RunTraceStore
 from harness.types import HarnessEvent, HarnessEventName, RunMetadata, RunOutcome
@@ -26,6 +27,7 @@ def _default_run_id() -> str:
 class RuntimeDependencies:
     trace_store: RunTraceStore
     queue: SessionSerialQueue
+    capability_budget_policy: CapabilityBudgetPolicy = field(default_factory=CapabilityBudgetPolicy)
     now_factory: Callable[[], str] = _utc_now_iso
     run_id_factory: Callable[[], str] = _default_run_id
     event_id_factory: Callable[[], str] = _default_run_id
@@ -69,6 +71,10 @@ class HarnessRuntime:
         self._run_states: dict[str, _RunState] = {}
         self._run_queues: dict[str, asyncio.Queue[HarnessEvent | None]] = {}
         self._started_events: dict[str, HarnessEvent] = {}
+        self._run_governors: dict[str, CapabilityGovernor] = {}
+
+    def now(self) -> str:
+        return self._deps.now_factory()
 
     def begin_run(
         self,
@@ -86,6 +92,7 @@ class HarnessRuntime:
         )
         paths = self._deps.trace_store.create_run(metadata)
         self._run_states[metadata.run_id] = _RunState()
+        self._run_governors[metadata.run_id] = CapabilityGovernor(self._deps.capability_budget_policy)
         started_event = self.record_event(
             metadata.run_id,
             "run.started",
@@ -125,6 +132,17 @@ class HarnessRuntime:
         self._deps.trace_store.append_event(event)
         return event
 
+    def record_internal_event(self, run_id: str, name: HarnessEventName, payload: dict[str, Any]) -> HarnessEvent:
+        event = self.record_event(run_id, name, payload)
+        self._apply_event_to_state(run_id, name, payload)
+        return event
+
+    def governor_for(self, run_id: str) -> CapabilityGovernor:
+        governor = self._run_governors.get(run_id)
+        if governor is None:
+            raise KeyError(f"unknown capability governor for run_id={run_id}")
+        return governor
+
     async def emit(
         self,
         handle: RuntimeRunHandle,
@@ -144,6 +162,11 @@ class HarnessRuntime:
             state.route_intent = str(payload.get("intent", "") or "")
         elif name == "skill.decided" and payload.get("use_skill"):
             state.used_skill = str(payload.get("skill_name", "") or "")
+        elif name in {"capability.completed", "capability.failed", "capability.blocked"}:
+            capability_type = str(payload.get("capability_type", "") or "")
+            capability_id = str(payload.get("capability_id", "") or "")
+            if capability_type == "tool":
+                state.add_tool(capability_id)
         elif name == "tool.started" or name == "tool.completed":
             state.add_tool(str(payload.get("tool", "") or ""))
         elif name == "retrieval.completed":
@@ -167,6 +190,7 @@ class HarnessRuntime:
                 "used_skill": state.used_skill,
                 "tool_names": list(state.tool_names),
                 "retrieval_sources": list(state.retrieval_sources),
+                "capability_governance": self.governor_for(handle.run_id).snapshot(),
             },
         )
         outcome = RunOutcome(
@@ -181,6 +205,7 @@ class HarnessRuntime:
         self._deps.trace_store.finalize_run(handle.run_id, outcome)
         self._run_states.pop(handle.run_id, None)
         self._started_events.pop(handle.run_id, None)
+        self._run_governors.pop(handle.run_id, None)
         return event, outcome
 
     def fail_run(self, handle: RuntimeRunHandle, *, error_message: str) -> tuple[HarnessEvent, RunOutcome]:
@@ -194,6 +219,7 @@ class HarnessRuntime:
                 "used_skill": state.used_skill,
                 "tool_names": list(state.tool_names),
                 "retrieval_sources": list(state.retrieval_sources),
+                "capability_governance": self.governor_for(handle.run_id).snapshot(),
             },
         )
         outcome = RunOutcome(
@@ -209,6 +235,7 @@ class HarnessRuntime:
         self._deps.trace_store.finalize_run(handle.run_id, outcome)
         self._run_states.pop(handle.run_id, None)
         self._started_events.pop(handle.run_id, None)
+        self._run_governors.pop(handle.run_id, None)
         return event, outcome
 
     async def run_with_executor(

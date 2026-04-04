@@ -5,6 +5,8 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass, field
 from typing import Any, Literal
 
+from harness.capability_types import CapabilityType
+
 
 HarnessEventName = Literal[
     "run.started",
@@ -12,6 +14,11 @@ HarnessEventName = Literal[
     "run.dequeued",
     "route.decided",
     "skill.decided",
+    "capability.started",
+    "capability.retry",
+    "capability.completed",
+    "capability.failed",
+    "capability.blocked",
     "retrieval.started",
     "retrieval.completed",
     "tool.started",
@@ -30,6 +37,11 @@ CANONICAL_EVENT_NAMES: tuple[HarnessEventName, ...] = (
     "run.dequeued",
     "route.decided",
     "skill.decided",
+    "capability.started",
+    "capability.retry",
+    "capability.completed",
+    "capability.failed",
+    "capability.blocked",
     "retrieval.started",
     "retrieval.completed",
     "tool.started",
@@ -152,6 +164,35 @@ class ToolCallRecord:
     def __post_init__(self) -> None:
         if not self.tool.strip():
             raise ValueError("tool name must not be empty")
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass(frozen=True)
+class CapabilityCallRecord:
+    capability_id: str
+    capability_type: CapabilityType
+    call_id: str
+    status: str
+    session_id: str | None = None
+    retry_count: int = 0
+    partial: bool = False
+    latency_ms: int = 0
+    error_type: str = ""
+    error_message: str = ""
+    input: dict[str, Any] = field(default_factory=dict)
+    payload: dict[str, Any] = field(default_factory=dict)
+    display_name: str = ""
+    risk_level: str = ""
+    approval_required: bool = False
+    budget_cost: int = 0
+
+    def __post_init__(self) -> None:
+        if not self.capability_id.strip():
+            raise ValueError("capability_id must not be empty")
+        if not self.call_id.strip():
+            raise ValueError("call_id must not be empty")
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)

@@ -13,6 +13,7 @@ from langchain_core.tools import BaseTool
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr
 
 from config import get_settings, runtime_config
+from harness.capability_types import CapabilityResult
 
 
 BLOCKED_PATTERNS = (
@@ -182,9 +183,20 @@ class TerminalTool(BaseTool):
         command: str,
         run_manager: CallbackManagerForToolRun | None = None,
     ) -> str:
+        return self.render_capability_result(self.execute_capability({"command": command}))
+
+    def execute_capability(self, payload: dict[str, str]) -> CapabilityResult:
+        command = str(payload.get("command", "") or "")
         lowered = command.lower()
         if any(pattern in lowered for pattern in BLOCKED_PATTERNS):
-            return "Blocked: command matches the terminal blacklist."
+            return CapabilityResult(
+                status="blocked",
+                payload={},
+                partial=False,
+                error_type="blocked_command",
+                error_message="Blocked: command matches the terminal blacklist.",
+                retryable=False,
+            )
 
         settings = get_settings()
         execution_platform = self._get_execution_platform()
@@ -195,9 +207,16 @@ class TerminalTool(BaseTool):
         )
         shell_command = self._build_shell_command(execution_platform, normalized_command)
         if shell_command is None:
-            return (
-                f"Configured execution platform is {execution_platform}, "
-                f"but the required shell is not available on this machine."
+            return CapabilityResult(
+                status="failed",
+                payload={},
+                partial=False,
+                error_type="capability_unavailable",
+                error_message=(
+                    f"Configured execution platform is {execution_platform}, "
+                    f"but the required shell is not available on this machine."
+                ),
+                retryable=False,
             )
         try:
             completed = subprocess.run(
@@ -209,15 +228,44 @@ class TerminalTool(BaseTool):
                 check=False,
             )
         except subprocess.TimeoutExpired:
-            return "Timed out after 30 seconds."
+            return CapabilityResult(
+                status="failed",
+                payload={},
+                partial=False,
+                error_type="timeout",
+                error_message=f"Timed out after {settings.terminal_timeout_seconds} seconds.",
+                retryable=False,
+            )
 
         combined = (completed.stdout or "") + (completed.stderr or "")
         combined = combined.strip() or "[no output]"
-        return combined[:5000]
+        if completed.returncode != 0:
+            return CapabilityResult(
+                status="partial",
+                payload={"text": combined[:5000]},
+                partial=True,
+                error_type="nonzero_exit",
+                error_message=f"Command exited with code {completed.returncode}.",
+                retryable=False,
+            )
+        return CapabilityResult(
+            status="success",
+            payload={"text": combined[:5000]},
+            partial=False,
+        )
+
+    def render_capability_result(self, result: CapabilityResult) -> str:
+        if result.payload.get("text"):
+            return str(result.payload.get("text", ""))
+        return result.error_message or "[no output]"
 
     async def _arun(
         self,
         command: str,
         run_manager: AsyncCallbackManagerForToolRun | None = None,
     ) -> str:
-        return await asyncio.to_thread(self._run, command, None)
+        result = await self.aexecute_capability({"command": command})
+        return self.render_capability_result(result)
+
+    async def aexecute_capability(self, payload: dict[str, str]) -> CapabilityResult:
+        return await asyncio.to_thread(self.execute_capability, payload)
