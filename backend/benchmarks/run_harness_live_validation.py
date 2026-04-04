@@ -27,6 +27,9 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from benchmarks.storage_layout import harness_live_output_path
 from graph.agent import agent_manager
+from graph.execution_strategy import ExecutionStrategy
+from graph.lightweight_router import RoutingDecision
+from harness.execution_support import HarnessExecutionSupport
 from harness.runtime import build_harness_runtime
 from knowledge_retrieval.types import Evidence, OrchestratedRetrievalResult, RetrievalStep
 
@@ -243,8 +246,9 @@ def _dict_to_retrieval_result(payload: dict[str, Any]) -> OrchestratedRetrievalR
     )
 
 
-class _LiveValidationSupport:
+class _LiveValidationSupport(HarnessExecutionSupport):
     def __init__(self, cases: list[LiveValidationCase]) -> None:
+        super().__init__(agent_manager)
         self._cases = {case.message: case for case in cases}
         for case in cases:
             if case.companion_message:
@@ -260,7 +264,7 @@ class _LiveValidationSupport:
     def active_case(self) -> LiveValidationCase:
         return self.case_for_message(self._active_message)
 
-    async def model_answer(self, messages: list[dict[str, str]], extra_instructions=None, system_prompt_override=None):
+    async def astream_model_answer(self, messages: list[dict[str, str]], extra_instructions=None, system_prompt_override=None):
         message = str(messages[-1]["content"] or "")
         case = self.case_for_message(message)
         is_companion = bool(case.companion_message and message == case.companion_message)
@@ -292,7 +296,7 @@ class _LiveValidationSupport:
             return
         yield {"type": "orchestrated_result", "result": _dict_to_retrieval_result(case.retrieval_result)}
 
-    def build_agent(self, extra_instructions=None, tools_override=None):
+    def build_tool_agent(self, *, extra_instructions=None, tools_override=None):
         return _LiveValidationToolAgent(self.active_case())
 
 
@@ -524,7 +528,22 @@ async def run_live_validation(
         original_resolve_routing = agent_manager.resolve_routing
 
         async def _resolve_with_tracking(message: str, history: list[dict[str, Any]]):
+            case = support.case_for_message(message)
             support.set_active_message(message)
+            if case.scenario == "failure":
+                return (
+                    ExecutionStrategy(allow_tools=False, allow_knowledge=False, allow_retrieval=False, force_direct_answer=True),
+                    RoutingDecision(
+                        intent="direct_answer",
+                        needs_tools=False,
+                        needs_retrieval=False,
+                        allowed_tools=(),
+                        confidence=1.0,
+                        reason_short="live_validation_failure",
+                        source="live_validation",
+                        subtype="",
+                    ),
+                )
             return await original_resolve_routing(message, history)
 
         stack.enter_context(patch.object(backend_app, "refresh_snapshot", lambda *_args, **_kwargs: None))
@@ -532,8 +551,7 @@ async def run_live_validation(
         stack.enter_context(patch.object(backend_app, "_warm_knowledge_index", AsyncMock(return_value=None)))
         stack.enter_context(patch.object(agent_manager, "get_harness_runtime", return_value=runtime))
         stack.enter_context(patch.object(agent_manager, "resolve_routing", side_effect=_resolve_with_tracking))
-        stack.enter_context(patch.object(agent_manager, "_astream_model_answer", side_effect=support.model_answer))
-        stack.enter_context(patch.object(agent_manager, "_build_agent", side_effect=support.build_agent))
+        stack.enter_context(patch.object(agent_manager, "create_execution_support", return_value=support))
         stack.enter_context(patch("harness.executors.memory_indexer.retrieve", return_value=[]))
         stack.enter_context(patch("harness.executors.knowledge_orchestrator.astream", side_effect=support.knowledge_astream))
 

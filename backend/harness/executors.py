@@ -70,6 +70,7 @@ class HarnessExecutors:
 
     def __init__(self, agent_manager: "AgentManager") -> None:
         self._agent = agent_manager
+        self._execution = agent_manager.create_execution_support()
         self._knowledge_grader = KnowledgeAnswerGrader(agent_manager)
 
     async def execute(
@@ -328,7 +329,7 @@ class HarnessExecutors:
         started = False
         final_answer = ""
         usage: dict[str, int] | None = None
-        async for event in self._agent._astream_model_answer(
+        async for event in self._execution.astream_model_answer(
             messages,
             extra_instructions=extra_instructions,
             system_prompt_override=system_prompt_override,
@@ -387,8 +388,8 @@ class HarnessExecutors:
         allowed_tools: list[Any],
         state: RunSummaryState,
     ) -> str:
-        agent = self._agent._build_agent(
-            extra_instructions=self._agent._tool_agent_instructions(strategy, skill_decision),
+        agent = self._execution.build_tool_agent(
+            extra_instructions=self._execution.tool_agent_instructions(strategy, skill_decision),
             tools_override=allowed_tools,
         )
         messages = self._agent._build_messages(augmented_history)
@@ -407,7 +408,7 @@ class HarnessExecutors:
                 if metadata.get("langgraph_node") != "model":
                     continue
                 text = _stringify_content(getattr(chunk, "content", ""))
-                next_chunk = self._agent._incremental_stream_text(last_streamed_model_text, text)
+                next_chunk = self._execution.incremental_stream_text(last_streamed_model_text, text)
                 if text:
                     last_streamed_model_text = text
                 if next_chunk:
@@ -483,7 +484,7 @@ class HarnessExecutors:
                         answer_started = False
 
         final_content = "".join(final_content_parts).strip() or last_ai_message.strip()
-        if self._agent._needs_tool_result_fallback(final_content, recorded_tools):
+        if self._execution.needs_tool_result_fallback(final_content, recorded_tools):
             final_content = await self._stream_tool_result_fallback(
                 runtime,
                 handle,
@@ -516,7 +517,7 @@ class HarnessExecutors:
         strategy: ExecutionStrategy,
     ) -> str:
         fallback_messages = list(history_messages)
-        fallback_messages.append({"role": "assistant", "content": self._agent._tool_results_context(recorded_tools)})
+        fallback_messages.append({"role": "assistant", "content": self._execution.tool_results_context(recorded_tools)})
         fallback_messages.append({"role": "user", "content": user_message})
 
         fallback_instructions = [

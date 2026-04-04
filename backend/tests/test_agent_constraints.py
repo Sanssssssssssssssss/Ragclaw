@@ -11,6 +11,7 @@ if str(BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(BACKEND_DIR))
 
 from graph.agent import AgentManager
+from harness.execution_support import incremental_text
 
 
 async def collect_events(manager: AgentManager, message: str) -> list[dict]:
@@ -27,6 +28,54 @@ class FakeAgent:
     async def astream(self, *_args, **_kwargs):
         for item in self._events:
             yield item
+
+
+class FakeExecutionSupport:
+    def __init__(self, *, model_answer=None, tool_agent=None) -> None:
+        self._model_answer = model_answer
+        self._tool_agent = tool_agent
+        self.build_tool_agent_calls: list[dict[str, object]] = []
+
+    async def astream_model_answer(self, messages, extra_instructions=None, system_prompt_override=None):
+        if self._model_answer is None:
+            raise AssertionError("unexpected model answer call")
+        async for item in self._model_answer(messages, extra_instructions=extra_instructions, system_prompt_override=system_prompt_override):
+            yield item
+
+    def build_tool_agent(self, *, extra_instructions=None, tools_override=None):
+        self.build_tool_agent_calls.append(
+            {
+                "extra_instructions": list(extra_instructions or []),
+                "tools_override": list(tools_override or []),
+            }
+        )
+        if self._tool_agent is None:
+            raise AssertionError("unexpected tool agent call")
+        return self._tool_agent
+
+    def incremental_stream_text(self, previous: str, current: str) -> str:
+        return incremental_text(previous, current)
+
+    def tool_agent_instructions(self, strategy, skill_decision=None) -> list[str]:
+        return list(strategy.to_instructions())
+
+    def tool_results_context(self, recorded_tools: list[dict[str, str]]) -> str:
+        blocks = ["[Tool execution results]"]
+        for index, item in enumerate(recorded_tools, start=1):
+            blocks.append(
+                f"{index}. Tool: {item.get('tool', 'tool')}\n"
+                f"Input: {item.get('input', '')}\n"
+                f"Output:\n{item.get('output', '') or '[no output]'}"
+            )
+        return "\n\n".join(blocks)
+
+    def needs_tool_result_fallback(self, final_content: str, recorded_tools: list[dict[str, str]]) -> bool:
+        if not recorded_tools:
+            return False
+        normalized = str(final_content or "").strip().lower()
+        if not normalized:
+            return True
+        return normalized.startswith("我来使用") or normalized.startswith("i'll use") or normalized.startswith("let me use")
 
 
 class AgentConstraintTests(unittest.IsolatedAsyncioTestCase):
@@ -149,8 +198,9 @@ class AgentConstraintTests(unittest.IsolatedAsyncioTestCase):
             if False:
                 yield {}
 
+        support = FakeExecutionSupport(model_answer=fake_model_answer)
         with (
-            patch.object(self.manager, "_astream_model_answer", side_effect=fake_model_answer),
+            patch.object(self.manager, "create_execution_support", return_value=support),
             patch("graph.agent.knowledge_orchestrator.astream", side_effect=fake_knowledge_astream),
         ):
             events = await collect_events(
@@ -215,8 +265,9 @@ class AgentConstraintTests(unittest.IsolatedAsyncioTestCase):
             if False:
                 yield {}
 
+        support = FakeExecutionSupport(tool_agent=fake_agent)
         with (
-            patch.object(self.manager, "_build_agent", return_value=fake_agent) as build_agent,
+            patch.object(self.manager, "create_execution_support", return_value=support),
             patch("graph.agent.knowledge_orchestrator.astream", side_effect=fake_knowledge_astream),
         ):
             events = await collect_events(
@@ -225,8 +276,8 @@ class AgentConstraintTests(unittest.IsolatedAsyncioTestCase):
             )
 
         self.assertFalse(knowledge_called)
-        self.assertEqual(build_agent.call_args.kwargs["tools_override"][0].name, "terminal")
-        self.assertEqual(len(build_agent.call_args.kwargs["tools_override"]), 1)
+        self.assertEqual(support.build_tool_agent_calls[0]["tools_override"][0].name, "terminal")
+        self.assertEqual(len(support.build_tool_agent_calls[0]["tools_override"]), 1)
         self.assertEqual([event["tool"] for event in events if event["type"] == "tool_start"], ["terminal"])
         self.assertFalse(any(event["type"] == "retrieval" for event in events))
         self.assertIn("\u5171\u6709 2 \u4e2a\u6587\u4ef6", events[-1]["content"])
@@ -282,10 +333,8 @@ class AgentConstraintTests(unittest.IsolatedAsyncioTestCase):
                 "content": "FAQ JSON \u4e2d\u5171\u6709 120 \u6761\u8bb0\u5f55\uff0c\u524d 3 \u6761 question \u5206\u522b\u662f\uff1a\u5982\u4f55\u8ba2\u8d2d\u3001\u6211\u5982\u4f55\u67e5\u770b\u6211\u7684\u72b6\u6001\u3001\u4e3a\u4ec0\u4e48\u6211\u5728\u6211\u7684\u5e10\u6237\u4e2d\u627e\u4e0d\u5230\u6211\u7684\u8ba2\u5355\uff1f",
             }
 
-        with (
-            patch.object(self.manager, "_build_agent", return_value=fake_agent),
-            patch.object(self.manager, "_astream_model_answer", side_effect=fake_model_answer),
-        ):
+        support = FakeExecutionSupport(tool_agent=fake_agent, model_answer=fake_model_answer)
+        with patch.object(self.manager, "create_execution_support", return_value=support):
             events = await collect_events(
                 self.manager,
                 "\u8bfb\u53d6 knowledge/E-commerce Data/faq.json\uff0c\u7edf\u8ba1\u8bb0\u5f55\u6570\uff0c\u5e76\u7ed9\u51fa\u524d 3 \u6761 question\u3002",
@@ -327,7 +376,8 @@ class AgentConstraintTests(unittest.IsolatedAsyncioTestCase):
             ]
         )
 
-        with patch.object(self.manager, "_build_agent", return_value=fake_agent):
+        support = FakeExecutionSupport(tool_agent=fake_agent)
+        with patch.object(self.manager, "create_execution_support", return_value=support):
             events = await collect_events(
                 self.manager,
                 "\u8bf7\u53ea\u7528 terminal \u8bfb\u53d6\u8fd9\u4e24\u4efd\u62a5\u544a\u7684\u5185\u5bb9\u3002",

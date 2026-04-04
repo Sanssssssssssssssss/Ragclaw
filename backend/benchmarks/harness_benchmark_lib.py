@@ -16,6 +16,7 @@ from graph.execution_strategy import ExecutionStrategy
 from graph.lightweight_router import RoutingDecision
 from graph.skill_gate import SkillDecision
 from harness.executors import HarnessExecutors
+from harness.execution_support import HarnessExecutionSupport
 from harness.graders import HarnessBenchmarkJudge, HarnessLLMJudge, KnowledgeAnswerGrader
 from harness.policy import SessionSerialQueue
 from harness.runtime import HarnessRuntime, RuntimeDependencies
@@ -306,6 +307,32 @@ class _BenchmarkToolAgent:
             )
 
 
+class _ContractBenchmarkExecutionSupport(HarnessExecutionSupport):
+    def __init__(self, agent_manager: "ContractBenchmarkAgentManager") -> None:
+        super().__init__(agent_manager)
+        self._agent_manager = agent_manager
+
+    async def astream_model_answer(self, messages: list[dict[str, str]], extra_instructions=None, system_prompt_override=None):
+        spec = self._agent_manager._spec_for_message(messages[-1]["content"])
+        if spec.expect.get("failure"):
+            raise RuntimeError(f"{spec.case_id} failed")
+        final_text = str(spec.expect.get("answer_fragment", "") or f"{spec.case_id} answer")
+        if spec.expect.get("queue") or spec.case_id.endswith("_holder"):
+            await asyncio.sleep(0.1)
+        midpoint = max(1, len(final_text) // 2)
+        yield {"type": "token", "content": final_text[:midpoint]}
+        yield {"type": "token", "content": final_text[midpoint:]}
+        yield {"type": "done", "content": final_text, "usage": {"input_tokens": 10, "output_tokens": 4}}
+
+    def build_tool_agent(self, *, extra_instructions=None, tools_override=None):
+        return _BenchmarkToolAgent(
+            "contract_tool",
+            tool_outputs=list(
+                self._agent_manager._spec_for_message("contract_tool message").expect.get("tool_outputs", ["a.txt\nb.txt"])
+            ),
+        )
+
+
 class ContractBenchmarkAgentManager(AgentManager):
     """Controlled provider for fast contract regressions, still executed through real HarnessExecutors."""
 
@@ -379,33 +406,13 @@ class ContractBenchmarkAgentManager(AgentManager):
     def _knowledge_system_prompt(self) -> str:
         return "Contract benchmark knowledge prompt"
 
-    async def _astream_model_answer(
-        self,
-        messages: list[dict[str, str]],
-        extra_instructions: list[str] | None = None,
-        system_prompt_override: str | None = None,
-    ):
-        spec = self._spec_for_message(messages[-1]["content"])
-        if spec.expect.get("failure"):
-            raise RuntimeError(f"{spec.case_id} failed")
-        final_text = str(spec.expect.get("answer_fragment", "") or f"{spec.case_id} answer")
-        if spec.expect.get("queue") or spec.case_id.endswith("_holder"):
-            await asyncio.sleep(0.1)
-        midpoint = max(1, len(final_text) // 2)
-        yield {"type": "token", "content": final_text[:midpoint]}
-        yield {"type": "token", "content": final_text[midpoint:]}
-        yield {"type": "done", "content": final_text, "usage": {"input_tokens": 10, "output_tokens": 4}}
+    def create_execution_support(self) -> HarnessExecutionSupport:
+        return _ContractBenchmarkExecutionSupport(self)
 
     def _resolve_tools_for_strategy(self, strategy: ExecutionStrategy) -> list[Any]:
         if not strategy.allow_tools:
             return []
         return [tool for tool in self.tools if getattr(tool, "name", "") == "terminal"]
-
-    def _build_agent(self, extra_instructions=None, tools_override=None):
-        return _BenchmarkToolAgent(
-            "contract_tool",
-            tool_outputs=list(self._spec_for_message("contract_tool message").expect.get("tool_outputs", ["a.txt\nb.txt"])),
-        )
 
     def _build_knowledge_scaffold(self, message: str, retrieval_result) -> str:
         return ""
@@ -414,10 +421,11 @@ class ContractBenchmarkAgentManager(AgentManager):
         return ["Use the evidence only."]
 
 
-class IntegrationBenchmarkSupport:
+class IntegrationBenchmarkSupport(HarnessExecutionSupport):
     """Minimal controlled doubles around a real AgentManager capability path."""
 
-    def __init__(self, case_specs: dict[str, BenchmarkCase]) -> None:
+    def __init__(self, agent_manager: AgentManager, case_specs: dict[str, BenchmarkCase]) -> None:
+        super().__init__(agent_manager)
         self.case_specs = case_specs
         self.active_case: BenchmarkCase | None = None
 
@@ -431,7 +439,7 @@ class IntegrationBenchmarkSupport:
     def set_active_case(self, case: BenchmarkCase) -> None:
         self.active_case = case
 
-    async def model_answer(self, messages: list[dict[str, str]], extra_instructions=None, system_prompt_override=None):
+    async def astream_model_answer(self, messages: list[dict[str, str]], extra_instructions=None, system_prompt_override=None):
         spec = self.spec_for_message(messages[-1]["content"])
         if spec.expect.get("failure"):
             raise RuntimeError(f"{spec.case_id} failed")
@@ -489,7 +497,7 @@ class IntegrationBenchmarkSupport:
         )
         yield {"type": "orchestrated_result", "result": result}
 
-    def build_agent(self, extra_instructions=None, tools_override=None):
+    def build_tool_agent(self, *, extra_instructions=None, tools_override=None):
         spec = self.active_case
         tool_outputs = list((spec.expect.get("tool_outputs", ["a.txt\nb.txt"]) if spec is not None else ["a.txt\nb.txt"]))
         case_id = spec.case_id if spec is not None else "integration_tool"
@@ -709,7 +717,7 @@ async def _run_integration_lifecycle_cases(
     use_live_llm_decisions: bool = True,
 ) -> list[dict[str, Any]]:
     case_specs = {case.message: case for case in cases}
-    support = IntegrationBenchmarkSupport(case_specs)
+    support: IntegrationBenchmarkSupport | None = None
     with tempfile.TemporaryDirectory() as temp_dir:
         root = Path(temp_dir)
         runtime = HarnessRuntime(
@@ -727,10 +735,54 @@ async def _run_integration_lifecycle_cases(
             SimpleNamespace(name="python_repl"),
         ]
         manager._capability_registry = build_capability_registry(manager.tools)  # noqa: SLF001
+        support = IntegrationBenchmarkSupport(manager, case_specs)
+        manager.create_execution_support = lambda: support  # type: ignore[method-assign]
         if not use_live_llm_decisions:
-            manager._lightweight_router = _ScenarioRouter(case_specs)
-        manager._astream_model_answer = support.model_answer  # type: ignore[method-assign]
-        manager._build_agent = support.build_agent  # type: ignore[method-assign]
+            async def _resolve_case_routing(message: str, history: list[dict[str, Any]]):
+                spec = support.spec_for_message(message)
+                if spec.scenario in {"knowledge_qa", "guarded_knowledge"}:
+                    return (
+                        ExecutionStrategy(allow_tools=False, allow_knowledge=True, allow_retrieval=True),
+                        RoutingDecision(
+                            intent="knowledge_qa",
+                            needs_tools=False,
+                            needs_retrieval=True,
+                            allowed_tools=(),
+                            confidence=1.0,
+                            reason_short=spec.scenario,
+                            source="benchmark",
+                            subtype="",
+                        ),
+                    )
+                if spec.scenario == "tool_path":
+                    return (
+                        ExecutionStrategy(allow_tools=True, allow_knowledge=False, allow_retrieval=False),
+                        RoutingDecision(
+                            intent="workspace_file_ops",
+                            needs_tools=True,
+                            needs_retrieval=False,
+                            allowed_tools=("terminal",),
+                            confidence=1.0,
+                            reason_short=spec.scenario,
+                            source="benchmark",
+                            subtype="search_workspace_file",
+                        ),
+                    )
+                return (
+                    ExecutionStrategy(allow_tools=False, allow_knowledge=False, allow_retrieval=False, force_direct_answer=True),
+                    RoutingDecision(
+                        intent="direct_answer",
+                        needs_tools=False,
+                        needs_retrieval=False,
+                        allowed_tools=(),
+                        confidence=1.0,
+                        reason_short=spec.scenario,
+                        source="benchmark",
+                        subtype="",
+                    ),
+                )
+
+            manager.resolve_routing = _resolve_case_routing  # type: ignore[method-assign]
         executor = HarnessExecutors(manager)
         results: list[dict[str, Any]] = []
 

@@ -9,12 +9,12 @@ from config import get_settings, runtime_config
 from graph.execution_strategy import ExecutionStrategy, parse_execution_strategy
 from graph.lightweight_router import RoutingDecision, LightweightLLMRouter, deterministic_route
 from graph.memory_indexer import memory_indexer
-from graph.prompt_builder import build_knowledge_system_prompt, build_system_prompt
-from graph.skill_gate import SkillDecision, SkillGate, skill_instruction, skill_prompt_cards
+from graph.prompt_builder import build_knowledge_system_prompt
+from graph.skill_gate import SkillDecision, SkillGate
 from graph.session_manager import SessionManager
 from harness.capability_registry import CapabilityRegistry
+from harness.execution_support import HarnessExecutionSupport
 from knowledge_retrieval import knowledge_orchestrator
-from token_utils import count_tokens
 from tools import build_tools_and_registry
 
 KNOWLEDGE_SKILL_PATTERNS = (
@@ -156,6 +156,9 @@ class AgentManager:
 
         return HarnessExecutors(self)
 
+    def create_execution_support(self) -> HarnessExecutionSupport:
+        return HarnessExecutionSupport(self)
+
     def get_capability_registry(self) -> CapabilityRegistry:
         if self._capability_registry is None:
             raise RuntimeError("Capability registry is not initialized")
@@ -166,9 +169,6 @@ class AgentManager:
 
     def _knowledge_system_prompt(self) -> str:
         return build_knowledge_system_prompt()
-
-    def _incremental_stream_text(self, previous: str, current: str) -> str:
-        return _incremental_text(previous, current)
 
     def _harness_retrieval_evidence_records(self, results: list[dict[str, Any]]):
         from harness.types import RetrievalEvidenceRecord  # pylint: disable=import-outside-toplevel
@@ -234,25 +234,6 @@ class AgentManager:
         from langchain_openai import ChatOpenAI
 
         return ChatOpenAI(**self._build_openai_chat_model_kwargs(settings))
-
-    def _build_agent(
-        self,
-        extra_instructions: list[str] | None = None,
-        tools_override: list[Any] | None = None,
-    ):
-        if self.base_dir is None:
-            raise RuntimeError("AgentManager is not initialized")
-
-        from langchain.agents import create_agent
-
-        system_prompt = build_system_prompt(self.base_dir, runtime_config.get_rag_mode())
-        if extra_instructions:
-            system_prompt = f"{system_prompt}\n\n" + "\n\n".join(extra_instructions)
-        return create_agent(
-            model=self._build_chat_model(),
-            tools=self.tools if tools_override is None else tools_override,
-            system_prompt=system_prompt,
-        )
 
     def _resolve_tools_for_strategy(self, strategy: ExecutionStrategy) -> list[Any]:
         """Return the tool list allowed by one execution strategy."""
@@ -1193,77 +1174,6 @@ class AgentManager:
 
         return "\n".join(lines).strip()
 
-    async def _collect_model_answer(
-        self,
-        messages: list[dict[str, str]],
-        extra_instructions: list[str] | None = None,
-    ) -> str:
-        final_content = ""
-        async for event in self._astream_model_answer(messages, extra_instructions=extra_instructions):
-            if event.get("type") == "done":
-                final_content = str(event.get("content", "") or "").strip()
-        return final_content
-
-    def _capability_decision_cards(self) -> list[str]:
-        cards = ["Capability guide:"]
-        cards.append(
-            "- Direct answer: use when the request can be solved from reasoning or rewriting without external state."
-        )
-        cards.append(
-            "- Knowledge retrieval: use for indexed reports, grounded source lookup, comparisons, or evidence-bound report questions."
-        )
-        for spec in self.get_capability_registry().list(enabled_only=True):
-            cards.append(
-                f"- {spec.capability_id} ({spec.capability_type}): {spec.when_to_use} "
-                f"Do not use when {spec.when_not_to_use} Risk={spec.risk_level}."
-            )
-        cards.append("- If a tool or retrieval result is partial or noisy, answer conservatively and only reflect what it actually supports.")
-        cards.extend(skill_prompt_cards())
-        return cards
-
-    def _tool_agent_instructions(self, strategy: ExecutionStrategy, skill_decision: SkillDecision | None = None) -> list[str]:
-        """Return tool-agent instructions from one execution strategy input."""
-
-        instructions = [
-            "If you use any tool, you must always produce a final natural-language answer for the user after the tool results arrive.",
-            "Do not stop at an action announcement such as saying you will use a tool.",
-            "When tool output is sufficient, summarize the result directly and clearly.",
-            "Choose the narrowest useful capability instead of opening extra tools or switching problem types.",
-        ]
-        instructions.extend(self._capability_decision_cards())
-        if skill_decision and skill_decision.use_skill and skill_decision.skill_name:
-            instructions.extend(skill_instruction(skill_decision.skill_name))
-        instructions.extend(strategy.to_instructions())
-        return instructions
-
-    def _tool_results_context(self, recorded_tools: list[dict[str, str]]) -> str:
-        """Return one compact tool-result context block from recorded tool calls."""
-
-        blocks = ["[Tool execution results]"]
-        for index, item in enumerate(recorded_tools, start=1):
-            output = str(item.get("output", "")).strip()
-            truncated_output = output[:2000] + ("..." if len(output) > 2000 else "")
-            blocks.append(
-                f"{index}. Tool: {item.get('tool', 'tool')}\n"
-                f"Input: {item.get('input', '')}\n"
-                f"Output:\n{truncated_output or '[no output]'}"
-            )
-        return "\n\n".join(blocks)
-
-    def _needs_tool_result_fallback(self, final_content: str, recorded_tools: list[dict[str, str]]) -> bool:
-        """Return whether tool results need a fallback final answer."""
-
-        if not recorded_tools:
-            return False
-        if not final_content.strip():
-            return True
-        lowered = final_content.strip().lower()
-        if any(pattern.search(final_content.strip()) for pattern in ACTION_ONLY_PATTERNS):
-            return True
-        if lowered in {"thinking...", "working on it...", "processing..."}:
-            return True
-        return False
-
     async def _astream_tool_result_fallback(
         self,
         history_messages: list[dict[str, str]],
@@ -1271,7 +1181,7 @@ class AgentManager:
         recorded_tools: list[dict[str, str]],
         strategy: ExecutionStrategy,
     ):
-        """Yield a fallback natural-language answer from completed tool results."""
+        raise RuntimeError("tool-result fallback execution now lives under harness executors")
 
         fallback_messages = list(history_messages)
         fallback_messages.append({"role": "assistant", "content": self._tool_results_context(recorded_tools)})
@@ -1304,41 +1214,6 @@ class AgentManager:
         fallback_text = "根据已成功执行的工具结果，我整理如下：\n\n" + "\n\n".join(compact_lines[:3])
         yield {"type": "done", "content": fallback_text.strip()}
 
-    async def _astream_model_answer(
-        self,
-        messages: list[dict[str, str]],
-        extra_instructions: list[str] | None = None,
-        system_prompt_override: str | None = None,
-    ):
-        if self.base_dir is None:
-            raise RuntimeError("AgentManager is not initialized")
-
-        system_prompt = system_prompt_override or build_system_prompt(self.base_dir, runtime_config.get_rag_mode())
-        if extra_instructions:
-            system_prompt = f"{system_prompt}\n\n" + "\n\n".join(extra_instructions)
-
-        model_messages: list[dict[str, str]] = [{"role": "system", "content": system_prompt}]
-        model_messages.extend(messages)
-        prompt_payload = _serialize_model_messages(model_messages)
-        prompt_tokens = count_tokens(prompt_payload)
-
-        final_content_parts: list[str] = []
-        async for chunk in self._build_chat_model().astream(model_messages):
-            text = _stringify_content(getattr(chunk, "content", ""))
-            if text:
-                final_content_parts.append(text)
-                yield {"type": "token", "content": text}
-
-        final_content = "".join(final_content_parts).strip()
-        yield {
-            "type": "done",
-            "content": final_content,
-            "usage": {
-                "input_tokens": prompt_tokens,
-                "output_tokens": count_tokens(final_content),
-            },
-        }
-
     async def astream(
         self,
         message: str,
@@ -1346,6 +1221,7 @@ class AgentManager:
     ):
         from harness.adapters import LegacyChatAccumulator  # pylint: disable=import-outside-toplevel
 
+        # Compatibility wrapper only: harness remains the execution owner.
         runtime = self.get_harness_runtime()
         executor = self.create_harness_executor()
         accumulator = LegacyChatAccumulator()
