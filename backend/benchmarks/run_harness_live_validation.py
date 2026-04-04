@@ -12,7 +12,6 @@ from contextlib import ExitStack, contextmanager
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from types import SimpleNamespace
 from typing import Any, Iterator
 from unittest.mock import AsyncMock, patch
 
@@ -32,6 +31,9 @@ from harness.runtime import build_harness_runtime
 from knowledge_retrieval.types import Evidence, OrchestratedRetrievalResult, RetrievalStep
 
 
+CASE_FILE = Path(__file__).resolve().parent / "harness_cases" / "live_validation_cases.json"
+
+
 @dataclass(frozen=True)
 class LiveValidationCase:
     case_id: str
@@ -48,6 +50,11 @@ class LiveValidationCase:
     expect_final_excludes: tuple[str, ...] = ()
     tags: tuple[str, ...] = ()
     companion_message: str = ""
+    model_answer: str = ""
+    companion_model_answer: str = ""
+    companion_fail: bool = False
+    tool_outputs: tuple[str, ...] = ()
+    retrieval_result: dict[str, Any] | None = None
 
 
 @dataclass
@@ -71,60 +78,45 @@ class LiveCaseResult:
     retrieval_present: bool = False
     tool_present: bool = False
     completion_integrity: bool = False
+    session_persisted: bool = False
+    sse_order_ok: bool = False
     latency_ms: int = 0
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
 
 
-DEFAULT_CASES: tuple[LiveValidationCase, ...] = (
-    LiveValidationCase(
-        case_id="live_direct_answer",
-        scenario="direct",
-        message="不要用任何工具，直接一句话回答：live direct validation",
-        expect_route="direct_answer",
-        expect_final_contains=("live direct answer",),
-        tags=("smoke", "direct"),
-    ),
-    LiveValidationCase(
-        case_id="live_tool_path",
-        scenario="tool",
-        message="请只用 terminal 工具，在 workspace 里搜索 demo.txt，并告诉我结果。",
-        expect_route="workspace_file_ops",
-        expect_tool=True,
-        expect_final_contains=("demo.txt", "notes.txt"),
-        tags=("tool", "boundary"),
-    ),
-    LiveValidationCase(
-        case_id="live_guarded_knowledge",
-        scenario="knowledge_guard",
-        message="根据知识库，给出 live 营收数值和来源页码。",
-        expect_route="knowledge_qa",
-        expect_retrieval=True,
-        expect_guard=True,
-        expect_final_excludes=("1000亿元", "第99页"),
-        tags=("knowledge", "guard", "boundary"),
-    ),
-    LiveValidationCase(
-        case_id="live_failure_path",
-        scenario="failure",
-        message="请直接回答这个 live failure case。",
-        expect_route="direct_answer",
-        expect_done=False,
-        expect_error=True,
-        tags=("failure", "boundary"),
-    ),
-    LiveValidationCase(
-        case_id="live_same_session_queue",
-        scenario="queue",
-        message="请回答 queued live request。",
-        companion_message="请先处理这个 slow live request。",
-        expect_route="direct_answer",
-        expect_queue=True,
-        expect_final_contains=("queued live answer",),
-        tags=("queue", "boundary"),
-    ),
-)
+def _load_live_cases() -> tuple[LiveValidationCase, ...]:
+    payload = json.loads(CASE_FILE.read_text(encoding="utf-8"))
+    cases: list[LiveValidationCase] = []
+    for raw in payload.get("cases", []):
+        cases.append(
+            LiveValidationCase(
+                case_id=str(raw["case_id"]),
+                scenario=str(raw.get("scenario", "")),
+                message=str(raw.get("message", "")),
+                expect_route=str(raw.get("expect_route", "")),
+                expect_done=bool(raw.get("expect_done", True)),
+                expect_error=bool(raw.get("expect_error", False)),
+                expect_queue=bool(raw.get("expect_queue", False)),
+                expect_retrieval=bool(raw.get("expect_retrieval", False)),
+                expect_tool=bool(raw.get("expect_tool", False)),
+                expect_guard=bool(raw.get("expect_guard", False)),
+                expect_final_contains=tuple(str(item) for item in raw.get("expect_final_contains", [])),
+                expect_final_excludes=tuple(str(item) for item in raw.get("expect_final_excludes", [])),
+                tags=tuple(str(item) for item in raw.get("tags", [])),
+                companion_message=str(raw.get("companion_message", "")),
+                model_answer=str(raw.get("model_answer", "")),
+                companion_model_answer=str(raw.get("companion_model_answer", "")),
+                companion_fail=bool(raw.get("companion_fail", False)),
+                tool_outputs=tuple(str(item) for item in raw.get("tool_outputs", [])),
+                retrieval_result=dict(raw["retrieval_result"]) if raw.get("retrieval_result") is not None else None,
+            )
+        )
+    return tuple(cases)
+
+
+DEFAULT_CASES = _load_live_cases()
 
 
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -185,36 +177,70 @@ class _LiveValidationToolAgent:
         self._case = case
 
     async def astream(self, _inputs, stream_mode=None):
-        if self._case.scenario != "tool":
+        tool_outputs = list(self._case.tool_outputs or ())
+        if not tool_outputs:
             return
-        yield (
-            "updates",
-            {
-                "tool_node": {
-                    "messages": [
-                        _LiveValidationToolMessage(
-                            message_type="ai",
-                            tool_calls=[{"id": f"{self._case.case_id}-tool-1", "name": "terminal", "args": {"command": "Get-ChildItem demo.txt"}}],
-                        )
-                    ]
-                }
-            },
+        for index, output in enumerate(tool_outputs, start=1):
+            call_id = f"{self._case.case_id}-tool-{index}"
+            yield (
+                "updates",
+                {
+                    "tool_node": {
+                        "messages": [
+                            _LiveValidationToolMessage(
+                                message_type="ai",
+                                tool_calls=[{"id": call_id, "name": "terminal", "args": {"command": f"Get-ChildItem #{index}"}}],
+                            )
+                        ]
+                    }
+                },
+            )
+            yield (
+                "updates",
+                {
+                    "tool_node": {
+                        "messages": [
+                            _LiveValidationToolMessage(
+                                message_type="tool",
+                                tool_call_id=call_id,
+                                name="terminal",
+                                content=output,
+                            )
+                        ]
+                    }
+                },
+            )
+
+
+def _dict_to_retrieval_result(payload: dict[str, Any]) -> OrchestratedRetrievalResult:
+    evidences = [
+        Evidence(
+            source_path=str(item.get("source_path", "") or ""),
+            source_type=str(item.get("source_type", "pdf") or "pdf"),
+            locator=str(item.get("locator", "") or ""),
+            snippet=str(item.get("snippet", "") or ""),
+            channel=str(item.get("channel", "fused") or "fused"),
+            score=float(item.get("score")) if item.get("score") is not None else None,
         )
-        yield (
-            "updates",
-            {
-                "tool_node": {
-                    "messages": [
-                        _LiveValidationToolMessage(
-                            message_type="tool",
-                            tool_call_id=f"{self._case.case_id}-tool-1",
-                            name="terminal",
-                            content="demo.txt\nnotes.txt",
-                        )
-                    ]
-                }
-            },
+        for item in payload.get("evidences", []) or []
+    ]
+    steps = [
+        RetrievalStep(
+            kind="knowledge",
+            stage="fused",
+            title="Live validation retrieval",
+            message=str(payload.get("reason", "") or "live validation retrieval"),
+            results=evidences,
         )
+    ] if evidences else []
+    return OrchestratedRetrievalResult(
+        status=str(payload.get("status", "success") or "success"),
+        evidences=evidences,
+        steps=steps,
+        reason=str(payload.get("reason", "") or ""),
+        question_type=str(payload.get("question_type", "direct_fact") or "direct_fact"),
+        entity_hints=[str(item) for item in payload.get("entity_hints", []) or []],
+    )
 
 
 class _LiveValidationSupport:
@@ -223,25 +249,38 @@ class _LiveValidationSupport:
         for case in cases:
             if case.companion_message:
                 self._cases[case.companion_message] = case
+        self._active_message = ""
+
+    def set_active_message(self, message: str) -> None:
+        self._active_message = str(message or "")
 
     def case_for_message(self, message: str) -> LiveValidationCase:
         return self._cases[str(message or "").strip()]
 
+    def active_case(self) -> LiveValidationCase:
+        return self.case_for_message(self._active_message)
+
     async def model_answer(self, messages: list[dict[str, str]], extra_instructions=None, system_prompt_override=None):
-        case = self.case_for_message(messages[-1]["content"])
-        if case.scenario == "failure":
+        message = str(messages[-1]["content"] or "")
+        case = self.case_for_message(message)
+        is_companion = bool(case.companion_message and message == case.companion_message)
+        if case.scenario == "failure" or (is_companion and case.companion_fail):
             raise RuntimeError("live validation failure")
-        if extra_instructions and any("tool calls already succeeded" in str(item).lower() for item in extra_instructions):
-            final_text = "工具结果显示 demo.txt 和 notes.txt 已找到。"
-        elif case.scenario == "knowledge_guard":
-            final_text = "根据报告，公司营收为1000亿元，见第99页。"
-        elif case.scenario == "queue" and messages[-1]["content"] == case.companion_message:
+
+        if case.scenario == "failure_after_partial":
+            yield {"type": "token", "content": "partial live "}
+            raise RuntimeError("live validation partial failure")
+
+        if is_companion and case.companion_model_answer:
+            final_text = case.companion_model_answer
             await asyncio.sleep(0.35)
-            final_text = "slow live answer"
-        elif case.scenario == "queue":
-            final_text = "queued live answer"
+        elif extra_instructions and any("tool calls already succeeded" in str(item).lower() for item in extra_instructions):
+            final_text = case.model_answer or "Tool results were synthesized."
+        elif case.scenario == "queue" and case.companion_message:
+            final_text = case.model_answer or "queued live answer"
         else:
-            final_text = "live direct answer"
+            final_text = case.model_answer or "live direct answer"
+
         midpoint = max(1, len(final_text) // 2)
         yield {"type": "token", "content": final_text[:midpoint]}
         yield {"type": "token", "content": final_text[midpoint:]}
@@ -249,55 +288,29 @@ class _LiveValidationSupport:
 
     async def knowledge_astream(self, message: str):
         case = self.case_for_message(message)
-        if case.scenario != "knowledge_guard":
+        if case.retrieval_result is None:
             return
-        evidence = Evidence(
-            source_path="knowledge/live-report.pdf",
-            source_type="pdf",
-            locator="page 3",
-            snippet="营业收入 10亿元",
-            channel="fused",
-            score=0.9,
-        )
-        step = RetrievalStep(
-            kind="knowledge",
-            stage="fused",
-            title="Live validation retrieval",
-            message="live validation knowledge retrieval",
-            results=[evidence],
-        )
-        result = OrchestratedRetrievalResult(
-            status="partial",
-            evidences=[evidence],
-            steps=[step],
-            reason="live validation retrieval",
-            question_type="compare",
-            entity_hints=["live"],
-        )
-        yield {"type": "orchestrated_result", "result": result}
+        yield {"type": "orchestrated_result", "result": _dict_to_retrieval_result(case.retrieval_result)}
 
     def build_agent(self, extra_instructions=None, tools_override=None):
-        active_message = ""
-        if extra_instructions:
-            active_message = ""
-        case = next((item for item in DEFAULT_CASES if item.scenario == "tool"), None)
-        if case is None:
-            raise RuntimeError("tool validation case missing")
-        return _LiveValidationToolAgent(case)
+        return _LiveValidationToolAgent(self.active_case())
 
 
 def _summarize_results(results: list[dict[str, Any]]) -> dict[str, Any]:
     total = len(results)
     passed = sum(1 for item in results if item.get("status") == "passed")
+    queue_cases = [item for item in results if item.get("scenario") == "queue"]
     return {
         "total_cases": total,
         "passed_cases": passed,
         "failed_cases": total - passed,
-        "queue_integrity": round(sum(1 for item in results if item.get("queued")) / max(1, sum(1 for item in results if item.get("scenario") == "queue")), 4) if any(item.get("scenario") == "queue" for item in results) else None,
-        "guard_trace_presence": round(sum(1 for item in results if item.get("guard_present")) / max(1, sum(1 for item in results if item.get("scenario") == "knowledge_guard")), 4) if any(item.get("scenario") == "knowledge_guard" for item in results) else None,
+        "queue_integrity": round(sum(1 for item in queue_cases if item.get("queued")) / len(queue_cases), 4) if queue_cases else None,
+        "guard_trace_presence": round(sum(1 for item in results if item.get("guard_present")) / max(1, sum(1 for item in results if item.get("expect_guard"))), 4) if any(item.get("expect_guard") for item in results) else None,
         "retrieval_trace_presence": round(sum(1 for item in results if item.get("retrieval_present")) / max(1, sum(1 for item in results if item.get("expect_retrieval"))), 4) if any(item.get("expect_retrieval") for item in results) else None,
         "tool_trace_presence": round(sum(1 for item in results if item.get("tool_present")) / max(1, sum(1 for item in results if item.get("expect_tool"))), 4) if any(item.get("expect_tool") for item in results) else None,
         "completion_integrity": round(sum(1 for item in results if item.get("completion_integrity")) / max(1, total), 4) if total else None,
+        "session_persistence_integrity": round(sum(1 for item in results if item.get("session_persisted")) / max(1, total), 4) if total else None,
+        "sse_order_integrity": round(sum(1 for item in results if item.get("sse_order_ok")) / max(1, total), 4) if total else None,
     }
 
 
@@ -351,19 +364,43 @@ async def _delete_session(client: httpx.AsyncClient, session_id: str) -> None:
     response.raise_for_status()
 
 
+async def _fetch_session_messages(client: httpx.AsyncClient, session_id: str) -> list[dict[str, Any]]:
+    response = await client.get(f"/api/sessions/{session_id}/messages")
+    response.raise_for_status()
+    payload = response.json()
+    return list(payload.get("messages", []))
+
+
 async def _post_stream(client: httpx.AsyncClient, *, session_id: str, message: str) -> tuple[list[tuple[str, dict[str, Any]]], int]:
     started = time.perf_counter()
     response = await client.post(
         "/api/chat",
         json={"message": message, "session_id": session_id, "stream": True},
-        timeout=30.0,
+        timeout=40.0,
     )
     response.raise_for_status()
     elapsed_ms = int((time.perf_counter() - started) * 1000)
     return _parse_sse_payload(response.text), elapsed_ms
 
 
-def _result_from_trace(case: LiveValidationCase, session_id: str, sse_events: list[tuple[str, dict[str, Any]]], latency_ms: int, trace: dict[str, Any]) -> LiveCaseResult:
+def _sse_order_ok(names: list[str]) -> bool:
+    if not names:
+        return False
+    if "token" in names and "done" in names and names.index("token") > names.index("done"):
+        return False
+    if "run.queued" in names and "run.dequeued" in names and names.index("run.queued") > names.index("run.dequeued"):
+        return False
+    return True
+
+
+def _result_from_trace(
+    case: LiveValidationCase,
+    session_id: str,
+    sse_events: list[tuple[str, dict[str, Any]]],
+    latency_ms: int,
+    trace: dict[str, Any],
+    session_messages: list[dict[str, Any]],
+) -> LiveCaseResult:
     names = [name for name, _payload in sse_events]
     outcome = trace.get("outcome") or {}
     trace_events = [str(item.get("name", "")) for item in trace.get("events", [])]
@@ -400,6 +437,15 @@ def _result_from_trace(case: LiveValidationCase, session_id: str, sse_events: li
     if not completion_integrity:
         failure_reason.append("completion_integrity_failed")
 
+    assistant_messages = [item for item in session_messages if item.get("role") == "assistant"]
+    session_persisted = bool(assistant_messages)
+    if not session_persisted:
+        failure_reason.append("session_not_persisted")
+
+    sse_order_ok = _sse_order_ok(names)
+    if not sse_order_ok:
+        failure_reason.append("sse_order_invalid")
+
     return LiveCaseResult(
         case_id=case.case_id,
         scenario=case.scenario,
@@ -420,6 +466,8 @@ def _result_from_trace(case: LiveValidationCase, session_id: str, sse_events: li
         retrieval_present="retrieval.completed" in trace_events,
         tool_present={"tool.started", "tool.completed"}.issubset(set(trace_events)),
         completion_integrity=completion_integrity,
+        session_persisted=session_persisted,
+        sse_order_ok=sse_order_ok,
         latency_ms=latency_ms,
     )
 
@@ -432,13 +480,18 @@ async def _run_one_case(client: httpx.AsyncClient, runtime, case: LiveValidation
             first = asyncio.create_task(_post_stream(client, session_id=session_id, message=case.companion_message))
             await asyncio.sleep(0.05)
             second_events, latency_ms = await _post_stream(client, session_id=session_id, message=case.message)
-            await first
+            try:
+                await first
+            except Exception:
+                pass
             trace = _collect_trace_by_message(runtime, case.message)
-            return _result_from_trace(case, session_id, second_events, latency_ms, trace).to_dict()
+            session_messages = await _fetch_session_messages(client, session_id)
+            return _result_from_trace(case, session_id, second_events, latency_ms, trace, session_messages).to_dict()
 
         sse_events, latency_ms = await _post_stream(client, session_id=session_id, message=case.message)
         trace = _collect_trace_by_message(runtime, case.message)
-        return _result_from_trace(case, session_id, sse_events, latency_ms, trace).to_dict()
+        session_messages = await _fetch_session_messages(client, session_id)
+        return _result_from_trace(case, session_id, sse_events, latency_ms, trace, session_messages).to_dict()
     finally:
         await _delete_session(client, session_id)
 
@@ -468,10 +521,17 @@ async def run_live_validation(
         runtime = build_harness_runtime(Path(temp_runs_dir))
         from backend import app as backend_app
 
+        original_resolve_routing = agent_manager.resolve_routing
+
+        async def _resolve_with_tracking(message: str, history: list[dict[str, Any]]):
+            support.set_active_message(message)
+            return await original_resolve_routing(message, history)
+
         stack.enter_context(patch.object(backend_app, "refresh_snapshot", lambda *_args, **_kwargs: None))
         stack.enter_context(patch.object(backend_app.memory_indexer, "rebuild_index", lambda *_args, **_kwargs: None))
         stack.enter_context(patch.object(backend_app, "_warm_knowledge_index", AsyncMock(return_value=None)))
         stack.enter_context(patch.object(agent_manager, "get_harness_runtime", return_value=runtime))
+        stack.enter_context(patch.object(agent_manager, "resolve_routing", side_effect=_resolve_with_tracking))
         stack.enter_context(patch.object(agent_manager, "_astream_model_answer", side_effect=support.model_answer))
         stack.enter_context(patch.object(agent_manager, "_build_agent", side_effect=support.build_agent))
         stack.enter_context(patch("harness.executors.memory_indexer.retrieve", return_value=[]))
@@ -489,6 +549,7 @@ async def run_live_validation(
             "case_ids": list(case_ids or []),
             "tag": tag,
             "limit": limit,
+            "case_file": str(CASE_FILE),
         },
     }
     if output_path is not None:

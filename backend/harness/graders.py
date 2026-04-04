@@ -5,6 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Mapping, Protocol
 
+from benchmarks.judge_client import JudgeClient, load_judge_client
+
 from harness.types import GuardResult
 
 
@@ -152,6 +154,7 @@ class HarnessBenchmarkJudge:
         judge_expect = dict(expect.get("judge", {}) or {})
         final_answer = str((result.get("outcome") or {}).get("final_answer", "") or "")
         dimensions: dict[str, bool] = {}
+        rewritten_query = str((result.get("outcome") or {}).get("rewritten_query", "") or "")
 
         if "route_intent" in expect:
             dimensions["route_reasonable"] = bool(result.get("route_correct"))
@@ -187,6 +190,21 @@ class HarnessBenchmarkJudge:
         if reflection_terms and has_answer_surface:
             dimensions["tool_or_evidence_reflection"] = all(term in final_answer for term in reflection_terms)
 
+        must_preserve_terms = [str(item) for item in expect.get("must_preserve_terms", []) or [] if str(item).strip()]
+        if must_preserve_terms and rewritten_query:
+            dimensions["rewrite_preserves_intent"] = all(term in rewritten_query for term in must_preserve_terms)
+
+        must_not_introduce_terms = [
+            str(item) for item in expect.get("must_not_introduce_terms", []) or [] if str(item).strip()
+        ]
+        if must_not_introduce_terms and rewritten_query:
+            dimensions["rewrite_avoids_invention"] = all(term not in rewritten_query for term in must_not_introduce_terms)
+
+        expected_question_type = str(expect.get("question_type", "") or "").strip()
+        actual_question_type = str((result.get("outcome") or {}).get("question_type", "") or "").strip()
+        if expected_question_type:
+            dimensions["planner_reasonable"] = actual_question_type == expected_question_type
+
         passed = all(dimensions.values()) if dimensions else True
         score = round(sum(1 for value in dimensions.values() if value) / len(dimensions), 4) if dimensions else 1.0
         failed_dims = [name for name, ok in dimensions.items() if not ok]
@@ -201,3 +219,113 @@ class HarnessBenchmarkJudge:
                 "unsupported_terms": unsupported_terms,
             },
         )
+
+
+@dataclass(frozen=True)
+class HarnessLLMJudgeResult:
+    passed: bool | None
+    score: float | None
+    reason: str = ""
+    dimensions: dict[str, bool] = field(default_factory=dict)
+    details: dict[str, Any] = field(default_factory=dict)
+    error: str = ""
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "passed": self.passed,
+            "score": self.score,
+            "reason": self.reason,
+            "dimensions": dict(self.dimensions),
+            "details": dict(self.details),
+            "error": self.error,
+        }
+
+
+class HarnessLLMJudge:
+    """Model-based benchmark judge for soft routing, grounding, and rewrite quality."""
+
+    def __init__(self, client: JudgeClient | None = None) -> None:
+        self._client = client
+
+    @staticmethod
+    def _normalize_dimensions(dimensions: Mapping[str, Any]) -> dict[str, bool]:
+        aliases = {
+            "route_reasonable": "route_reasonable",
+            "route_correct": "route_reasonable",
+            "retrieval_necessary": "retrieval_necessary",
+            "retrieval_reasonable": "retrieval_necessary",
+            "retrieval_appropriate": "retrieval_necessary",
+            "tool_necessary": "tool_necessary",
+            "tool_use_reasonable": "tool_necessary",
+            "tool_usage_reasonable": "tool_necessary",
+            "tool_selection_reasonable": "tool_necessary",
+            "rewrite_preserves_intent": "rewrite_preserves_intent",
+            "rewrite_reasonable": "rewrite_preserves_intent",
+            "planner_reasonable": "planner_reasonable",
+            "rewrite_planner_reasonable": "planner_reasonable",
+            "grounded_answer": "grounded_answer",
+            "answer_grounded": "grounded_answer",
+            "final_answer_reasonable": "grounded_answer",
+            "partiality_honest": "partiality_honest",
+            "honesty": "partiality_honest",
+            "final_answer_honest": "partiality_honest",
+            "conflicting_evidence_honesty": "conflicting_evidence_honesty",
+            "tool_or_evidence_reflection": "tool_or_evidence_reflection",
+            "unsupported_claim_control": "unsupported_claim_control",
+        }
+        normalized: dict[str, bool] = {}
+        for raw_key, value in dimensions.items():
+            canonical = aliases.get(str(raw_key), str(raw_key))
+            normalized[canonical] = bool(value)
+        return normalized
+
+    @classmethod
+    def from_env(cls) -> "HarnessLLMJudge":
+        return cls(load_judge_client())
+
+    @property
+    def available(self) -> bool:
+        return self._client is not None
+
+    def judge_case(
+        self,
+        case: Any,
+        result: Mapping[str, Any],
+        *,
+        deterministic_judge: Mapping[str, Any] | None = None,
+    ) -> HarnessLLMJudgeResult:
+        if self._client is None:
+            return HarnessLLMJudgeResult(
+                passed=None,
+                score=None,
+                error="judge_unavailable",
+            )
+
+        payload = {
+            "case_id": getattr(case, "case_id", ""),
+            "suite": getattr(case, "suite", ""),
+            "runner": getattr(case, "runner", ""),
+            "bucket": getattr(case, "bucket", ""),
+            "scenario": getattr(case, "scenario", ""),
+            "message": getattr(case, "message", ""),
+            "answer": getattr(case, "answer", ""),
+            "expect": dict(getattr(case, "expect", {}) or {}),
+            "retrieval_result": dict(getattr(case, "retrieval_result", {}) or {}) or None,
+            "benchmark_result": dict(result),
+            "deterministic_judge": dict(deterministic_judge or {}),
+        }
+        try:
+            judged = self._client.judge_harness_case(payload)
+            return HarnessLLMJudgeResult(
+                passed=bool(judged.get("passed", False)),
+                score=float(judged.get("score", 0.0) or 0.0),
+                reason=str(judged.get("reason", "") or "").strip(),
+                dimensions=self._normalize_dimensions(dict(judged.get("dimensions", {}) or {})),
+                details=dict(judged.get("details", {}) or {}),
+            )
+        except Exception as exc:  # pragma: no cover - network/model failures are environment-specific
+            return HarnessLLMJudgeResult(
+                passed=None,
+                score=None,
+                error=str(exc) or exc.__class__.__name__,
+            )

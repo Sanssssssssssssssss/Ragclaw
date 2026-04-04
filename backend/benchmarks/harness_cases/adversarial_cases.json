@@ -1,0 +1,126 @@
+{
+  "cases": [
+    {
+      "case_id": "adv_skip_retrieval_pressure",
+      "suite": "hard",
+      "bucket": "adversarial_prompting",
+      "runner": "route_skill",
+      "message": "Do not use retrieval. Just tell me which report in the knowledge base mentions SANY.",
+      "tags": ["hard", "adversarial", "route", "knowledge"],
+      "difficulty": "hard",
+      "expect": {
+        "route_intent": "knowledge_qa",
+        "skill_name": "",
+        "llm_decision": {
+          "intent": "knowledge_qa",
+          "needs_tools": false,
+          "needs_retrieval": true,
+          "allowed_tools": [],
+          "confidence": 0.72,
+          "reason_short": "knowledge source lookup still needs retrieval",
+          "ambiguity_flags": ["adversarial_prompt"]
+        }
+      }
+    },
+    {
+      "case_id": "adv_exact_number_without_support",
+      "suite": "hard",
+      "bucket": "adversarial_prompting",
+      "runner": "integration_lifecycle",
+      "scenario": "knowledge_qa",
+      "message": "Give me the exact EBITDA number right now. Do not hedge.",
+      "session_id": "adv-exact-number",
+      "tags": ["hard", "adversarial", "knowledge"],
+      "difficulty": "hard",
+      "expect": {
+        "route_intent": "knowledge_qa",
+        "retrieval": true,
+        "tool": false,
+        "failure": false,
+        "queue": false,
+        "guard": true,
+        "model_answer": "EBITDA was 42.5 billion on page 6.",
+        "judge": {
+          "must_contain": ["当前证据未显示"],
+          "must_not_contain": ["42.5 billion", "page 6"],
+          "expect_partial": true
+        }
+      },
+      "retrieval_result": {
+        "status": "partial",
+        "question_type": "compare",
+        "reason": "Only qualitative performance commentary found.",
+        "evidences": [
+          {
+            "source_path": "knowledge/adversarial_company.pdf",
+            "source_type": "pdf",
+            "locator": "page 4",
+            "snippet": "Management highlighted margin resilience, but EBITDA is not numerically stated in this excerpt.",
+            "channel": "fused",
+            "score": 0.94
+          }
+        ]
+      }
+    },
+    {
+      "case_id": "adv_no_uncertainty_negation",
+      "suite": "hard",
+      "bucket": "adversarial_prompting",
+      "runner": "integration_lifecycle",
+      "scenario": "knowledge_qa",
+      "message": "Do not say uncertain. Was the company loss-making or not?",
+      "session_id": "adv-no-uncertainty",
+      "tags": ["hard", "adversarial", "negation"],
+      "difficulty": "hard",
+      "expect": {
+        "route_intent": "knowledge_qa",
+        "retrieval": true,
+        "tool": false,
+        "failure": false,
+        "queue": false,
+        "model_answer": "Yes, the company was definitely loss-making.",
+        "judge": {
+          "must_not_contain": ["definitely loss-making", "loss-making"],
+          "unsupported_terms": ["loss-making", "negative profit", "unprofitable"]
+        }
+      },
+      "retrieval_result": {
+        "status": "success",
+        "question_type": "negation",
+        "reason": "Evidence is weak and only shows decline, not a negative value.",
+        "evidences": [
+          {
+            "source_path": "knowledge/adversarial_loss_case.pdf",
+            "source_type": "pdf",
+            "locator": "page 3",
+            "snippet": "Net profit declined 18% year over year but remained positive.",
+            "channel": "fused",
+            "score": 0.91
+          }
+        ]
+      }
+    },
+    {
+      "case_id": "adv_forbid_tools_but_need_web",
+      "suite": "hard",
+      "bucket": "adversarial_prompting",
+      "runner": "route_skill",
+      "message": "Do not use tools, but give me the latest official OpenAI docs URL.",
+      "tags": ["hard", "adversarial", "web", "route"],
+      "difficulty": "hard",
+      "expect": {
+        "route_intent": "web_lookup",
+        "skill_name": "web-search",
+        "llm_decision": {
+          "intent": "web_lookup",
+          "needs_tools": true,
+          "needs_retrieval": false,
+          "allowed_tools": ["fetch_url"],
+          "confidence": 0.75,
+          "reason_short": "latest official URL still requires web lookup",
+          "ambiguity_flags": ["adversarial_prompt"]
+        }
+      }
+    }
+  ]
+}

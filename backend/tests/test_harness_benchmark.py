@@ -5,6 +5,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 BACKEND_DIR = Path(__file__).resolve().parents[1]
 if str(BACKEND_DIR) not in sys.path:
@@ -79,7 +80,7 @@ class HarnessBenchmarkRunnerTests(unittest.IsolatedAsyncioTestCase):
     async def test_run_benchmark_writes_structured_output(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             output_path = Path(temp_dir) / "harness_benchmark.json"
-            payload = await run_benchmark(output_path, suite="contract")
+            payload = await run_benchmark(output_path, suite="contract", use_llm_judge=False)
             self.assertTrue(output_path.exists())
             stored = json.loads(output_path.read_text(encoding="utf-8"))
             self.assertEqual(stored["selection"]["suite"], "contract")
@@ -87,6 +88,7 @@ class HarnessBenchmarkRunnerTests(unittest.IsolatedAsyncioTestCase):
             self.assertIn("contract", stored["suites"])
             self.assertEqual(payload["summary"]["trace_completeness"], 1.0)
             self.assertIn("judge", stored)
+            self.assertIn("llm_available", stored["judge"])
             self.assertEqual(len(stored["cases"]), 5)
 
     async def test_integration_suite_smoke_case_uses_real_runner(self) -> None:
@@ -97,6 +99,7 @@ class HarnessBenchmarkRunnerTests(unittest.IsolatedAsyncioTestCase):
                 tag="smoke",
                 limit=1,
                 output_path=output_path,
+                use_llm_judge=False,
             )
             self.assertEqual(payload["selection"]["suite"], "integration")
             self.assertEqual(payload["summary"]["total_cases"], 1)
@@ -111,6 +114,7 @@ class HarnessBenchmarkRunnerTests(unittest.IsolatedAsyncioTestCase):
                 suite="scalable",
                 limit=3,
                 output_path=output_path,
+                use_llm_judge=False,
             )
             self.assertEqual(payload["summary"]["total_cases"], 3)
             self.assertIn("scalable", payload["suites"])
@@ -123,6 +127,7 @@ class HarnessBenchmarkRunnerTests(unittest.IsolatedAsyncioTestCase):
                 suite="hard",
                 limit=2,
                 output_path=output_path,
+                use_llm_judge=False,
             )
             self.assertEqual(payload["selection"]["suite"], "hard")
             self.assertIn("hard", payload["suites"])
@@ -131,12 +136,58 @@ class HarnessBenchmarkRunnerTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(len(payload["cases"]), 2)
             self.assertTrue(all("judge_result" in item for item in payload["cases"]))
 
+    async def test_rewrite_suite_outputs_planner_fields(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output_path = Path(temp_dir) / "rewrite_suite.json"
+            payload = await run_selected_benchmark(
+                suite="rewrite",
+                limit=1,
+                output_path=output_path,
+                use_llm_judge=False,
+            )
+            self.assertEqual(payload["summary"]["total_cases"], 1)
+            case = payload["cases"][0]
+            self.assertEqual(case["runner"], "rewrite_planner")
+            self.assertIn("rewritten_query", case["outcome"])
+            self.assertIn("rewrite_preserves_intent", case)
+
+    async def test_llm_judge_fields_are_exposed_with_stubbed_judge(self) -> None:
+        class _StubJudge:
+            available = True
+
+            def judge_case(self, case, result, *, deterministic_judge=None):
+                from harness.graders import HarnessLLMJudgeResult
+
+                return HarnessLLMJudgeResult(
+                    passed=True,
+                    score=0.9,
+                    reason="stub pass",
+                    dimensions={"route_reasonable": True},
+                    details={"commentary": "stub"},
+                )
+
+        with tempfile.TemporaryDirectory() as temp_dir, patch(
+            "benchmarks.harness_benchmark_lib.HarnessLLMJudge.from_env",
+            return_value=_StubJudge(),
+        ):
+            output_path = Path(temp_dir) / "llm_judge.json"
+            payload = await run_selected_benchmark(
+                suite="contract",
+                limit=1,
+                output_path=output_path,
+            )
+            case = payload["cases"][0]
+            self.assertTrue(case["llm_judge_passed"])
+            self.assertEqual(case["llm_judge_score"], 0.9)
+            self.assertFalse(case["judge_disagreement"])
+            self.assertEqual(payload["judge"]["llm_pass_rate"], 1.0)
+
 
 class HarnessBenchmarkCliTests(unittest.TestCase):
     def test_cli_basic_execution(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             output_path = Path(temp_dir) / "cli_harness_benchmark.json"
-            rc = main(["--suite", "contract", "--limit", "1", "--output", str(output_path)])
+            rc = main(["--suite", "contract", "--limit", "1", "--deterministic-only", "--output", str(output_path)])
             self.assertEqual(rc, 0)
             self.assertTrue(output_path.exists())
             stored = json.loads(output_path.read_text(encoding="utf-8"))

@@ -10,7 +10,7 @@ if str(BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(BACKEND_DIR))
 
 from graph.agent import AgentManager
-from harness.graders import HarnessBenchmarkJudge, KnowledgeAnswerGrader
+from harness.graders import HarnessBenchmarkJudge, HarnessLLMJudge, KnowledgeAnswerGrader
 
 
 def _evidence(source_path: str, locator: str, snippet: str):
@@ -113,6 +113,43 @@ class HarnessBenchmarkJudgeTests(unittest.TestCase):
         verdict = self.judge.judge_case(case, result)
         self.assertTrue(verdict.passed)
         self.assertTrue(verdict.dimensions["tool_or_evidence_reflection"])
+
+
+class HarnessLLMJudgeTests(unittest.TestCase):
+    def test_llm_judge_returns_structured_result_from_client(self) -> None:
+        class _StubClient:
+            def judge_harness_case(self, payload):
+                self.payload = payload
+                return {
+                    "passed": True,
+                    "score": 0.82,
+                    "reason": "reasonable route and grounded answer",
+                    "dimensions": {"route_reasonable": True, "answer_grounded": True},
+                    "details": {"commentary": "stub"},
+                }
+
+        judge = HarnessLLMJudge(_StubClient())
+        verdict = judge.judge_case(
+            SimpleNamespace(case_id="case-1", suite="hard", runner="integration_lifecycle", bucket="hard_knowledge", scenario="knowledge", message="q", answer="", expect={}, retrieval_result=None),
+            {"outcome": {"final_answer": "ok"}},
+            deterministic_judge={"passed": True},
+        )
+        self.assertTrue(verdict.passed)
+        self.assertEqual(verdict.score, 0.82)
+        self.assertEqual(verdict.dimensions["grounded_answer"], True)
+
+    def test_llm_judge_marks_error_when_client_fails(self) -> None:
+        class _BrokenClient:
+            def judge_harness_case(self, payload):
+                raise RuntimeError("judge boom")
+
+        judge = HarnessLLMJudge(_BrokenClient())
+        verdict = judge.judge_case(
+            SimpleNamespace(case_id="case-2", suite="hard", runner="guard", bucket="dirty_evidence", scenario="", message="", answer="", expect={}, retrieval_result=None),
+            {"outcome": {}},
+        )
+        self.assertIsNone(verdict.passed)
+        self.assertIn("judge boom", verdict.error)
 
 
 if __name__ == "__main__":

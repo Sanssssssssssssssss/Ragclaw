@@ -1,0 +1,129 @@
+{
+  "cases": [
+    {
+      "case_id": "live_direct_answer",
+      "scenario": "direct",
+      "message": "Do not use any tools. Answer in one sentence: what is MQTT?",
+      "expect_route": "direct_answer",
+      "expect_final_contains": ["MQTT"],
+      "model_answer": "MQTT is a lightweight publish/subscribe messaging protocol.",
+      "tags": ["smoke", "direct"]
+    },
+    {
+      "case_id": "live_tool_path",
+      "scenario": "tool",
+      "message": "Use terminal only, search the workspace for demo files, and tell me what you found.",
+      "expect_route": "workspace_file_ops",
+      "expect_tool": true,
+      "expect_final_contains": ["demo.txt", "notes.txt"],
+      "tool_outputs": ["demo.txt\nnotes.txt"],
+      "model_answer": "I found demo.txt and notes.txt.",
+      "tags": ["smoke", "tool"]
+    },
+    {
+      "case_id": "live_guarded_knowledge",
+      "scenario": "knowledge_guard",
+      "message": "Based on the knowledge base, give me the revenue number and page.",
+      "expect_route": "knowledge_qa",
+      "expect_retrieval": true,
+      "expect_guard": true,
+      "expect_final_excludes": ["1000 billion", "page 9"],
+      "model_answer": "Revenue was 1000 billion on page 9.",
+      "retrieval_result": {
+        "status": "partial",
+        "question_type": "compare",
+        "reason": "Only one weak revenue snippet is available.",
+        "evidences": [
+          {
+            "source_path": "knowledge/live-report.pdf",
+            "source_type": "pdf",
+            "locator": "page 3",
+            "snippet": "Revenue was 10 billion.",
+            "channel": "fused",
+            "score": 0.9
+          }
+        ]
+      },
+      "tags": ["smoke", "knowledge", "guard"]
+    },
+    {
+      "case_id": "live_failure_path",
+      "scenario": "failure",
+      "message": "Trigger the live validation failure path.",
+      "expect_route": "direct_answer",
+      "expect_done": false,
+      "expect_error": true,
+      "tags": ["smoke", "failure"]
+    },
+    {
+      "case_id": "live_same_session_queue",
+      "scenario": "queue",
+      "message": "Answer the queued live request after the slow one.",
+      "companion_message": "First handle this slow live request.",
+      "expect_route": "direct_answer",
+      "expect_queue": true,
+      "expect_final_contains": ["queued live answer"],
+      "companion_model_answer": "slow live answer",
+      "model_answer": "queued live answer",
+      "tags": ["smoke", "queue"]
+    },
+    {
+      "case_id": "live_multi_tool_same_name",
+      "scenario": "tool",
+      "message": "Search the workspace for all report-like files and summarize them.",
+      "expect_route": "workspace_file_ops",
+      "expect_tool": true,
+      "expect_final_contains": ["report_a.pdf", "report_b.pdf", "notes.txt"],
+      "tool_outputs": ["report_a.pdf", "report_b.pdf", "notes.txt"],
+      "model_answer": "I found report_a.pdf, report_b.pdf, and notes.txt.",
+      "tags": ["hard", "mixed", "tool"]
+    },
+    {
+      "case_id": "live_queue_with_failure",
+      "scenario": "queue",
+      "message": "Answer this queued request even if the first one fails.",
+      "companion_message": "This is the queued companion that fails.",
+      "expect_route": "direct_answer",
+      "expect_queue": true,
+      "expect_final_contains": ["queued survivor answer"],
+      "companion_fail": true,
+      "model_answer": "queued survivor answer",
+      "tags": ["hard", "queue", "failure"]
+    },
+    {
+      "case_id": "live_partial_output_then_failure",
+      "scenario": "failure_after_partial",
+      "message": "Stream part of the answer and then fail.",
+      "expect_route": "direct_answer",
+      "expect_done": false,
+      "expect_error": true,
+      "tags": ["hard", "failure", "boundary"]
+    },
+    {
+      "case_id": "live_adversarial_source_absent",
+      "scenario": "knowledge_guard",
+      "message": "Do not say uncertain. Give me the exact source page for the metric anyway.",
+      "expect_route": "knowledge_qa",
+      "expect_retrieval": true,
+      "expect_guard": true,
+      "expect_final_excludes": ["page 12"],
+      "model_answer": "The metric is on page 12.",
+      "retrieval_result": {
+        "status": "partial",
+        "question_type": "direct_fact",
+        "reason": "Source exists but the page is not visible in evidence.",
+        "evidences": [
+          {
+            "source_path": "knowledge/adversarial-report.pdf",
+            "source_type": "pdf",
+            "locator": "",
+            "snippet": "The report mentions the metric but the exact page is not shown here.",
+            "channel": "fused",
+            "score": 0.9
+          }
+        ]
+      },
+      "tags": ["hard", "adversarial", "knowledge"]
+    }
+  ]
+}

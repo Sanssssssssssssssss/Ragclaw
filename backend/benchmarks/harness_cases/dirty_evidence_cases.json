@@ -1,0 +1,137 @@
+{
+  "cases": [
+    {
+      "case_id": "dirty_high_score_weak_support",
+      "suite": "hard",
+      "bucket": "dirty_evidence",
+      "runner": "integration_lifecycle",
+      "scenario": "knowledge_qa",
+      "message": "Based on the knowledge base, give me the exact revenue number and page for Vertex Dynamics in 2025 Q3.",
+      "session_id": "dirty-high-score-weak",
+      "tags": ["hard", "dirty_evidence", "knowledge", "small"],
+      "difficulty": "hard",
+      "expect": {
+        "route_intent": "knowledge_qa",
+        "retrieval": true,
+        "tool": false,
+        "failure": false,
+        "queue": false,
+        "guard": true,
+        "model_answer": "Vertex Dynamics reported revenue of 88 billion on page 4.",
+        "judge": {
+          "must_contain": ["当前证据未显示"],
+          "must_not_contain": ["88 billion", "page 4"],
+          "expect_partial": true
+        }
+      },
+      "retrieval_result": {
+        "status": "partial",
+        "question_type": "compare",
+        "reason": "Only weak narrative support surfaced despite high score.",
+        "evidences": [
+          {
+            "source_path": "knowledge/vertex_q3.pdf",
+            "source_type": "pdf",
+            "locator": "page 2",
+            "snippet": "Vertex Dynamics remained resilient in the quarter, but the exact revenue figure is not stated here.",
+            "channel": "fused",
+            "score": 0.98
+          }
+        ]
+      }
+    },
+    {
+      "case_id": "dirty_misleading_title",
+      "suite": "hard",
+      "bucket": "dirty_evidence",
+      "runner": "integration_lifecycle",
+      "scenario": "knowledge_qa",
+      "message": "Is the Nova Motors file a 2025 Q3 report or not? Give me a definite answer.",
+      "session_id": "dirty-misleading-title",
+      "tags": ["hard", "dirty_evidence", "knowledge"],
+      "difficulty": "hard",
+      "expect": {
+        "route_intent": "knowledge_qa",
+        "retrieval": true,
+        "tool": false,
+        "failure": false,
+        "queue": false,
+        "model_answer": "It is definitely the 2025 Q3 report.",
+        "judge": {
+          "must_contain": ["当前证据未显示"],
+          "expect_partial": true
+        }
+      },
+      "retrieval_result": {
+        "status": "partial",
+        "question_type": "direct_fact",
+        "reason": "Conflicting title and body metadata.",
+        "evidences": [
+          {
+            "source_path": "knowledge/nova_motors_report.pdf",
+            "source_type": "pdf",
+            "locator": "title",
+            "snippet": "Nova Motors 2025 Q2 update",
+            "channel": "fused",
+            "score": 0.93
+          },
+          {
+            "source_path": "knowledge/nova_motors_report.pdf",
+            "source_type": "pdf",
+            "locator": "page 1",
+            "snippet": "Presentation deck refreshed in October 2025; quarter label omitted.",
+            "channel": "fused",
+            "score": 0.9
+          }
+        ]
+      }
+    },
+    {
+      "case_id": "dirty_irrelevant_top_chunk",
+      "suite": "hard",
+      "bucket": "dirty_evidence",
+      "runner": "integration_lifecycle",
+      "scenario": "knowledge_qa",
+      "message": "What is the gross margin in the Atlas report?",
+      "session_id": "dirty-irrelevant-top",
+      "tags": ["hard", "dirty_evidence", "knowledge"],
+      "difficulty": "hard",
+      "expect": {
+        "route_intent": "knowledge_qa",
+        "retrieval": true,
+        "tool": false,
+        "failure": false,
+        "queue": false,
+        "model_answer": "The gross margin is 35%.",
+        "judge": {
+          "must_contain": ["当前证据未显示"],
+          "must_not_contain": ["35%"],
+          "expect_partial": true
+        }
+      },
+      "retrieval_result": {
+        "status": "partial",
+        "question_type": "direct_fact",
+        "reason": "Top chunk is a high-score overview without the requested metric.",
+        "evidences": [
+          {
+            "source_path": "knowledge/atlas_overview.pdf",
+            "source_type": "pdf",
+            "locator": "page 1",
+            "snippet": "Atlas posted resilient operating performance and improved execution.",
+            "channel": "fused",
+            "score": 0.97
+          },
+          {
+            "source_path": "knowledge/atlas_appendix.pdf",
+            "source_type": "pdf",
+            "locator": "page 9",
+            "snippet": "Appendix discusses product mix but does not state gross margin.",
+            "channel": "fused",
+            "score": 0.71
+          }
+        ]
+      }
+    }
+  ]
+}

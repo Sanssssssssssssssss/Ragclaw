@@ -16,22 +16,30 @@ from graph.execution_strategy import ExecutionStrategy
 from graph.lightweight_router import RoutingDecision
 from graph.skill_gate import SkillDecision
 from harness.executors import HarnessExecutors
-from harness.graders import HarnessBenchmarkJudge, KnowledgeAnswerGrader
+from harness.graders import HarnessBenchmarkJudge, HarnessLLMJudge, KnowledgeAnswerGrader
 from harness.policy import SessionSerialQueue
 from harness.runtime import HarnessRuntime, RuntimeDependencies
 from harness.trace_store import RunTraceStore
+from knowledge_retrieval.query_rewrite import build_query_plan
 from knowledge_retrieval.types import Evidence, OrchestratedRetrievalResult, RetrievalStep
 
 
-SuiteName = Literal["contract", "integration", "hard", "scalable", "all"]
-RunnerName = Literal["contract_lifecycle", "integration_lifecycle", "route_skill", "guard"]
+SuiteName = Literal["contract", "integration", "hard", "rewrite", "scalable", "all"]
+RunnerName = Literal["contract_lifecycle", "integration_lifecycle", "route_skill", "guard", "rewrite_planner"]
 
 
-DEFAULT_CASE_FILES: dict[str, Path] = {
-    "contract": Path(__file__).resolve().parent / "harness_cases" / "contract_cases.json",
-    "integration": Path(__file__).resolve().parent / "harness_cases" / "integration_cases.json",
-    "hard": Path(__file__).resolve().parent / "harness_cases" / "hard_cases.json",
-    "scalable": Path(__file__).resolve().parent / "harness_cases" / "scalable_cases.json",
+CASE_DIR = Path(__file__).resolve().parent / "harness_cases"
+DEFAULT_CASE_FILES: dict[str, tuple[Path, ...]] = {
+    "contract": (CASE_DIR / "contract_cases.json",),
+    "integration": (CASE_DIR / "integration_cases.json",),
+    "hard": (
+        CASE_DIR / "hard_cases.json",
+        CASE_DIR / "dirty_evidence_cases.json",
+        CASE_DIR / "adversarial_cases.json",
+        CASE_DIR / "mixed_execution_cases.json",
+    ),
+    "rewrite": (CASE_DIR / "rewrite_cases.json",),
+    "scalable": (CASE_DIR / "scalable_cases.json",),
 }
 
 
@@ -40,6 +48,7 @@ class BenchmarkCase:
     case_id: str
     suite: str
     runner: RunnerName
+    bucket: str = ""
     difficulty: str = "smoke"
     tags: tuple[str, ...] = ()
     scenario: str = ""
@@ -59,6 +68,7 @@ def _load_cases_from_file(path: Path) -> list[BenchmarkCase]:
                 case_id=str(raw["case_id"]),
                 suite=str(raw.get("suite", path.stem.replace("_cases", ""))),
                 runner=str(raw["runner"]),  # type: ignore[arg-type]
+                bucket=str(raw.get("bucket", path.stem.replace("_cases", ""))),
                 difficulty=str(raw.get("difficulty", "smoke")),
                 tags=tuple(str(tag) for tag in raw.get("tags", [])),
                 scenario=str(raw.get("scenario", "")),
@@ -75,9 +85,10 @@ def _load_cases_from_file(path: Path) -> list[BenchmarkCase]:
 def resolve_case_files(suite: str, extra_case_files: list[str] | None = None) -> list[Path]:
     paths: list[Path] = []
     if suite == "all":
-        paths.extend(DEFAULT_CASE_FILES.values())
+        for case_paths in DEFAULT_CASE_FILES.values():
+            paths.extend(case_paths)
     else:
-        paths.append(DEFAULT_CASE_FILES[suite])
+        paths.extend(DEFAULT_CASE_FILES[suite])
     for item in extra_case_files or []:
         paths.append(Path(item))
     deduped: list[Path] = []
@@ -143,6 +154,11 @@ def summarize_results(results: list[dict[str, Any]]) -> dict[str, Any]:
         "guard_correctness": _result_metric_average(results, "guard_correct"),
         "tool_result_to_final_answer_reflection": _result_metric_average(results, "tool_result_reflected"),
         "judge_pass_rate": _result_metric_average(results, "judge_passed"),
+        "llm_judge_pass_rate": _result_metric_average(results, "llm_judge_passed"),
+        "judge_disagreement_rate": _result_metric_average(results, "judge_disagreement"),
+        "rewrite_preserves_intent_rate": _result_metric_average(results, "rewrite_preserves_intent"),
+        "rewrite_drift_detected_rate": _result_metric_average(results, "rewrite_drift_detected"),
+        "planner_reasonable_rate": _result_metric_average(results, "planner_reasonable"),
     }
 
     numeric_cases = [item for item in results if item.get("counts_numeric") is True]
@@ -167,6 +183,34 @@ def summarize_results(results: list[dict[str, Any]]) -> dict[str, Any]:
         summary["judge_dimensions"] = {
             key: _safe_rate(sum(1 for value in values if value), len(values))
             for key, values in sorted(judge_dimensions.items())
+        }
+    llm_dimensions: dict[str, list[bool]] = {}
+    for item in results:
+        judge = item.get("llm_judge_result") or {}
+        dimensions = judge.get("dimensions") or {}
+        if not isinstance(dimensions, dict):
+            continue
+        for key, value in dimensions.items():
+            llm_dimensions.setdefault(str(key), []).append(bool(value))
+    if llm_dimensions:
+        summary["llm_judge_dimensions"] = {
+            key: _safe_rate(sum(1 for value in values if value), len(values))
+            for key, values in sorted(llm_dimensions.items())
+        }
+    bucket_groups: dict[str, list[dict[str, Any]]] = {}
+    for item in results:
+        bucket = str(item.get("bucket", "") or "").strip()
+        if bucket:
+            bucket_groups.setdefault(bucket, []).append(item)
+    if bucket_groups:
+        summary["buckets"] = {
+            bucket: {
+                "total_cases": len(items),
+                "passed_cases": sum(1 for item in items if item.get("status") == "passed"),
+                "judge_pass_rate": _result_metric_average(items, "judge_passed"),
+                "llm_judge_pass_rate": _result_metric_average(items, "llm_judge_passed"),
+            }
+            for bucket, items in sorted(bucket_groups.items())
         }
     return summary
 
@@ -464,7 +508,14 @@ def _lifecycle_case_result(case: BenchmarkCase, trace: dict[str, Any], elapsed_m
         else ("run.completed" in event_names and outcome.get("status") == "completed")
     )
     queue_integrity = (("run.queued" in event_names and "run.dequeued" in event_names) if expect.get("queue") else True)
-    tool_reflection = (str(expect.get("answer_fragment", "") or "") in final_answer) if expect.get("answer_fragment") else True
+    reflection_terms = [str(item) for item in (expect.get("judge", {}) or {}).get("reflection_terms", []) or [] if str(item).strip()]
+    answer_fragment = str(expect.get("answer_fragment", "") or "")
+    if reflection_terms:
+        tool_reflection = all(term in final_answer for term in reflection_terms)
+    elif answer_fragment:
+        tool_reflection = answer_fragment in final_answer
+    else:
+        tool_reflection = True
     route_correct = True if not expect.get("route_intent") else outcome.get("route_intent") == expect.get("route_intent")
     skill_correct = True if "skill_name" not in expect else (outcome.get("used_skill", "") or "") == str(expect.get("skill_name", ""))
     guard_correct = True if "guard" not in expect else guard_present == bool(expect.get("guard"))
@@ -513,7 +564,7 @@ def _lifecycle_case_result(case: BenchmarkCase, trace: dict[str, Any], elapsed_m
         "completion_integrity": completion_integrity,
         "queue_integrity": queue_integrity if expect.get("queue") else None,
         "final_answer_present": final_answer_present if not expect.get("failure") else None,
-        "tool_result_reflected": tool_reflection if expect.get("answer_fragment") else None,
+        "tool_result_reflected": tool_reflection if (answer_fragment or reflection_terms) else None,
         "route_correct": route_correct if "route_intent" in expect else None,
         "skill_correct": skill_correct if "skill_name" in expect else None,
         "guard_correct": guard_correct if "guard" in expect else None,
@@ -848,7 +899,100 @@ def _run_guard_cases(cases: list[BenchmarkCase]) -> list[dict[str, Any]]:
     return results
 
 
-def _apply_benchmark_judge(cases: list[BenchmarkCase], results: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def _normalized_text(value: str) -> str:
+    return " ".join(str(value or "").strip().lower().split())
+
+
+def _contains_all_terms(text: str, terms: list[str]) -> bool:
+    normalized = _normalized_text(text)
+    return all(_normalized_text(term) in normalized for term in terms if str(term).strip())
+
+
+def _contains_any_terms(text: str, terms: list[str]) -> bool:
+    normalized = _normalized_text(text)
+    return any(_normalized_text(term) in normalized for term in terms if str(term).strip())
+
+
+def _run_rewrite_planner_cases(cases: list[BenchmarkCase]) -> list[dict[str, Any]]:
+    results: list[dict[str, Any]] = []
+    for case in cases:
+        started = time.perf_counter()
+        plan = build_query_plan(case.message)
+        rewritten_query = plan.query_variants[1] if len(plan.query_variants) > 1 else plan.query_variants[0]
+        expect = dict(case.expect or {})
+        preserved_terms = [str(item) for item in expect.get("must_preserve_terms", []) or [] if str(item).strip()]
+        forbidden_terms = [str(item) for item in expect.get("must_not_introduce_terms", []) or [] if str(item).strip()]
+        expected_question_type = str(expect.get("question_type", "") or "").strip()
+        rewrite_preserves_intent = _contains_all_terms(" ".join(plan.query_variants), preserved_terms) if preserved_terms else True
+        rewrite_drift_detected = _contains_any_terms(" ".join(plan.query_variants[1:]), forbidden_terms) if forbidden_terms else False
+        planner_reasonable = (plan.question_type == expected_question_type) if expected_question_type else True
+        failed: list[str] = []
+        if not rewrite_preserves_intent:
+            failed.append("rewrite_lost_required_terms")
+        if rewrite_drift_detected:
+            failed.append("rewrite_introduced_forbidden_terms")
+        if not planner_reasonable:
+            failed.append("planner_question_type_mismatch")
+        elapsed_ms = int((time.perf_counter() - started) * 1000)
+        results.append(
+            {
+                "case_id": case.case_id,
+                "suite": case.suite,
+                "bucket": case.bucket,
+                "runner": case.runner,
+                "scenario": case.scenario,
+                "tags": list(case.tags),
+                "difficulty": case.difficulty,
+                "status": "passed" if not failed else "failed",
+                "failure_reason": ",".join(failed),
+                "route_trace_present": None,
+                "retrieval_trace_present": None,
+                "tool_trace_present": None,
+                "guard_present": None,
+                "completion_integrity": True,
+                "queue_integrity": None,
+                "final_answer_present": None,
+                "tool_result_reflected": None,
+                "route_correct": None,
+                "skill_correct": None,
+                "guard_correct": None,
+                "trace_completeness": not failed,
+                "latency_ms": elapsed_ms,
+                "event_names": [],
+                "outcome": {
+                    "original_query": case.message,
+                    "question_type": plan.question_type,
+                    "query_variants": list(plan.query_variants),
+                    "rewritten_query": rewritten_query,
+                    "entity_hints": list(plan.entity_hints),
+                    "keyword_hints": list(plan.keyword_hints),
+                },
+                "counts_numeric": None,
+                "counts_locator": None,
+                "actual_guard": None,
+                "judge_passed": None,
+                "judge_result": None,
+                "llm_judge_passed": None,
+                "llm_judge_score": None,
+                "llm_judge_reason": "",
+                "llm_judge_dimensions": {},
+                "llm_judge_details": {},
+                "llm_judge_error": "",
+                "judge_disagreement": None,
+                "rewrite_preserves_intent": rewrite_preserves_intent,
+                "rewrite_drift_detected": rewrite_drift_detected,
+                "planner_reasonable": planner_reasonable,
+            }
+        )
+    return results
+
+
+def _apply_benchmark_judge(
+    cases: list[BenchmarkCase],
+    results: list[dict[str, Any]],
+    *,
+    llm_judge: HarnessLLMJudge | None = None,
+) -> list[dict[str, Any]]:
     judge = HarnessBenchmarkJudge()
     case_map = {case.case_id: case for case in cases}
     judged: list[dict[str, Any]] = []
@@ -858,9 +1002,29 @@ def _apply_benchmark_judge(cases: list[BenchmarkCase], results: list[dict[str, A
         if case is None:
             judged.append(enriched)
             continue
+        enriched["bucket"] = case.bucket
         verdict = judge.judge_case(case, result)
         enriched["judge_passed"] = verdict.passed
         enriched["judge_result"] = verdict.to_dict()
+        enriched["deterministic_judge_passed"] = verdict.passed
+        enriched["deterministic_judge_result"] = verdict.to_dict()
+        llm_verdict = (llm_judge or HarnessLLMJudge()).judge_case(
+            case,
+            enriched,
+            deterministic_judge=verdict.to_dict(),
+        )
+        enriched["llm_judge_passed"] = llm_verdict.passed
+        enriched["llm_judge_score"] = llm_verdict.score
+        enriched["llm_judge_reason"] = llm_verdict.reason
+        enriched["llm_judge_dimensions"] = dict(llm_verdict.dimensions)
+        enriched["llm_judge_details"] = dict(llm_verdict.details)
+        enriched["llm_judge_error"] = llm_verdict.error
+        enriched["llm_judge_result"] = llm_verdict.to_dict()
+        enriched["judge_disagreement"] = (
+            verdict.passed != llm_verdict.passed
+            if llm_verdict.passed is not None
+            else None
+        )
         if enriched.get("status") == "passed" and not verdict.passed:
             enriched["status"] = "failed"
             enriched["failure_reason"] = (str(enriched.get("failure_reason", "") or "") + ";judge_failed").strip(";")
@@ -875,6 +1039,7 @@ async def run_selected_benchmark(
     tag: str | None = None,
     limit: int | None = None,
     output_path: str | Path | None = None,
+    use_llm_judge: bool = True,
 ) -> dict[str, Any]:
     started_at = datetime.now(timezone.utc).isoformat()
     selected_cases = load_cases(suite=suite, extra_case_files=extra_case_files, tag=tag, limit=limit)
@@ -895,12 +1060,13 @@ async def run_selected_benchmark(
         "cases": [],
         "judge": {},
     }
+    llm_judge = HarnessLLMJudge.from_env() if use_llm_judge else HarnessLLMJudge(None)
 
     all_results: list[dict[str, Any]] = []
     for suite_name, suite_cases in grouped.items():
         suite_results: list[dict[str, Any]] = []
         runners = {case.runner for case in suite_cases}
-        for runner in ("contract_lifecycle", "integration_lifecycle", "route_skill", "guard"):
+        for runner in ("contract_lifecycle", "integration_lifecycle", "route_skill", "guard", "rewrite_planner"):
             if runner not in runners:
                 continue
             runner_cases = [case for case in suite_cases if case.runner == runner]
@@ -912,8 +1078,10 @@ async def run_selected_benchmark(
                 suite_results.extend(await _run_route_skill_cases(runner_cases))
             elif runner == "guard":
                 suite_results.extend(_run_guard_cases(runner_cases))
+            elif runner == "rewrite_planner":
+                suite_results.extend(_run_rewrite_planner_cases(runner_cases))
 
-        judged_suite_results = _apply_benchmark_judge(suite_cases, suite_results)
+        judged_suite_results = _apply_benchmark_judge(suite_cases, suite_results, llm_judge=llm_judge)
         payload["suites"][suite_name] = {
             "summary": summarize_results(judged_suite_results),
             "cases": judged_suite_results,
@@ -925,6 +1093,9 @@ async def run_selected_benchmark(
     payload["judge"] = {
         "pass_rate": payload["summary"].get("judge_pass_rate"),
         "dimensions": payload["summary"].get("judge_dimensions", {}),
+        "llm_pass_rate": payload["summary"].get("llm_judge_pass_rate"),
+        "llm_dimensions": payload["summary"].get("llm_judge_dimensions", {}),
+        "llm_available": llm_judge.available,
     }
     payload["completed_at"] = datetime.now(timezone.utc).isoformat()
 

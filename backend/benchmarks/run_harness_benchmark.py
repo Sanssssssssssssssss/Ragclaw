@@ -22,10 +22,11 @@ DEFAULT_OUTPUT_PATH = harness_output_path()
 
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run the layered harness benchmark suites.")
-    parser.add_argument("--suite", choices=("contract", "integration", "hard", "scalable", "all"), default="contract")
+    parser.add_argument("--suite", choices=("contract", "integration", "hard", "rewrite", "scalable", "all"), default="contract")
     parser.add_argument("--case-file", action="append", default=[], help="Additional case file to load.")
     parser.add_argument("--tag", default=None, help="Only run cases containing one tag.")
     parser.add_argument("--limit", type=int, default=None, help="Limit loaded cases after filtering.")
+    parser.add_argument("--deterministic-only", action="store_true", help="Disable the model-based benchmark judge.")
     parser.add_argument("--output", default=str(DEFAULT_OUTPUT_PATH), help="JSON output path.")
     return parser.parse_args(argv)
 
@@ -37,6 +38,7 @@ async def run_benchmark(
     case_files: list[str] | None = None,
     tag: str | None = None,
     limit: int | None = None,
+    use_llm_judge: bool = True,
 ) -> dict:
     return await run_selected_benchmark(
         suite=suite,
@@ -44,6 +46,7 @@ async def run_benchmark(
         tag=tag,
         limit=limit,
         output_path=output_path,
+        use_llm_judge=use_llm_judge,
     )
 
 
@@ -56,6 +59,7 @@ def main(argv: list[str] | None = None) -> int:
             case_files=list(args.case_file or []),
             tag=args.tag,
             limit=args.limit,
+            use_llm_judge=not args.deterministic_only,
         )
     )
     print(args.output)
