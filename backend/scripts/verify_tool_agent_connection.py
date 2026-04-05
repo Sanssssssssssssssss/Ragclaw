@@ -13,7 +13,7 @@ from langchain.agents import create_agent
 from langchain_core.tools import tool
 
 from config import get_settings
-from graph.agent import agent_manager
+from src.backend.runtime.agent_manager import agent_manager
 
 
 @tool

@@ -9,7 +9,7 @@ BACKEND_DIR = Path(__file__).resolve().parents[1]
 if str(BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(BACKEND_DIR))
 
-from tools import build_tools_and_registry
+from src.backend.capabilities import build_tools_and_registry
 
 
 class CapabilityRegistryTests(unittest.TestCase):

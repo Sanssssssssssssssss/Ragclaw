@@ -9,9 +9,9 @@ BACKEND_DIR = Path(__file__).resolve().parents[1]
 if str(BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(BACKEND_DIR))
 
-from harness.policy import SessionSerialQueue
-from harness.runtime import HarnessRuntime, RuntimeDependencies
-from harness.trace_store import RunTraceStore
+from src.backend.observability.trace_store import RunTraceStore
+from src.backend.runtime.policy import SessionSerialQueue
+from src.backend.runtime.runtime import HarnessRuntime, RuntimeDependencies
 
 
 class _Executor:

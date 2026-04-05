@@ -1,22 +1,10 @@
 from __future__ import annotations
 
-import asyncio
+import sys
+from pathlib import Path
 
-from fastapi import APIRouter
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
 
-from knowledge_retrieval import knowledge_indexer
-
-router = APIRouter()
-
-
-@router.get("/knowledge/index/status")
-async def get_index_status() -> dict:
-    return knowledge_indexer.status().to_dict()
-
-
-@router.post("/knowledge/index/rebuild")
-async def rebuild_index() -> dict[str, bool]:
-    if knowledge_indexer.is_building():
-        return {"accepted": True}
-    asyncio.create_task(asyncio.to_thread(knowledge_indexer.rebuild_index))
-    return {"accepted": True}
+from src.backend.api.knowledge_index import *  # noqa: F401,F403

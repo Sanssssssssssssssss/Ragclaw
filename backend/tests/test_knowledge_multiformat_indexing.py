@@ -10,10 +10,10 @@ BACKEND_DIR = Path(__file__).resolve().parents[1]
 if str(BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(BACKEND_DIR))
 
-from knowledge_retrieval.indexer import KnowledgeIndexer
-from knowledge_retrieval.opendataloader_pdf import _build_pdf_chunks
-from knowledge_retrieval.orchestrator import knowledge_orchestrator
-from knowledge_retrieval.types import Evidence, HybridRetrievalResult
+from src.backend.knowledge.indexer import KnowledgeIndexer
+from src.backend.knowledge.opendataloader_pdf import _build_pdf_chunks
+from src.backend.knowledge.orchestrator import knowledge_orchestrator
+from src.backend.knowledge.types import Evidence, HybridRetrievalResult
 
 
 FIXTURE_PATH = Path(__file__).resolve().parent / "fixtures" / "opendataloader_pdf_sample.json"
@@ -103,7 +103,7 @@ class KnowledgeMultiformatIndexingTests(unittest.IsolatedAsyncioTestCase):
         )
 
         with patch(
-            "knowledge_retrieval.orchestrator.hybrid_retriever.retrieve",
+            "src.backend.knowledge.orchestrator.hybrid_retriever.retrieve",
             return_value=HybridRetrievalResult(
                 vector_evidences=[pdf_vector, xlsx_vector],
                 bm25_evidences=[pdf_bm25, xlsx_bm25],
@@ -124,7 +124,7 @@ class KnowledgeMultiformatIndexingTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_orchestrator_returns_not_found_without_skill_or_tools_when_retrieval_misses(self) -> None:
         with patch(
-            "knowledge_retrieval.orchestrator.hybrid_retriever.retrieve",
+            "src.backend.knowledge.orchestrator.hybrid_retriever.retrieve",
             return_value=HybridRetrievalResult(vector_evidences=[], bm25_evidences=[]),
         ):
             events = []

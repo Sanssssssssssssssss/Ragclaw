@@ -16,14 +16,15 @@ if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
 from config import get_settings, runtime_config
-from graph.agent import AgentManager, _stringify_content, parse_execution_strategy
-from graph.memory_indexer import memory_indexer
-from graph.prompt_builder import SYSTEM_COMPONENTS, build_knowledge_system_prompt, build_system_prompt
-from knowledge_retrieval import knowledge_indexer, knowledge_orchestrator
-from knowledge_retrieval.evidence_organizer import source_family
-from knowledge_retrieval.query_rewrite import build_query_plan
+from src.backend.decision.execution_strategy import parse_execution_strategy
+from src.backend.decision.prompt_builder import SYSTEM_COMPONENTS, build_knowledge_system_prompt, build_system_prompt
+from src.backend.knowledge import knowledge_indexer, knowledge_orchestrator
+from src.backend.knowledge.evidence_organizer import source_family
+from src.backend.knowledge.memory_indexer import memory_indexer
+from src.backend.knowledge.query_rewrite import build_query_plan
+from src.backend.runtime.agent_manager import AgentManager, _stringify_content
 from token_utils import count_message_usage, count_tokens
-from tools.skills_scanner import refresh_snapshot
+from src.backend.capabilities.skills_scanner import refresh_snapshot
 
 
 DEFAULT_QUESTION = "知识库搜索三一重工和航天之间的财报比较"

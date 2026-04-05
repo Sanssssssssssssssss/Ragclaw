@@ -9,10 +9,10 @@ BACKEND_DIR = Path(__file__).resolve().parents[1]
 if str(BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(BACKEND_DIR))
 
-from harness.capability_governance import CapabilityBudgetPolicy, CapabilityGovernor
-from harness.capability_invocation import CapabilityRuntimeContext, capability_runtime_scope, invoke_capability
-from harness.capability_registry import CapabilityRegistry
-from harness.capability_types import CapabilityResult, CapabilityRetryPolicy, CapabilitySpec
+from src.backend.capabilities.governance import CapabilityBudgetPolicy, CapabilityGovernor
+from src.backend.capabilities.invocation import CapabilityRuntimeContext, capability_runtime_scope, invoke_capability
+from src.backend.capabilities.registry import CapabilityRegistry
+from src.backend.capabilities.types import CapabilityResult, CapabilityRetryPolicy, CapabilitySpec
 
 
 def _spec(**overrides):

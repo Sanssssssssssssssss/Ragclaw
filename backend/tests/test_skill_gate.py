@@ -9,9 +9,9 @@ BACKEND_DIR = Path(__file__).resolve().parents[1]
 if str(BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(BACKEND_DIR))
 
-from graph.lightweight_router import RoutingDecision
-from graph.execution_strategy import parse_execution_strategy
-from graph.skill_gate import SkillDecision, SkillGate
+from src.backend.decision.execution_strategy import parse_execution_strategy
+from src.backend.decision.lightweight_router import RoutingDecision
+from src.backend.decision.skill_gate import SkillDecision, SkillGate
 
 
 class SkillGateTests(unittest.TestCase):

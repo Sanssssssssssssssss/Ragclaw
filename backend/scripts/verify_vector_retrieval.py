@@ -9,7 +9,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from config import get_settings
-from knowledge_retrieval import knowledge_indexer
+from src.backend.knowledge import knowledge_indexer
 
 
 def main() -> None:

@@ -161,7 +161,7 @@ class HarnessBenchmarkRunnerTests(unittest.IsolatedAsyncioTestCase):
             available = True
 
             def judge_case(self, case, result, *, deterministic_judge=None):
-                from harness.graders import HarnessLLMJudgeResult
+                from src.backend.runtime.graders import HarnessLLMJudgeResult
 
                 return HarnessLLMJudgeResult(
                     passed=True,

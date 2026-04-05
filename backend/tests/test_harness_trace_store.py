@@ -9,8 +9,8 @@ BACKEND_DIR = Path(__file__).resolve().parents[1]
 if str(BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(BACKEND_DIR))
 
-from harness.trace_store import RunTraceStore
-from harness.types import HarnessEvent, RunMetadata, RunOutcome
+from src.backend.observability.trace_store import RunTraceStore
+from src.backend.observability.types import HarnessEvent, RunMetadata, RunOutcome
 
 
 class HarnessTraceStoreTests(unittest.TestCase):
@@ -98,4 +98,3 @@ class HarnessTraceStoreTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-

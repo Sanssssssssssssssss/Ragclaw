@@ -8,8 +8,8 @@ BACKEND_DIR = Path(__file__).resolve().parents[1]
 if str(BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(BACKEND_DIR))
 
-from harness.capability_governance import CapabilityBudgetPolicy, CapabilityGovernor
-from harness.capability_types import CapabilityRetryPolicy, CapabilitySpec
+from src.backend.capabilities.governance import CapabilityBudgetPolicy, CapabilityGovernor
+from src.backend.capabilities.types import CapabilityRetryPolicy, CapabilitySpec
 
 
 def _spec(**overrides):

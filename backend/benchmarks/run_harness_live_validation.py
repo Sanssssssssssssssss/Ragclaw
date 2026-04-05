@@ -26,12 +26,12 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from benchmarks.storage_layout import harness_live_output_path
-from graph.agent import agent_manager
-from graph.execution_strategy import ExecutionStrategy
-from graph.lightweight_router import RoutingDecision
-from harness.execution_support import HarnessExecutionSupport
-from harness.runtime import build_harness_runtime
-from knowledge_retrieval.types import Evidence, OrchestratedRetrievalResult, RetrievalStep
+from src.backend.decision.execution_strategy import ExecutionStrategy
+from src.backend.decision.lightweight_router import RoutingDecision
+from src.backend.knowledge.types import Evidence, OrchestratedRetrievalResult, RetrievalStep
+from src.backend.runtime.agent_manager import agent_manager
+from src.backend.runtime.execution_support import HarnessExecutionSupport
+from src.backend.runtime.runtime import build_harness_runtime
 
 
 CASE_FILE = Path(__file__).resolve().parent / "harness_cases" / "live_validation_cases.json"
@@ -552,8 +552,8 @@ async def run_live_validation(
         stack.enter_context(patch.object(agent_manager, "get_harness_runtime", return_value=runtime))
         stack.enter_context(patch.object(agent_manager, "resolve_routing", side_effect=_resolve_with_tracking))
         stack.enter_context(patch.object(agent_manager, "create_execution_support", return_value=support))
-        stack.enter_context(patch("harness.executors.memory_indexer.retrieve", return_value=[]))
-        stack.enter_context(patch("harness.executors.knowledge_orchestrator.astream", side_effect=support.knowledge_astream))
+        stack.enter_context(patch("src.backend.runtime.executors.memory_indexer.retrieve", return_value=[]))
+        stack.enter_context(patch("src.backend.runtime.executors.knowledge_orchestrator.astream", side_effect=support.knowledge_astream))
 
         with _serve_app() as base_url:
             results = await _run_live_cases(base_url, runtime, cases)

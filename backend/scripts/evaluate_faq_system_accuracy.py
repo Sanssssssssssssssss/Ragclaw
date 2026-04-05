@@ -163,10 +163,10 @@ def initialize_backend(backend_dir: Path):
     if str(backend_dir) not in sys.path:
         sys.path.insert(0, str(backend_dir))
 
-    from graph.agent import agent_manager
-    from graph.memory_indexer import memory_indexer
-    from knowledge_retrieval import knowledge_indexer
-    from tools.skills_scanner import refresh_snapshot
+    from src.backend.capabilities.skills_scanner import refresh_snapshot
+    from src.backend.knowledge import knowledge_indexer
+    from src.backend.knowledge.memory_indexer import memory_indexer
+    from src.backend.runtime.agent_manager import agent_manager
 
     refresh_snapshot(backend_dir)
     agent_manager.initialize(backend_dir)
@@ -178,7 +178,7 @@ def initialize_backend(backend_dir: Path):
 
 
 async def run_single_question(question: str, prefix: str) -> tuple[str, list[str]]:
-    from graph.agent import agent_manager
+    from src.backend.runtime.agent_manager import agent_manager
 
     final_answer = ""
     streamed_parts: list[str] = []
@@ -228,7 +228,7 @@ def run_ragas(rows: list[dict[str, Any]]) -> tuple[Any | None, dict[str, Any] | 
         from langchain_openai import OpenAIEmbeddings
 
         from config import get_settings
-        from graph.agent import agent_manager
+        from src.backend.runtime.agent_manager import agent_manager
     except ImportError as exc:
         return None, {"enabled": False, "error": f"Missing evaluation dependency: {exc}"}
 

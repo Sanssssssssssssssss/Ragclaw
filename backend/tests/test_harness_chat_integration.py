@@ -14,7 +14,7 @@ if str(BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(BACKEND_DIR))
 
 from api import chat as chat_api
-from harness.types import HarnessEvent
+from src.backend.observability.types import HarnessEvent
 
 
 class FakeSessionManager:

@@ -9,7 +9,7 @@ BACKEND_DIR = Path(__file__).resolve().parents[1]
 if str(BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(BACKEND_DIR))
 
-from knowledge_retrieval.query_rewrite import QueryPlan, build_query_plan
+from src.backend.knowledge.query_rewrite import QueryPlan, build_query_plan
 
 
 class QueryRewritePlannerTests(unittest.TestCase):
@@ -29,14 +29,14 @@ class QueryRewritePlannerTests(unittest.TestCase):
             planner_reason="llm focused the compare",
             planner_source="llm",
         )
-        with patch("knowledge_retrieval.query_rewrite._LLM_REWRITE_PLANNER.plan", return_value=llm_plan):
+        with patch("src.backend.knowledge.query_rewrite._LLM_REWRITE_PLANNER.plan", return_value=llm_plan):
             plan = build_query_plan("Compare OpenAI and Claude revenue.", prefer_llm=True)
         self.assertEqual(plan.planner_source, "llm")
         self.assertEqual(plan.question_type, "compare")
         self.assertEqual(plan.query_variants[1], "OpenAI Claude revenue compare")
 
     def test_prefer_llm_falls_back_closed_on_error(self) -> None:
-        with patch("knowledge_retrieval.query_rewrite._LLM_REWRITE_PLANNER.plan", side_effect=RuntimeError("offline")):
+        with patch("src.backend.knowledge.query_rewrite._LLM_REWRITE_PLANNER.plan", side_effect=RuntimeError("offline")):
             plan = build_query_plan("Which report mentions healthcare AI?", prefer_llm=True)
         self.assertEqual(plan.planner_source, "deterministic")
         self.assertTrue(plan.query_variants)

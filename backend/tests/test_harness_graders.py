@@ -9,8 +9,8 @@ BACKEND_DIR = Path(__file__).resolve().parents[1]
 if str(BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(BACKEND_DIR))
 
-from graph.agent import AgentManager
-from harness.graders import HarnessBenchmarkJudge, HarnessLLMJudge, KnowledgeAnswerGrader
+from src.backend.runtime.agent_manager import AgentManager
+from src.backend.runtime.graders import HarnessBenchmarkJudge, HarnessLLMJudge, KnowledgeAnswerGrader
 
 
 def _evidence(source_path: str, locator: str, snippet: str):

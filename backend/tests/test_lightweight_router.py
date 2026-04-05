@@ -9,9 +9,9 @@ BACKEND_DIR = Path(__file__).resolve().parents[1]
 if str(BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(BACKEND_DIR))
 
-from graph.agent import AgentManager
-from graph.execution_strategy import parse_execution_strategy
-from graph.lightweight_router import RoutingDecision, deterministic_route
+from src.backend.decision.execution_strategy import parse_execution_strategy
+from src.backend.decision.lightweight_router import RoutingDecision, deterministic_route
+from src.backend.runtime.agent_manager import AgentManager
 
 
 class LightweightRouterTests(unittest.IsolatedAsyncioTestCase):

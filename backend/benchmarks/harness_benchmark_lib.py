@@ -11,19 +11,19 @@ from types import SimpleNamespace
 from typing import Any, Literal
 from unittest.mock import patch
 
-from graph.agent import AgentManager
-from graph.execution_strategy import ExecutionStrategy
-from graph.lightweight_router import RoutingDecision
-from graph.skill_gate import SkillDecision
-from harness.executors import HarnessExecutors
-from harness.execution_support import HarnessExecutionSupport
-from harness.graders import HarnessBenchmarkJudge, HarnessLLMJudge, KnowledgeAnswerGrader
-from harness.policy import SessionSerialQueue
-from harness.runtime import HarnessRuntime, RuntimeDependencies
-from harness.trace_store import RunTraceStore
-from harness.capability_registry import build_capability_registry
-from knowledge_retrieval.query_rewrite import build_query_plan
-from knowledge_retrieval.types import Evidence, OrchestratedRetrievalResult, RetrievalStep
+from src.backend.capabilities.registry import build_capability_registry
+from src.backend.decision.execution_strategy import ExecutionStrategy
+from src.backend.decision.lightweight_router import RoutingDecision
+from src.backend.decision.skill_gate import SkillDecision
+from src.backend.knowledge.query_rewrite import build_query_plan
+from src.backend.knowledge.types import Evidence, OrchestratedRetrievalResult, RetrievalStep
+from src.backend.observability.trace_store import RunTraceStore
+from src.backend.runtime.agent_manager import AgentManager
+from src.backend.runtime.execution_support import HarnessExecutionSupport
+from src.backend.runtime.executors import HarnessExecutors
+from src.backend.runtime.graders import HarnessBenchmarkJudge, HarnessLLMJudge, KnowledgeAnswerGrader
+from src.backend.runtime.policy import SessionSerialQueue
+from src.backend.runtime.runtime import HarnessRuntime, RuntimeDependencies
 
 
 SuiteName = Literal["contract", "integration", "hard", "rewrite", "scalable", "all"]
@@ -694,7 +694,7 @@ async def _run_contract_lifecycle_cases(cases: list[BenchmarkCase]) -> list[dict
                 case_specs[holder.message] = holder
 
         async def _run_one(case: BenchmarkCase) -> tuple[str, int]:
-            with patch("harness.executors.knowledge_orchestrator.astream", side_effect=lambda message: _fake_contract_knowledge_astream(message, case_specs)):
+            with patch("src.backend.runtime.executors.knowledge_orchestrator.astream", side_effect=lambda message: _fake_contract_knowledge_astream(message, case_specs)):
                 return await _run_case_through_runtime(runtime=runtime, executor=executor, case=case)
 
         for case in cases:
@@ -805,8 +805,8 @@ async def _run_integration_lifecycle_cases(
 
         async def _run_one(case: BenchmarkCase) -> tuple[str, int]:
             support.set_active_case(case)
-            with patch("harness.executors.memory_indexer.retrieve", return_value=[]), patch(
-                "harness.executors.knowledge_orchestrator.astream",
+            with patch("src.backend.runtime.executors.memory_indexer.retrieve", return_value=[]), patch(
+                "src.backend.runtime.executors.knowledge_orchestrator.astream",
                 side_effect=support.knowledge_astream,
             ):
                 return await _run_case_through_runtime(runtime=runtime, executor=executor, case=case)

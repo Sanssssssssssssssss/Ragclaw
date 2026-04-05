@@ -10,8 +10,8 @@ BACKEND_DIR = Path(__file__).resolve().parents[1]
 if str(BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(BACKEND_DIR))
 
-from graph.agent import AgentManager
-from harness.execution_support import incremental_text
+from src.backend.runtime.agent_manager import AgentManager
+from src.backend.runtime.execution_support import incremental_text
 
 
 async def collect_events(manager: AgentManager, message: str) -> list[dict]:
@@ -201,7 +201,7 @@ class AgentConstraintTests(unittest.IsolatedAsyncioTestCase):
         support = FakeExecutionSupport(model_answer=fake_model_answer)
         with (
             patch.object(self.manager, "create_execution_support", return_value=support),
-            patch("graph.agent.knowledge_orchestrator.astream", side_effect=fake_knowledge_astream),
+            patch("src.backend.runtime.agent_manager.knowledge_orchestrator.astream", side_effect=fake_knowledge_astream),
         ):
             events = await collect_events(
                 self.manager,
@@ -268,7 +268,7 @@ class AgentConstraintTests(unittest.IsolatedAsyncioTestCase):
         support = FakeExecutionSupport(tool_agent=fake_agent)
         with (
             patch.object(self.manager, "create_execution_support", return_value=support),
-            patch("graph.agent.knowledge_orchestrator.astream", side_effect=fake_knowledge_astream),
+            patch("src.backend.runtime.agent_manager.knowledge_orchestrator.astream", side_effect=fake_knowledge_astream),
         ):
             events = await collect_events(
                 self.manager,

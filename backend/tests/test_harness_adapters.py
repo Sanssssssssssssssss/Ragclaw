@@ -8,8 +8,8 @@ BACKEND_DIR = Path(__file__).resolve().parents[1]
 if str(BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(BACKEND_DIR))
 
-from harness.adapters import LegacyChatAccumulator
-from harness.types import HarnessEvent
+from src.backend.api.adapters import LegacyChatAccumulator
+from src.backend.observability.types import HarnessEvent
 
 
 def _event(name: str, payload: dict, event_id: str) -> HarnessEvent:

@@ -12,8 +12,8 @@ BACKEND_DIR = Path(__file__).resolve().parents[1]
 if str(BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(BACKEND_DIR))
 
-from knowledge_retrieval.indexer import KnowledgeIndexer
-from knowledge_retrieval.opendataloader_pdf import _build_pdf_chunks, _ensure_java_available
+from src.backend.knowledge.indexer import KnowledgeIndexer
+from src.backend.knowledge.opendataloader_pdf import _build_pdf_chunks, _ensure_java_available
 
 
 FIXTURE_PATH = Path(__file__).resolve().parent / "fixtures" / "opendataloader_pdf_sample.json"
@@ -105,11 +105,11 @@ class OpenDataLoaderPdfTests(unittest.TestCase):
             return []
 
         with (
-            patch("knowledge_retrieval.opendataloader_pdf.shutil.which", return_value=None),
+            patch("src.backend.knowledge.opendataloader_pdf.shutil.which", return_value=None),
             patch.dict(os.environ, {"JAVA_HOME": "", "PATH": ""}, clear=False),
-            patch("knowledge_retrieval.opendataloader_pdf.os.name", "nt"),
-            patch("knowledge_retrieval.opendataloader_pdf.Path.exists", return_value=True),
-            patch("knowledge_retrieval.opendataloader_pdf.Path.rglob", side_effect=fake_rglob),
+            patch("src.backend.knowledge.opendataloader_pdf.os.name", "nt"),
+            patch("src.backend.knowledge.opendataloader_pdf.Path.exists", return_value=True),
+            patch("src.backend.knowledge.opendataloader_pdf.Path.rglob", side_effect=fake_rglob),
         ):
             discovered = _ensure_java_available()
             self.assertIn(str(fake_java.parent), os.environ["PATH"])

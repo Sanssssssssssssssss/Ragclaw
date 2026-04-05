@@ -2,10 +2,16 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import sys
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
 
 from api.chat import router as chat_router
 from api.compress import router as compress_router
@@ -14,11 +20,11 @@ from api.files import router as files_router
 from api.knowledge_index import router as knowledge_index_router
 from api.sessions import router as sessions_router
 from api.tokens import router as tokens_router
-from config import get_settings
-from graph.agent import agent_manager
-from graph.memory_indexer import memory_indexer
-from knowledge_retrieval import knowledge_indexer
-from tools.skills_scanner import refresh_snapshot
+from src.backend.capabilities.skills_scanner import refresh_snapshot
+from src.backend.knowledge import knowledge_indexer
+from src.backend.knowledge.memory_indexer import memory_indexer
+from src.backend.runtime.agent_manager import agent_manager
+from src.backend.runtime.config import get_settings
 
 logger = logging.getLogger(__name__)
 

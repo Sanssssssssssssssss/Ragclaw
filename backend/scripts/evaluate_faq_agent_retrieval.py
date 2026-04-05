@@ -475,7 +475,7 @@ async def run_single_question(
     prefix: str,
     backend_dir: Path,
 ) -> EvalResult:
-    from graph.agent import agent_manager
+    from src.backend.runtime.agent_manager import agent_manager
 
     session_manager = agent_manager.session_manager
     if session_manager is None:
@@ -555,7 +555,7 @@ async def evaluate(args: argparse.Namespace) -> dict[str, Any]:
     if args.limit > 0:
         entries = entries[: args.limit]
 
-    from graph.agent import agent_manager
+    from src.backend.runtime.agent_manager import agent_manager
 
     agent_manager.initialize(backend_dir)
 
@@ -698,7 +698,7 @@ def run_ragas(summary: dict[str, Any]) -> dict[str, Any] | None:
 
     if ragas_mode == "full":
         try:
-            from graph.agent import agent_manager
+            from src.backend.runtime.agent_manager import agent_manager
 
             ragas_llm = build_ragas_evaluator_llm(agent_manager)
         except Exception as exc:

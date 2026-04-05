@@ -1,14 +1,20 @@
 from __future__ import annotations
 
 import json
+import sys
+from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
-from graph.agent import agent_manager
-from harness.adapters import LegacyChatAccumulator
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
+from src.backend.api.adapters import LegacyChatAccumulator
+from src.backend.runtime.agent_manager import agent_manager
 
 router = APIRouter()
 
@@ -26,8 +32,8 @@ def _sse(event: str, data: dict[str, Any]) -> str:
 _AUTO_TITLE_PLACEHOLDERS = {
     "",
     "new session",
-    "鏂颁細璇?",
-    "鏂板璇?",
+    "閺傞绱扮拠?",
+    "閺傛澘顕拠?",
 }
 
 
