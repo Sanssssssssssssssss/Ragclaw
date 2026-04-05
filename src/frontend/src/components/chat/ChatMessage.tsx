@@ -1,11 +1,9 @@
 "use client";
 
-import { memo } from "react";
+import { memo, useEffect, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 
-import { RetrievalCard } from "@/components/chat/RetrievalCard";
-import { ThoughtChain } from "@/components/chat/ThoughtChain";
 import type { MessageUsage, RetrievalStep, ToolCall } from "@/lib/api";
 
 /**
@@ -16,25 +14,54 @@ function formatTokenUsage(usage: MessageUsage) {
 }
 
 /**
- * Returns one rendered chat message from role, content, tool, retrieval, and usage inputs and draws one message bubble.
+ * Returns one rendered chat message from role, content, and usage inputs and keeps the main chat lightweight.
  */
 export const ChatMessage = memo(function ChatMessage({
   role,
   content,
-  toolCalls,
-  retrievalSteps,
   usage,
   streaming = false
 }: {
   role: "user" | "assistant";
   content: string;
-  toolCalls: ToolCall[];
-  retrievalSteps: RetrievalStep[];
+  toolCalls?: ToolCall[];
+  retrievalSteps?: RetrievalStep[];
   usage: MessageUsage | null;
   streaming?: boolean;
 }) {
   const isUser = role === "user";
-  const shouldRenderPlainText = isUser || streaming;
+  const articleRef = useRef<HTMLElement | null>(null);
+  const [canRenderMarkdown, setCanRenderMarkdown] = useState(isUser || streaming);
+
+  useEffect(() => {
+    if (isUser || streaming || canRenderMarkdown) {
+      return;
+    }
+
+    const node = articleRef.current;
+    if (!node || typeof IntersectionObserver === "undefined") {
+      setCanRenderMarkdown(true);
+      return;
+    }
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((entry) => entry.isIntersecting)) {
+          setCanRenderMarkdown(true);
+          observer.disconnect();
+        }
+      },
+      {
+        root: null,
+        rootMargin: "320px 0px"
+      }
+    );
+
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [canRenderMarkdown, isUser, streaming]);
+
+  const shouldRenderPlainText = isUser || streaming || !canRenderMarkdown;
 
   return (
     <article
@@ -43,9 +70,8 @@ export const ChatMessage = memo(function ChatMessage({
           ? "ml-auto border-[rgba(255,255,255,0.08)] bg-[rgba(255,255,255,0.07)] text-white"
           : "mr-auto border-[var(--color-line)] bg-[rgba(255,255,255,0.03)] text-[var(--color-ink)]"
       }`}
+      ref={articleRef}
     >
-      {!isUser && <RetrievalCard steps={retrievalSteps} />}
-      {!isUser && <ThoughtChain toolCalls={toolCalls} />}
       <div
         className={
           shouldRenderPlainText

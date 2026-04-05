@@ -6,7 +6,7 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
 $root = Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path))
-$frontendDir = Join-Path $root "frontend"
+$frontendDir = Join-Path $root "src\\frontend"
 
 Set-Location $frontendDir
 $env:NEXT_PUBLIC_API_BASE_URL = $ApiBaseUrl

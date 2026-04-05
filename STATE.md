@@ -78,8 +78,8 @@
 ## 2026-03-26 第三次进展
 - 已按项目约束先通过 Markdown 记忆文件重建上下文，再执行本轮任务
 - 前端已正式安装 `playwright` 开发依赖
-- 已新增浏览器安装命令：`cd frontend && npm run playwright:install`
-- 已新增聊天 UI 验证命令：`cd frontend && npm run verify:chat-ui`
+- 已新增浏览器安装命令：`cd src/frontend && npm run playwright:install`
+- 已新增聊天 UI 验证命令：`cd src/frontend && npm run verify:chat-ui`
 - 已新增开发辅助脚本：
   - `scripts/dev/start-backend-dev.ps1`
   - `scripts/dev/start-frontend-dev.ps1`
@@ -124,7 +124,7 @@
   - `start-dev.ps1 -Restart -NoBrowser` reaches `Backend status: ready`
   - `http://127.0.0.1:8015/health` returns `{"status":"ok"}`
   - `http://127.0.0.1:3000` returns `200`
-  - `frontend/scripts/verify-chat-ui.mjs` passes after the startup reliability fixes
+  - `src/frontend/scripts/verify-chat-ui.mjs` passes after the startup reliability fixes
 
 ## Current Risks
 - The frontend now handles backend-unavailable startup gracefully, but individual action buttons outside the chat initialization path can still surface raw backend errors if the API disappears mid-session.
@@ -420,7 +420,7 @@
   - chat message, tool trace, and retrieval trace components are memoized
   - sidebar raw messages use deferred rendering to reduce streaming pressure
 - Static verification status:
-  - `frontend/npm run build` passes after the performance-focused refactor
+  - `src/frontend/npm run build` passes after the performance-focused refactor
 
 ## Current Risks
 - This round still used static validation only, so perceived responsiveness must be confirmed from the user's next local run.
@@ -434,7 +434,7 @@
   - streamed chat tokens are now buffered into short 40ms windows before React state is updated
   - flushes still happen immediately around tool events, response boundaries, completion, and errors
 - Static verification status:
-  - `frontend/npm run build` passes after the token-buffering change
+  - `src/frontend/npm run build` passes after the token-buffering change
 
 ## Current Risks
 - This round still used static validation only, so the user's next local rerun remains the source of truth for the new responsiveness level.
@@ -450,7 +450,7 @@
   - `python_repl` now launches subprocesses in UTF-8 mode and returns a compact message if Windows console encoding still rejects oversized text output
 - Static verification status:
   - `backend\\.venv\\Scripts\\python.exe -m compileall backend` passes
-  - `frontend/npm run build` passes after the backend-tool compatibility changes
+  - `src/frontend/npm run build` passes after the backend-tool compatibility changes
 
 ## Current Risks
 - This round still used static validation only, so the user's next local rerun remains the source of truth for the repaired terminal and Python tool behavior.

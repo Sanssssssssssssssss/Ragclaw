@@ -1,38 +1,14 @@
 "use client";
 
-import { memo, useEffect, useLayoutEffect, useMemo, useRef } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef } from "react";
 
 import { ChatInput } from "@/components/chat/ChatInput";
 import { ChatMessage } from "@/components/chat/ChatMessage";
-import { type Message, useChatStore, useSessionStore } from "@/lib/store";
+import { VirtualizedStack } from "@/components/chat/VirtualizedStack";
+import { useChatStore, useSessionStore } from "@/lib/store";
 
 const AUTO_SCROLL_THRESHOLD = 72;
-
-const StableHistory = memo(
-  function StableHistory({
-    messages
-  }: {
-    messages: Message[];
-  }) {
-    return (
-      <>
-        {messages.map((message) => (
-          <ChatMessage
-            content={message.content}
-            key={message.id}
-            retrievalSteps={message.retrievalSteps}
-            role={message.role}
-            toolCalls={message.toolCalls}
-            usage={message.usage}
-          />
-        ))}
-      </>
-    );
-  },
-  (previous, next) =>
-    previous.messages.length === next.messages.length &&
-    previous.messages.every((message, index) => message === next.messages[index])
-);
+const CHAT_ITEM_ESTIMATE = 240;
 
 /**
  * Returns one rendered chat panel from no explicit inputs and keeps the chat viewport pinned without scroll jitter.
@@ -53,10 +29,17 @@ export function ChatPanel() {
   const stickToBottomRef = useRef(true);
   const frameRef = useRef<number | null>(null);
 
-  const lastCommittedMessage = messages[messages.length - 1];
-  const lastStreamingMessage = streamingMessages[streamingMessages.length - 1];
-  const lastMessage = lastStreamingMessage ?? lastCommittedMessage;
-  const historyMessages = useMemo(() => messages, [messages]);
+  const renderableMessages = useMemo(
+    () => [
+      ...messages.map((message) => ({ ...message, streaming: false })),
+      ...streamingMessages.map((message, index) => ({
+        ...message,
+        streaming: isStreaming && index === streamingMessages.length - 1
+      }))
+    ],
+    [isStreaming, messages, streamingMessages]
+  );
+  const lastMessage = renderableMessages[renderableMessages.length - 1];
 
   /**
    * Returns no value from an optional deferred flag input and keeps the scroll container pinned to the latest message.
@@ -119,8 +102,12 @@ export function ChatPanel() {
   }, []);
 
   useLayoutEffect(() => {
+    if (!renderableMessages.length) {
+      return;
+    }
+
     syncToBottom(false);
-  }, [messages.length]);
+  }, [renderableMessages.length]);
 
   useLayoutEffect(() => {
     if (!messages.length) {
@@ -132,8 +119,22 @@ export function ChatPanel() {
   }, [currentSessionId, messages.length]);
 
   useLayoutEffect(() => {
+    if (!lastMessage) {
+      return;
+    }
     syncToBottom(true);
   }, [lastMessage, isStreaming]);
+
+  /**
+   * Returns no value from a total-height input and preserves bottom pinning after virtualization remeasures rows.
+   */
+  const handleTotalHeightChange = useCallback(() => {
+    if (!stickToBottomRef.current) {
+      return;
+    }
+
+    syncToBottom(false);
+  }, []);
 
   return (
     <section className="flex h-full min-w-0 flex-[1.5] flex-col gap-3 px-1">
@@ -182,8 +183,8 @@ export function ChatPanel() {
           </div>
         )}
 
-        <div className="chat-scroll-area flex-1 space-y-5 overflow-y-auto pr-2" ref={scrollRef}>
-          {!messages.length && (
+        {!renderableMessages.length ? (
+          <div className="chat-scroll-area flex-1 overflow-y-auto pr-2" ref={scrollRef}>
             <div className="rounded-[30px] border border-dashed border-[var(--color-line)] bg-[var(--color-bg-soft)] px-7 py-8">
               <p className="text-xs uppercase tracking-[0.34em] text-[var(--color-ink-muted)]">
                 {isInitializing ? "Starting" : connectionError ? "Waiting for backend" : "Ready"}
@@ -199,21 +200,28 @@ export function ChatPanel() {
                   : "Ask questions, inspect the evidence, and keep retrieval plus tool activity visible without leaving the conversation."}
               </p>
             </div>
-          )}
-
-          <StableHistory messages={historyMessages} />
-          {streamingMessages.map((message, index) => (
-            <ChatMessage
-              content={message.content}
-              key={message.id}
-              retrievalSteps={message.retrievalSteps}
-              role={message.role}
-              streaming={isStreaming && index === streamingMessages.length - 1}
-              toolCalls={message.toolCalls}
-              usage={message.usage}
-            />
-          ))}
-        </div>
+          </div>
+        ) : (
+          <VirtualizedStack
+            className="chat-scroll-area flex-1 overflow-y-auto pr-2"
+            containerRef={scrollRef}
+            estimateHeight={CHAT_ITEM_ESTIMATE}
+            getKey={(message) => message.id}
+            items={renderableMessages}
+            onTotalHeightChange={handleTotalHeightChange}
+            renderItem={(message) => (
+              <div className="pb-5">
+                <ChatMessage
+                  content={message.content}
+                  key={message.id}
+                  role={message.role}
+                  streaming={message.streaming}
+                  usage={message.usage}
+                />
+              </div>
+            )}
+          />
+        )}
       </div>
 
       <ChatInput

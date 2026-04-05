@@ -21,7 +21,7 @@
 ### 我们的初步分层
 - 根目录 `*.md`：长期记忆与项目管理层
 - `backend/`：FastAPI API、LangGraph agent、memory、knowledge、skills、tools
-- `frontend/`：Next.js 前端工作台
+- `src/frontend/`：Next.js 前端工作台
 - `docs/`：补充设计与学习材料
 - `.vscode/`：本地 demo / 学习用编辑器配置
 - 未来预留 `experiments/`：新 RAG 方向实验层
@@ -37,7 +37,7 @@
 - 目标包括前端、后端、知识目录、技能目录与配置文件
 - 当前已确认的运行方式：
   - 后端使用 `backend/.venv` + `uvicorn app:app --port 8004`
-  - 前端使用 `frontend` 下 `npm run dev`，默认访问 `http://127.0.0.1:3000`
+  - 前端使用 `src/frontend` 下 `npm run dev`，默认访问 `http://127.0.0.1:3000`
 
 ### 3. 检索编排模块
 - 保留 Skill-first 主链路
@@ -81,7 +81,7 @@
 ## 2026-03-26 第三次补充
 - 前端验证层补充 `Playwright`
 - 当前浏览器级回归入口：
-  - `frontend/scripts/verify-chat-ui.mjs`
+  - `src/frontend/scripts/verify-chat-ui.mjs`
   - `scripts/dev/run-chat-ui-verification.ps1`
 - 目的：
   - 用真实浏览器验证聊天区滚动稳定性
@@ -99,7 +99,7 @@
   - no extra router-classifier model is called during route selection
 - Verification layers now cover:
   - API-level routing checks through `backend/scripts/verify_knowledge_routing.py`
-  - browser-level chat checks through `frontend/scripts/verify-chat-ui.mjs`
+  - browser-level chat checks through `src/frontend/scripts/verify-chat-ui.mjs`
 ## 2026-03-26 Fifth Update
 - Startup architecture now separates service readiness from retrieval warmup:
   - FastAPI can reach `/health` before the knowledge index finishes rebuilding

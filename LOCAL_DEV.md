@@ -22,7 +22,7 @@ py -3.13 -m venv .venv
 
 ### 前端
 ```powershell
-cd frontend
+cd src/frontend
 npm install
 ```
 
@@ -117,14 +117,14 @@ Playwright 已作为前端开发依赖安装。
 首次安装浏览器：
 
 ```powershell
-cd frontend
+cd src/frontend
 npm run playwright:install
 ```
 
 验证聊天区滚动稳定性、knowledge 回答展示和每轮 token 用量展示：
 
 ```powershell
-cd frontend
+cd src/frontend
 npm run verify:chat-ui
 ```
 

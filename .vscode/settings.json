@@ -7,15 +7,15 @@
   "python.analysis.extraPaths": [
     "${workspaceFolder}/backend"
   ],
-  "typescript.tsdk": "${workspaceFolder}/frontend/node_modules/typescript/lib",
+  "typescript.tsdk": "${workspaceFolder}/src/frontend/node_modules/typescript/lib",
   "search.exclude": {
     "**/backend/.venv": true,
-    "**/frontend/.next": true,
-    "**/frontend/node_modules": true
+    "**/src/frontend/.next": true,
+    "**/src/frontend/node_modules": true
   },
   "files.watcherExclude": {
     "**/backend/.venv/**": true,
-    "**/frontend/.next/**": true,
-    "**/frontend/node_modules/**": true
+    "**/src/frontend/.next/**": true,
+    "**/src/frontend/node_modules/**": true
   }
 }

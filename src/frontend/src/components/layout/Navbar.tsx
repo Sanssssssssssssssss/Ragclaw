@@ -1,13 +1,29 @@
 "use client";
 
-import { Database, FileSearch, Monitor, Pencil, Plus, Sparkles, Wrench } from "lucide-react";
+import {
+  Database,
+  FileSearch,
+  MessageSquareText,
+  Monitor,
+  Pencil,
+  Plus,
+  Route,
+  Sparkles,
+  Wrench
+} from "lucide-react";
 
 import { useRuntimeStore, useSessionStore } from "@/lib/store";
 
 /**
- * Returns one rendered top navigation bar from no explicit inputs and exposes session, RAG, and index controls.
+ * Returns one rendered top navigation bar from no explicit inputs and exposes session, view, RAG, and index controls.
  */
-export function Navbar() {
+export function Navbar({
+  currentView,
+  onViewChange
+}: {
+  currentView: "chat" | "trace";
+  onViewChange: (view: "chat" | "trace") => void;
+}) {
   const {
     createNewSession,
     compressCurrentSession,
@@ -64,9 +80,24 @@ export function Navbar() {
               Rename
             </button>
           </div>
-          <p className="mt-1 text-sm text-[var(--color-ink-soft)]">
-            Local knowledge cockpit with live retrieval and file context.
-          </p>
+          <div className="mt-2 flex flex-wrap items-center gap-2">
+            <button
+              className={currentView === "chat" ? "ui-button ui-button-primary" : "ui-button"}
+              onClick={() => onViewChange("chat")}
+              type="button"
+            >
+              <MessageSquareText size={16} />
+              Chat
+            </button>
+            <button
+              className={currentView === "trace" ? "ui-button ui-button-primary" : "ui-button"}
+              onClick={() => onViewChange("trace")}
+              type="button"
+            >
+              <Route size={16} />
+              Trace
+            </button>
+          </div>
         </div>
       </div>
 
@@ -98,7 +129,9 @@ export function Navbar() {
           </div>
           <button
             className={
-              executionPlatform === "windows" ? "ui-button ui-button-primary px-3 py-1.5" : "ui-button border-transparent px-3 py-1.5"
+              executionPlatform === "windows"
+                ? "ui-button ui-button-primary px-3 py-1.5"
+                : "ui-button border-transparent px-3 py-1.5"
             }
             onClick={() => void updateExecutionPlatform("windows")}
             type="button"
@@ -107,7 +140,9 @@ export function Navbar() {
           </button>
           <button
             className={
-              executionPlatform === "linux" ? "ui-button ui-button-primary px-3 py-1.5" : "ui-button border-transparent px-3 py-1.5"
+              executionPlatform === "linux"
+                ? "ui-button ui-button-primary px-3 py-1.5"
+                : "ui-button border-transparent px-3 py-1.5"
             }
             onClick={() => void updateExecutionPlatform("linux")}
             type="button"
@@ -120,7 +155,7 @@ export function Navbar() {
           Compress
         </button>
         <button
-          className={isIndexBuilding ? "ui-button" : "ui-button"}
+          className="ui-button"
           disabled={isIndexBuilding}
           onClick={() => void rebuildKnowledgeIndex()}
           type="button"

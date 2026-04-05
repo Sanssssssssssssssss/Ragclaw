@@ -10,7 +10,7 @@ $ErrorActionPreference = "Stop"
 
 $root = Split-Path -Parent $MyInvocation.MyCommand.Path
 $backendDir = Join-Path $root "backend"
-$frontendDir = Join-Path $root "frontend"
+$frontendDir = Join-Path $root "src\\frontend"
 $backendPython = Join-Path $backendDir ".venv\\Scripts\\python.exe"
 $frontendNodeModules = Join-Path $frontendDir "node_modules"
 $backendEnvFile = Join-Path $backendDir ".env"
@@ -147,7 +147,7 @@ function Ensure-FrontendEnvironment {
     }
 
     if (-not $InstallIfMissing) {
-        throw "Missing frontend/node_modules. Run the one-time setup in LOCAL_DEV.md, or use start-dev.ps1 -InstallIfMissing."
+        throw "Missing src/frontend/node_modules. Run the one-time setup in LOCAL_DEV.md, or use start-dev.ps1 -InstallIfMissing."
     }
 
     Write-Host "[setup] Installing frontend dependencies..." -ForegroundColor Cyan

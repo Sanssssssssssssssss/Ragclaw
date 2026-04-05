@@ -53,7 +53,7 @@
 - 后续待办：T-024 评估是否保留 `SkillRetrieverAgent` 的降级策略，或在未来恢复 K2.5 的原生多轮工具调用
 ## 2026-03-26 第三次更新
 - 已完成：T-025 为前端安装 Playwright 开发依赖并补齐浏览器安装脚本
-- 已完成：T-026 新增聊天 UI 浏览器级验证脚本 `frontend/scripts/verify-chat-ui.mjs`
+- 已完成：T-026 新增聊天 UI 浏览器级验证脚本 `src/frontend/scripts/verify-chat-ui.mjs`
 - 已完成：T-027 新增 `scripts/dev/start-backend-dev.ps1`、`scripts/dev/start-frontend-dev.ps1`、`scripts/dev/run-chat-ui-verification.ps1`
 - 待继续验证：T-028 在稳定拉起前后端后，完成一次完整的 Playwright 聊天区回归验证并记录结果
 ## 2026-03-26 Fourth Update

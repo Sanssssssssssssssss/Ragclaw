@@ -4,7 +4,7 @@ $ErrorActionPreference = "Stop"
 $root = Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path))
 $backendScript = Join-Path $root "scripts\\dev\\start-backend-dev.ps1"
 $frontendScript = Join-Path $root "scripts\\dev\\start-frontend-dev.ps1"
-$frontendDir = Join-Path $root "frontend"
+$frontendDir = Join-Path $root "src\\frontend"
 
 $backend = $null
 $frontend = $null

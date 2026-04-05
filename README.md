@@ -52,7 +52,7 @@ This means benchmark scores may become more honest:
 ## Core Capabilities
 
 - FastAPI backend with SSE streaming
-- Next.js frontend workbench
+- Next.js frontend workbench under `src/frontend`
 - session persistence to local JSON
 - editable Markdown memory
 - skill files stored as readable `SKILL.md`
@@ -71,17 +71,17 @@ This means benchmark scores may become more honest:
 backend/
   api/                   FastAPI routes
   benchmarks/            modular benchmark runner, evaluators, judge hooks, cases
-  graph/                 agent logic, routing, prompts, sessions, memory handling
   knowledge/             local knowledge corpus
-  knowledge_retrieval/   ingestion, indexing, vector/BM25 retrieval, orchestration
   memory/                persistent Markdown memory
   scripts/               backend validation and maintenance scripts
   sessions/              persisted chat sessions
   skills/                local skill specs
   storage/               derived benchmark and index artifacts
-  tools/                 terminal, python, file, and related tools
-frontend/
-  src/                   UI app, state, components
+  tests/                 backend regression and integration tests
+  workspace/             local working files for tool-assisted tasks
+src/
+  backend/               backend runtime, capability, decision, knowledge, API, observability code
+  frontend/              UI app, state, components
 scripts/
   dev/                   one-shot startup and benchmark scripts
 ```
