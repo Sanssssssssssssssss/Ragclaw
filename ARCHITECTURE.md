@@ -36,7 +36,7 @@
 - 负责复现参考仓库中的最小可运行系统
 - 目标包括前端、后端、知识目录、技能目录与配置文件
 - 当前已确认的运行方式：
-  - 后端使用 `backend/.venv` + `uvicorn app:app --port 8004`
+  - 后端使用 `backend/.venv` + `uvicorn src.backend.api.app:app --port 8004`
   - 前端使用 `src/frontend` 下 `npm run dev`，默认访问 `http://127.0.0.1:3000`
 
 ### 3. 检索编排模块

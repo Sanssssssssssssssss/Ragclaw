@@ -6,9 +6,9 @@
       "type": "python",
       "request": "launch",
       "module": "uvicorn",
-      "cwd": "${workspaceFolder}/backend",
+      "cwd": "${workspaceFolder}",
       "args": [
-        "app:app",
+        "src.backend.api.app:app",
         "--host",
         "127.0.0.1",
         "--port",

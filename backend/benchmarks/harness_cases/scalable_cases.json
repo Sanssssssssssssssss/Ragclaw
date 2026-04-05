@@ -28,7 +28,7 @@
       "case_id": "route_workspace_read",
       "suite": "scalable",
       "runner": "route_skill",
-      "message": "Read backend/api/chat.py and summarize it.",
+      "message": "Read src/backend/api/chat.py and summarize it.",
       "tags": ["route", "workspace", "small"],
       "difficulty": "smoke",
       "expect": {

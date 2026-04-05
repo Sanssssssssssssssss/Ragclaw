@@ -227,7 +227,7 @@ def run_ragas(rows: list[dict[str, Any]]) -> tuple[Any | None, dict[str, Any] | 
         )
         from langchain_openai import OpenAIEmbeddings
 
-        from config import get_settings
+        from src.backend.runtime.config import get_settings
         from src.backend.runtime.agent_manager import agent_manager
     except ImportError as exc:
         return None, {"enabled": False, "error": f"Missing evaluation dependency: {exc}"}

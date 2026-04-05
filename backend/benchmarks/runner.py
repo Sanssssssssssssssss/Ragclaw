@@ -12,7 +12,7 @@ from typing import Any
 
 import httpx
 
-from config import get_settings
+from src.backend.runtime.config import get_settings
 
 try:
     from .case_loader import (

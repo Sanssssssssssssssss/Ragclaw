@@ -366,9 +366,9 @@ backend/knowledge_retrieval/
 
 ### 后端
 
-- `backend/app.py`
+- `src/backend/api/app.py`
   - 初始化知识索引器和 orchestrator
-- `backend/api/chat.py`
+- `src/backend/api/chat.py`
   - 支持输出知识检索阶段事件
 - `backend/api/files.py`
   - 保存 `knowledge/` 文件后允许后续手动重建；本方案不要求保存即自动重建

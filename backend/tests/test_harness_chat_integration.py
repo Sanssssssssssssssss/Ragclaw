@@ -10,10 +10,13 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 BACKEND_DIR = Path(__file__).resolve().parents[1]
+PROJECT_ROOT = BACKEND_DIR.parent
 if str(BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(BACKEND_DIR))
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
 
-from api import chat as chat_api
+from src.backend.api import chat as chat_api
 from src.backend.observability.types import HarnessEvent
 
 

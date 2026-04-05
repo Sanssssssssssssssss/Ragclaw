@@ -246,8 +246,8 @@
 - Restored toward upstream:
   - `backend/config.py`
   - `backend/graph/agent.py`
-  - `backend/api/chat.py`
-  - `backend/app.py`
+  - `src/backend/api/chat.py`
+  - `src/backend/api/app.py`
   - `backend/knowledge_retrieval/indexer.py`
   - `backend/knowledge_retrieval/skill_retriever_agent.py`
   - `backend/tools/__init__.py`

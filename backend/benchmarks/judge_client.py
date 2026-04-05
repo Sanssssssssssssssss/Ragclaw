@@ -2,15 +2,21 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 import httpx
 
-try:
-    from ..config import get_settings
-except ImportError:  # pragma: no cover - fallback for running inside backend cwd
-    from config import get_settings
+BACKEND_DIR = Path(__file__).resolve().parents[1]
+PROJECT_ROOT = BACKEND_DIR.parent
+if str(BACKEND_DIR) not in sys.path:
+    sys.path.insert(0, str(BACKEND_DIR))
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
+from src.backend.runtime.config import get_settings
 
 
 def _extract_json_block(content: str) -> dict[str, Any]:

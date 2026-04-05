@@ -320,7 +320,7 @@ def _summarize_results(results: list[dict[str, Any]]) -> dict[str, Any]:
 
 @contextmanager
 def _serve_app() -> Iterator[str]:
-    from backend import app as backend_app
+    from src.backend.api import app as backend_app
 
     port = _find_free_port()
     config = uvicorn.Config(backend_app.app, host="127.0.0.1", port=port, log_level="warning")
@@ -523,7 +523,7 @@ async def run_live_validation(
     started_at = datetime.now(timezone.utc).isoformat()
     with tempfile.TemporaryDirectory(prefix="harness-live-runs-") as temp_runs_dir, ExitStack() as stack:
         runtime = build_harness_runtime(Path(temp_runs_dir))
-        from backend import app as backend_app
+        from src.backend.api import app as backend_app
 
         original_resolve_routing = agent_manager.resolve_routing
 
