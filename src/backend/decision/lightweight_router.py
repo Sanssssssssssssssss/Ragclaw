@@ -47,6 +47,8 @@ Decision hints:
 
 Tool guide:
 - read_file: known file content only.
+- mcp_filesystem_read_file: read one known local file through the read-only Filesystem MCP path.
+- mcp_filesystem_list_directory: list one known local directory through the read-only Filesystem MCP path.
 - terminal: search/list workspace files or run workspace commands.
 - python_repl: structured computation, parsing, transforms, or code execution.
 - fetch_url: live web pages, links, docs, and weather.
@@ -72,6 +74,12 @@ WORKSPACE_PATH_PATTERNS = (
 READ_FILE_PATTERNS = (
     re.compile(r"\b(read|open|show|view)\b", re.IGNORECASE),
     re.compile(r"(读取|打开|查看|看看|显示|看下|看一眼)"),
+)
+
+MCP_FILESYSTEM_PATTERNS = (
+    re.compile(r"\bfilesystem mcp\b", re.IGNORECASE),
+    re.compile(r"\bmcp filesystem\b", re.IGNORECASE),
+    re.compile(r"\bmcp\b.{0,20}\b(file|directory|folder|path|workspace)\b", re.IGNORECASE),
 )
 
 SEARCH_FILE_PATTERNS = (
@@ -195,6 +203,16 @@ def _normalize_allowed_tools(tools: list[str] | tuple[str, ...], allowed_tool_na
 
 
 def _intent_tools(intent: str, subtype: str, message: str, allowed_tool_names: set[str]) -> tuple[str, ...]:
+    if any(pattern.search(str(message or "")) for pattern in MCP_FILESYSTEM_PATTERNS):
+        if intent == "workspace_file_ops":
+            preferred = (
+                ("mcp_filesystem_read_file",)
+                if subtype == "read_existing_file"
+                else ("mcp_filesystem_list_directory",)
+            )
+            selected = tuple(tool for tool in preferred if tool in allowed_tool_names)
+            if selected:
+                return selected
     if intent in {"direct_answer", "knowledge_qa"}:
         return ()
     if intent == "web_lookup":

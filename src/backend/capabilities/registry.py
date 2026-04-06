@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Iterable
 
+from src.backend.capabilities.mcp_registry import is_mcp_service_tool, mcp_spec_from_instance
 from src.backend.capabilities.types import (
     DEFAULT_ERROR_SCHEMA,
     CapabilityRetryPolicy,
@@ -218,6 +219,8 @@ class CapabilityRegistry:
 
 def _tool_spec_from_instance(tool: Any) -> CapabilitySpec:
     name = str(getattr(tool, "name", "") or "").strip()
+    if is_mcp_service_tool(name):
+        return mcp_spec_from_instance(tool)
     if name not in _TOOL_METADATA:
         raise KeyError(f"missing tool capability metadata for {name}")
     metadata = dict(_TOOL_METADATA[name])

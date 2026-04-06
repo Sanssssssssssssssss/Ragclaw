@@ -95,6 +95,154 @@
         "queue": true,
         "answer_fragment": "HTTP"
       }
+    },
+    {
+      "case_id": "mcp_filesystem_read_success",
+      "suite": "integration",
+      "runner": "integration_lifecycle",
+      "scenario": "mcp_filesystem_read_success",
+      "message": "Use Filesystem MCP only, read mcp_cases/read_success.txt, and tell me the content.",
+      "session_id": "integration-mcp-read",
+      "tags": ["smoke", "mcp", "integration"],
+      "difficulty": "smoke",
+      "setup": {
+        "files": [
+          {
+            "path": "mcp_cases/read_success.txt",
+            "content": "filesystem mcp says hello"
+          }
+        ]
+      },
+      "tool_calls": [
+        {
+          "name": "mcp_filesystem_read_file",
+          "args": {
+            "path": "mcp_cases/read_success.txt"
+          }
+        }
+      ],
+      "expect": {
+        "route_intent": "workspace_file_ops",
+        "skill_name": "",
+        "retrieval": false,
+        "tool": true,
+        "failure": false,
+        "queue": false,
+        "answer_fragment": "filesystem mcp says hello"
+      }
+    },
+    {
+      "case_id": "mcp_filesystem_list_success",
+      "suite": "integration",
+      "runner": "integration_lifecycle",
+      "scenario": "mcp_filesystem_list_success",
+      "message": "Use Filesystem MCP only, list mcp_cases/list_dir, and tell me which files are there.",
+      "session_id": "integration-mcp-list",
+      "tags": ["smoke", "mcp", "integration"],
+      "difficulty": "smoke",
+      "setup": {
+        "files": [
+          {
+            "path": "mcp_cases/list_dir/alpha.txt",
+            "content": "alpha"
+          },
+          {
+            "path": "mcp_cases/list_dir/beta.md",
+            "content": "beta"
+          }
+        ]
+      },
+      "tool_calls": [
+        {
+          "name": "mcp_filesystem_list_directory",
+          "args": {
+            "path": "mcp_cases/list_dir"
+          }
+        }
+      ],
+      "expect": {
+        "route_intent": "workspace_file_ops",
+        "skill_name": "",
+        "retrieval": false,
+        "tool": true,
+        "failure": false,
+        "queue": false,
+        "answer_fragment": "alpha.txt"
+      }
+    },
+    {
+      "case_id": "mcp_filesystem_blocked_by_governance",
+      "suite": "integration",
+      "runner": "integration_lifecycle",
+      "scenario": "mcp_filesystem_blocked_by_governance",
+      "message": "Use Filesystem MCP only, read mcp_cases/repeated.txt three times, then tell me what happened.",
+      "session_id": "integration-mcp-blocked",
+      "tags": ["smoke", "mcp", "governance", "integration"],
+      "difficulty": "smoke",
+      "setup": {
+        "files": [
+          {
+            "path": "mcp_cases/repeated.txt",
+            "content": "repeat me"
+          }
+        ]
+      },
+      "tool_calls": [
+        {
+          "name": "mcp_filesystem_read_file",
+          "args": {
+            "path": "mcp_cases/repeated.txt"
+          }
+        },
+        {
+          "name": "mcp_filesystem_read_file",
+          "args": {
+            "path": "mcp_cases/repeated.txt"
+          }
+        },
+        {
+          "name": "mcp_filesystem_read_file",
+          "args": {
+            "path": "mcp_cases/repeated.txt"
+          }
+        }
+      ],
+      "expect": {
+        "route_intent": "workspace_file_ops",
+        "skill_name": "",
+        "retrieval": false,
+        "tool": true,
+        "failure": false,
+        "queue": false,
+        "answer_fragment": "repeated_call_limit"
+      }
+    },
+    {
+      "case_id": "mcp_filesystem_not_found_or_invalid_path",
+      "suite": "integration",
+      "runner": "integration_lifecycle",
+      "scenario": "mcp_filesystem_not_found_or_invalid_path",
+      "message": "Use Filesystem MCP only, read mcp_cases/missing.txt, and tell me the error.",
+      "session_id": "integration-mcp-missing",
+      "tags": ["smoke", "mcp", "error", "integration"],
+      "difficulty": "smoke",
+      "tool_calls": [
+        {
+          "name": "mcp_filesystem_read_file",
+          "args": {
+            "path": "mcp_cases/missing.txt"
+          }
+        }
+      ],
+      "expect": {
+        "route_intent": "workspace_file_ops",
+        "skill_name": "",
+        "retrieval": false,
+        "tool": true,
+        "failure": false,
+        "queue": false,
+        "answer_fragment": "file does not exist"
+      }
     }
   ]
 }

@@ -109,6 +109,23 @@ class HarnessBenchmarkRunnerTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(payload["cases"][0]["runner"], "integration_lifecycle")
             self.assertEqual(payload["cases"][0]["status"], "passed")
 
+    async def test_integration_suite_includes_mcp_filesystem_cases(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output_path = Path(temp_dir) / "integration_mcp.json"
+            payload = await run_selected_benchmark(
+                suite="integration",
+                tag="mcp",
+                output_path=output_path,
+                use_llm_judge=False,
+                use_live_llm_decisions=False,
+            )
+            case_ids = {item["case_id"] for item in payload["cases"]}
+            self.assertIn("mcp_filesystem_read_success", case_ids)
+            self.assertIn("mcp_filesystem_blocked_by_governance", case_ids)
+            blocked_case = next(item for item in payload["cases"] if item["case_id"] == "mcp_filesystem_blocked_by_governance")
+            self.assertTrue(blocked_case["capability_trace_present"])
+            self.assertTrue(blocked_case["capability_governance_visible"])
+
     async def test_scalable_suite_loader_does_not_crash(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             output_path = Path(temp_dir) / "scalable_subset.json"

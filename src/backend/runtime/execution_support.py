@@ -14,13 +14,17 @@ if TYPE_CHECKING:  # pragma: no cover
 
 
 ACTION_ONLY_PATTERNS = (
-    re.compile(r"^(?:i'll|i will|let me)\s+(?:use|call).{0,30}(?:tool|terminal|python_repl|read_file|fetch_url)", re.IGNORECASE),
+    re.compile(
+        r"^(?:i'll|i will|let me)\s+(?:use|call).{0,40}(?:tool|terminal|python_repl|read_file|fetch_url|mcp_filesystem_read_file|mcp_filesystem_list_directory|filesystem mcp)",
+        re.IGNORECASE,
+    ),
 )
 ACTION_ONLY_PREFIXES = (
     "我来使用",
     "让我使用",
     "我会使用",
     "我将使用",
+    "Let me use Filesystem MCP",
 )
 
 

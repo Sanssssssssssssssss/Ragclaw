@@ -22,6 +22,8 @@ class CapabilityRegistryTests(unittest.TestCase):
         self.assertIn("python_repl", capability_ids)
         self.assertIn("read_file", capability_ids)
         self.assertIn("fetch_url", capability_ids)
+        self.assertIn("mcp_filesystem_read_file", capability_ids)
+        self.assertIn("mcp_filesystem_list_directory", capability_ids)
         self.assertIn("skill.get_weather", capability_ids)
         self.assertIn("skill.web_search", capability_ids)
 
@@ -37,8 +39,24 @@ class CapabilityRegistryTests(unittest.TestCase):
         self.assertFalse(skill_spec.approval_required)
         self.assertIn("fetch_url", skill_spec.required_capabilities)
 
+        mcp_spec = registry.get("mcp_filesystem_read_file")
+        self.assertEqual(mcp_spec.capability_type, "mcp_service")
+        self.assertEqual(mcp_spec.risk_level, "low")
+        self.assertFalse(mcp_spec.approval_required)
+        self.assertIn("filesystem", mcp_spec.tags)
+
         wrapped_names = {getattr(tool, "name", "") for tool in tools}
-        self.assertEqual(wrapped_names, {"terminal", "python_repl", "read_file", "fetch_url"})
+        self.assertEqual(
+            wrapped_names,
+            {
+                "terminal",
+                "python_repl",
+                "read_file",
+                "fetch_url",
+                "mcp_filesystem_read_file",
+                "mcp_filesystem_list_directory",
+            },
+        )
 
 
 if __name__ == "__main__":

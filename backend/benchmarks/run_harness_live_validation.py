@@ -26,6 +26,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from benchmarks.storage_layout import harness_live_output_path
+from src.backend.capabilities import build_tools_and_registry
 from src.backend.decision.execution_strategy import ExecutionStrategy
 from src.backend.decision.lightweight_router import RoutingDecision
 from src.backend.knowledge.types import Evidence, OrchestratedRetrievalResult, RetrievalStep
@@ -58,6 +59,10 @@ class LiveValidationCase:
     companion_fail: bool = False
     tool_outputs: tuple[str, ...] = ()
     retrieval_result: dict[str, Any] | None = None
+    setup: dict[str, Any] = field(default_factory=dict)
+    tool_calls: tuple[dict[str, Any], ...] = ()
+    expect_capability: bool = False
+    expect_capability_governance: bool = False
 
 
 @dataclass
@@ -74,15 +79,20 @@ class LiveCaseResult:
     route_intent: str = ""
     expect_retrieval: bool = False
     expect_tool: bool = False
+    expect_capability: bool = False
+    expect_capability_governance: bool = False
     guard_present: bool = False
     queued: bool = False
     done_present: bool = False
     error_present: bool = False
     retrieval_present: bool = False
     tool_present: bool = False
+    capability_present: bool = False
+    capability_governance_visible: bool = False
     completion_integrity: bool = False
     session_persisted: bool = False
     sse_order_ok: bool = False
+    trace_completeness: bool = False
     latency_ms: int = 0
 
     def to_dict(self) -> dict[str, Any]:
@@ -114,6 +124,10 @@ def _load_live_cases() -> tuple[LiveValidationCase, ...]:
                 companion_fail=bool(raw.get("companion_fail", False)),
                 tool_outputs=tuple(str(item) for item in raw.get("tool_outputs", [])),
                 retrieval_result=dict(raw["retrieval_result"]) if raw.get("retrieval_result") is not None else None,
+                setup=dict(raw.get("setup", {})),
+                tool_calls=tuple(dict(item) for item in raw.get("tool_calls", [])),
+                expect_capability=bool(raw.get("expect_capability", False)),
+                expect_capability_governance=bool(raw.get("expect_capability_governance", False)),
             )
         )
     return tuple(cases)
@@ -176,10 +190,47 @@ class _LiveValidationToolMessage:
 
 
 class _LiveValidationToolAgent:
-    def __init__(self, case: LiveValidationCase) -> None:
+    def __init__(self, case: LiveValidationCase, tools_by_name: dict[str, Any] | None = None) -> None:
         self._case = case
+        self._tools_by_name = dict(tools_by_name or {})
 
     async def astream(self, _inputs, stream_mode=None):
+        if self._case.tool_calls:
+            for index, tool_call in enumerate(self._case.tool_calls, start=1):
+                call_id = f"{self._case.case_id}-tool-{index}"
+                tool_name = str(tool_call.get("name", "terminal") or "terminal")
+                tool_args = dict(tool_call.get("args", {}) or {})
+                yield (
+                    "updates",
+                    {
+                        "tool_node": {
+                            "messages": [
+                                _LiveValidationToolMessage(
+                                    message_type="ai",
+                                    tool_calls=[{"id": call_id, "name": tool_name, "args": tool_args}],
+                                )
+                            ]
+                        }
+                    },
+                )
+                tool = self._tools_by_name[tool_name]
+                output = await tool.ainvoke(tool_args)
+                yield (
+                    "updates",
+                    {
+                        "tool_node": {
+                            "messages": [
+                                _LiveValidationToolMessage(
+                                    message_type="tool",
+                                    tool_call_id=call_id,
+                                    name=tool_name,
+                                    content=str(output or ""),
+                                )
+                            ]
+                        }
+                    },
+                )
+            return
         tool_outputs = list(self._case.tool_outputs or ())
         if not tool_outputs:
             return
@@ -297,13 +348,30 @@ class _LiveValidationSupport(HarnessExecutionSupport):
         yield {"type": "orchestrated_result", "result": _dict_to_retrieval_result(case.retrieval_result)}
 
     def build_tool_agent(self, *, extra_instructions=None, tools_override=None):
-        return _LiveValidationToolAgent(self.active_case())
+        tools = list(tools_override or agent_manager.tools)
+        return _LiveValidationToolAgent(
+            self.active_case(),
+            tools_by_name={str(getattr(tool, "name", "") or ""): tool for tool in tools},
+        )
+
+
+def _materialize_case_setup(root: Path, setup: dict[str, Any]) -> None:
+    for raw_directory in setup.get("directories", []) or []:
+        directory_path = root / str(raw_directory.get("path", "") or "")
+        directory_path.mkdir(parents=True, exist_ok=True)
+
+    for raw_file in setup.get("files", []) or []:
+        file_path = root / str(raw_file.get("path", "") or "")
+        file_path.parent.mkdir(parents=True, exist_ok=True)
+        file_path.write_text(str(raw_file.get("content", "") or ""), encoding="utf-8")
 
 
 def _summarize_results(results: list[dict[str, Any]]) -> dict[str, Any]:
     total = len(results)
     passed = sum(1 for item in results if item.get("status") == "passed")
     queue_cases = [item for item in results if item.get("scenario") == "queue"]
+    capability_cases = [item for item in results if item.get("expect_capability") is True]
+    governance_cases = [item for item in results if item.get("expect_capability_governance") is True]
     return {
         "total_cases": total,
         "passed_cases": passed,
@@ -315,6 +383,9 @@ def _summarize_results(results: list[dict[str, Any]]) -> dict[str, Any]:
         "completion_integrity": round(sum(1 for item in results if item.get("completion_integrity")) / max(1, total), 4) if total else None,
         "session_persistence_integrity": round(sum(1 for item in results if item.get("session_persisted")) / max(1, total), 4) if total else None,
         "sse_order_integrity": round(sum(1 for item in results if item.get("sse_order_ok")) / max(1, total), 4) if total else None,
+        "capability_trace_presence": round(sum(1 for item in capability_cases if item.get("capability_present")) / len(capability_cases), 4) if capability_cases else None,
+        "capability_governance_visibility": round(sum(1 for item in governance_cases if item.get("capability_governance_visible")) / len(governance_cases), 4) if governance_cases else None,
+        "trace_completeness": round(sum(1 for item in results if item.get("trace_completeness")) / max(1, total), 4) if total else None,
     }
 
 
@@ -450,6 +521,19 @@ def _result_from_trace(
     if not sse_order_ok:
         failure_reason.append("sse_order_invalid")
 
+    capability_present = (
+        "capability.started" in trace_events
+        and any(name in trace_events for name in ("capability.completed", "capability.failed", "capability.blocked"))
+    )
+    capability_governance_visible = any(name in trace_events for name in ("capability.retry", "capability.blocked", "capability.failed")) or any(
+        str(item.get("name", "")) in {"run.completed", "run.failed"} and "capability_governance" in dict(item.get("payload", {}))
+        for item in trace.get("events", [])
+    )
+    if case.expect_capability and not capability_present:
+        failure_reason.append("missing_capability_trace")
+    if case.expect_capability_governance and not capability_governance_visible:
+        failure_reason.append("missing_capability_governance")
+
     return LiveCaseResult(
         case_id=case.case_id,
         scenario=case.scenario,
@@ -463,15 +547,20 @@ def _result_from_trace(
         route_intent=str(route_event.get("payload", {}).get("intent", "") or ""),
         expect_retrieval=case.expect_retrieval,
         expect_tool=case.expect_tool,
+        expect_capability=case.expect_capability,
+        expect_capability_governance=case.expect_capability_governance,
         guard_present="guard.failed" in trace_events,
         queued={"run.queued", "run.dequeued"}.issubset(set(names)),
         done_present="done" in names,
         error_present="error" in names,
         retrieval_present="retrieval.completed" in trace_events,
         tool_present={"tool.started", "tool.completed"}.issubset(set(trace_events)),
+        capability_present=capability_present,
+        capability_governance_visible=capability_governance_visible,
         completion_integrity=completion_integrity,
         session_persisted=session_persisted,
         sse_order_ok=sse_order_ok,
+        trace_completeness=not failure_reason,
         latency_ms=latency_ms,
     )
 
@@ -521,9 +610,13 @@ async def run_live_validation(
 
     support = _LiveValidationSupport(cases)
     started_at = datetime.now(timezone.utc).isoformat()
-    with tempfile.TemporaryDirectory(prefix="harness-live-runs-") as temp_runs_dir, ExitStack() as stack:
+    with tempfile.TemporaryDirectory(prefix="harness-live-runs-") as temp_runs_dir, tempfile.TemporaryDirectory(prefix="harness-live-mcp-") as temp_tools_dir, ExitStack() as stack:
         runtime = build_harness_runtime(Path(temp_runs_dir))
         from src.backend.api import app as backend_app
+        mcp_root = Path(temp_tools_dir)
+        for case in cases:
+            _materialize_case_setup(mcp_root, case.setup)
+        mcp_tools, mcp_registry = build_tools_and_registry(mcp_root)
 
         original_resolve_routing = agent_manager.resolve_routing
 
@@ -544,6 +637,26 @@ async def run_live_validation(
                         subtype="",
                     ),
                 )
+            if case.scenario.startswith("mcp_filesystem_"):
+                allowed_tool = tuple(
+                    str(item.get("name", "") or "")
+                    for item in case.tool_calls[:1]
+                    if str(item.get("name", "") or "").strip()
+                ) or ("mcp_filesystem_read_file",)
+                subtype = "read_existing_file" if allowed_tool[0] == "mcp_filesystem_read_file" else "search_workspace_file"
+                return (
+                    ExecutionStrategy(allow_tools=True, allow_knowledge=False, allow_retrieval=False),
+                    RoutingDecision(
+                        intent="workspace_file_ops",
+                        needs_tools=True,
+                        needs_retrieval=False,
+                        allowed_tools=allowed_tool,
+                        confidence=1.0,
+                        reason_short=case.scenario,
+                        source="live_validation",
+                        subtype=subtype,
+                    ),
+                )
             return await original_resolve_routing(message, history)
 
         stack.enter_context(patch.object(backend_app, "refresh_snapshot", lambda *_args, **_kwargs: None))
@@ -552,6 +665,8 @@ async def run_live_validation(
         stack.enter_context(patch.object(agent_manager, "get_harness_runtime", return_value=runtime))
         stack.enter_context(patch.object(agent_manager, "resolve_routing", side_effect=_resolve_with_tracking))
         stack.enter_context(patch.object(agent_manager, "create_execution_support", return_value=support))
+        stack.enter_context(patch.object(agent_manager, "tools", mcp_tools))
+        stack.enter_context(patch.object(agent_manager, "_capability_registry", mcp_registry))
         stack.enter_context(patch("src.backend.runtime.executors.memory_indexer.retrieve", return_value=[]))
         stack.enter_context(patch("src.backend.runtime.executors.knowledge_orchestrator.astream", side_effect=support.knowledge_astream))
 

@@ -11,6 +11,7 @@ from types import SimpleNamespace
 from typing import Any, Literal
 from unittest.mock import patch
 
+from src.backend.capabilities import build_tools_and_registry
 from src.backend.capabilities.registry import build_capability_registry
 from src.backend.decision.execution_strategy import ExecutionStrategy
 from src.backend.decision.lightweight_router import RoutingDecision
@@ -59,6 +60,8 @@ class BenchmarkCase:
     answer: str = ""
     expect: dict[str, Any] = field(default_factory=dict)
     retrieval_result: dict[str, Any] | None = None
+    setup: dict[str, Any] = field(default_factory=dict)
+    tool_calls: tuple[dict[str, Any], ...] = ()
 
 
 def _load_cases_from_file(path: Path) -> list[BenchmarkCase]:
@@ -79,6 +82,8 @@ def _load_cases_from_file(path: Path) -> list[BenchmarkCase]:
                 answer=str(raw.get("answer", "")),
                 expect=dict(raw.get("expect", {})),
                 retrieval_result=dict(raw["retrieval_result"]) if raw.get("retrieval_result") is not None else None,
+                setup=dict(raw.get("setup", {})),
+                tool_calls=tuple(dict(item) for item in raw.get("tool_calls", [])),
             )
         )
     return loaded
@@ -270,11 +275,56 @@ class _BenchmarkToolMessage:
 
 
 class _BenchmarkToolAgent:
-    def __init__(self, case_id: str, tool_outputs: list[str] | None = None) -> None:
+    def __init__(
+        self,
+        case_id: str,
+        tool_outputs: list[str] | None = None,
+        *,
+        tool_calls: list[dict[str, Any]] | None = None,
+        tools_by_name: dict[str, Any] | None = None,
+    ) -> None:
         self._case_id = case_id
         self._tool_outputs = list(tool_outputs or ["a.txt\nb.txt"])
+        self._tool_calls = [dict(item) for item in (tool_calls or [])]
+        self._tools_by_name = dict(tools_by_name or {})
 
     async def astream(self, _inputs, stream_mode=None):
+        if self._tool_calls:
+            for index, tool_call in enumerate(self._tool_calls, start=1):
+                call_id = f"{self._case_id}-tool-{index}"
+                tool_name = str(tool_call.get("name", "terminal") or "terminal")
+                tool_args = dict(tool_call.get("args", {}) or {})
+                yield (
+                    "updates",
+                    {
+                        "tool_node": {
+                            "messages": [
+                                _BenchmarkToolMessage(
+                                    message_type="ai",
+                                    tool_calls=[{"id": call_id, "name": tool_name, "args": tool_args}],
+                                )
+                            ]
+                        }
+                    },
+                )
+                tool = self._tools_by_name[tool_name]
+                output = await tool.ainvoke(tool_args)
+                yield (
+                    "updates",
+                    {
+                        "tool_node": {
+                            "messages": [
+                                _BenchmarkToolMessage(
+                                    message_type="tool",
+                                    content=str(output or ""),
+                                    tool_call_id=call_id,
+                                    name=tool_name,
+                                )
+                            ]
+                        }
+                    },
+                )
+            return
         for index, output in enumerate(self._tool_outputs, start=1):
             call_id = f"{self._case_id}-tool-{index}"
             yield (
@@ -445,12 +495,12 @@ class IntegrationBenchmarkSupport(HarnessExecutionSupport):
             raise RuntimeError(f"{spec.case_id} failed")
         if spec.expect.get("model_answer"):
             final_text = str(spec.expect.get("model_answer"))
+        elif extra_instructions and any("tool calls already succeeded" in item.lower() for item in extra_instructions):
+            final_text = str(spec.expect.get("answer_fragment", "") or spec.case_id)
         elif spec.scenario == "knowledge_qa":
             final_text = "knowledge_case answer"
         elif spec.scenario == "guarded_knowledge":
             final_text = "Revenue was 100 billion based on page 7."
-        elif spec.scenario == "tool_path" and extra_instructions and any("tool calls already succeeded" in item.lower() for item in extra_instructions):
-            final_text = "Found files: a.txt and b.txt."
         elif spec.case_id == "integration_queue_holder":
             final_text = "Queue holder answer."
         else:
@@ -501,7 +551,24 @@ class IntegrationBenchmarkSupport(HarnessExecutionSupport):
         spec = self.active_case
         tool_outputs = list((spec.expect.get("tool_outputs", ["a.txt\nb.txt"]) if spec is not None else ["a.txt\nb.txt"]))
         case_id = spec.case_id if spec is not None else "integration_tool"
-        return _BenchmarkToolAgent(case_id, tool_outputs=tool_outputs)
+        tools = list(tools_override or self._agent.tools)
+        return _BenchmarkToolAgent(
+            case_id,
+            tool_outputs=tool_outputs,
+            tool_calls=list(spec.tool_calls if spec is not None else ()),
+            tools_by_name={str(getattr(tool, "name", "") or ""): tool for tool in tools},
+        )
+
+
+def _materialize_case_setup(root: Path, setup: dict[str, Any]) -> None:
+    for raw_directory in setup.get("directories", []) or []:
+        directory_path = root / str(raw_directory.get("path", "") or "")
+        directory_path.mkdir(parents=True, exist_ok=True)
+
+    for raw_file in setup.get("files", []) or []:
+        file_path = root / str(raw_file.get("path", "") or "")
+        file_path.parent.mkdir(parents=True, exist_ok=True)
+        file_path.write_text(str(raw_file.get("content", "") or ""), encoding="utf-8")
 
 
 def _lifecycle_case_result(case: BenchmarkCase, trace: dict[str, Any], elapsed_ms: int) -> dict[str, Any]:
@@ -727,16 +794,12 @@ async def _run_integration_lifecycle_cases(
             )
         )
         manager = AgentManager()
-        manager.base_dir = Path(__file__).resolve().parents[1]
-        manager.tools = [
-            SimpleNamespace(name="fetch_url"),
-            SimpleNamespace(name="read_file"),
-            SimpleNamespace(name="terminal"),
-            SimpleNamespace(name="python_repl"),
-        ]
-        manager._capability_registry = build_capability_registry(manager.tools)  # noqa: SLF001
+        manager.base_dir = root
+        manager.tools, manager._capability_registry = build_tools_and_registry(root)  # noqa: SLF001
         support = IntegrationBenchmarkSupport(manager, case_specs)
         manager.create_execution_support = lambda: support  # type: ignore[method-assign]
+        for case in cases:
+            _materialize_case_setup(root, case.setup)
         if not use_live_llm_decisions:
             async def _resolve_case_routing(message: str, history: list[dict[str, Any]]):
                 spec = support.spec_for_message(message)
@@ -766,6 +829,26 @@ async def _run_integration_lifecycle_cases(
                             reason_short=spec.scenario,
                             source="benchmark",
                             subtype="search_workspace_file",
+                        ),
+                    )
+                if spec.scenario.startswith("mcp_filesystem_"):
+                    allowed_tool = tuple(
+                        str(item.get("name", "") or "")
+                        for item in spec.tool_calls[:1]
+                        if str(item.get("name", "") or "").strip()
+                    ) or ("mcp_filesystem_read_file",)
+                    subtype = "read_existing_file" if allowed_tool[0] == "mcp_filesystem_read_file" else "search_workspace_file"
+                    return (
+                        ExecutionStrategy(allow_tools=True, allow_knowledge=False, allow_retrieval=False),
+                        RoutingDecision(
+                            intent="workspace_file_ops",
+                            needs_tools=True,
+                            needs_retrieval=False,
+                            allowed_tools=allowed_tool,
+                            confidence=1.0,
+                            reason_short=spec.scenario,
+                            source="benchmark",
+                            subtype=subtype,
                         ),
                     )
                 return (
@@ -836,6 +919,8 @@ async def _run_route_skill_cases(
         SimpleNamespace(name="read_file"),
         SimpleNamespace(name="terminal"),
         SimpleNamespace(name="python_repl"),
+        SimpleNamespace(name="mcp_filesystem_read_file"),
+        SimpleNamespace(name="mcp_filesystem_list_directory"),
     ]
     manager._capability_registry = build_capability_registry(manager.tools)  # noqa: SLF001
     if not use_live_llm_decisions:

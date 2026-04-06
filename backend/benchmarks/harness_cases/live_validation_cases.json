@@ -124,6 +124,73 @@
         ]
       },
       "tags": ["hard", "adversarial", "knowledge"]
+    },
+    {
+      "case_id": "live_mcp_filesystem_read",
+      "scenario": "mcp_filesystem_read_success",
+      "message": "Use Filesystem MCP only, read live_mcp/read_me.txt, and answer with its content.",
+      "expect_route": "workspace_file_ops",
+      "expect_tool": true,
+      "expect_capability": true,
+      "expect_final_contains": ["live filesystem mcp hello"],
+      "model_answer": "live filesystem mcp hello",
+      "setup": {
+        "files": [
+          {
+            "path": "live_mcp/read_me.txt",
+            "content": "live filesystem mcp hello"
+          }
+        ]
+      },
+      "tool_calls": [
+        {
+          "name": "mcp_filesystem_read_file",
+          "args": {
+            "path": "live_mcp/read_me.txt"
+          }
+        }
+      ],
+      "tags": ["smoke", "mcp", "tool"]
+    },
+    {
+      "case_id": "live_mcp_filesystem_blocked",
+      "scenario": "mcp_filesystem_blocked_by_governance",
+      "message": "Use Filesystem MCP only, read live_mcp/repeat.txt three times, then tell me what happened.",
+      "expect_route": "workspace_file_ops",
+      "expect_tool": true,
+      "expect_capability": true,
+      "expect_capability_governance": true,
+      "expect_final_contains": ["repeated_call_limit"],
+      "model_answer": "mcp_filesystem_read_file exceeded its repeated_call_limit for this run.",
+      "setup": {
+        "files": [
+          {
+            "path": "live_mcp/repeat.txt",
+            "content": "repeat me"
+          }
+        ]
+      },
+      "tool_calls": [
+        {
+          "name": "mcp_filesystem_read_file",
+          "args": {
+            "path": "live_mcp/repeat.txt"
+          }
+        },
+        {
+          "name": "mcp_filesystem_read_file",
+          "args": {
+            "path": "live_mcp/repeat.txt"
+          }
+        },
+        {
+          "name": "mcp_filesystem_read_file",
+          "args": {
+            "path": "live_mcp/repeat.txt"
+          }
+        }
+      ],
+      "tags": ["smoke", "mcp", "governance"]
     }
   ]
 }
