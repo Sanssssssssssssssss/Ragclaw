@@ -5,7 +5,10 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Mapping, Protocol
 
-from benchmarks.judge_client import JudgeClient, load_judge_client
+try:
+    from backend.benchmarks.judge_client import JudgeClient, load_judge_client
+except ModuleNotFoundError:  # pragma: no cover - compatibility for legacy benchmark entrypoints
+    from benchmarks.judge_client import JudgeClient, load_judge_client
 
 from src.backend.observability.types import GuardResult
 
