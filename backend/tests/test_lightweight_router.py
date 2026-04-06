@@ -61,6 +61,23 @@ class LightweightRouterTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(decision.subtype, "search_workspace_file")
         self.assertEqual(decision.allowed_tools, ("terminal",))
 
+    def test_explicit_filesystem_mcp_read_routes_without_llm(self) -> None:
+        strategy = parse_execution_strategy(
+            "Use Filesystem MCP only, read mcp_manual/read_me.txt, and tell me the exact content."
+        )
+        decision = deterministic_route(
+            message="Use Filesystem MCP only, read mcp_manual/read_me.txt, and tell me the exact content.",
+            strategy=strategy,
+            tool_names=("fetch_url", "python_repl", "read_file", "terminal", "mcp_filesystem_read_file", "mcp_filesystem_list_directory"),
+            is_knowledge_query=False,
+            prefer_tool_agent=True,
+        )
+        self.assertIsNotNone(decision)
+        self.assertEqual(decision.intent, "workspace_file_ops")
+        self.assertEqual(decision.subtype, "read_existing_file")
+        self.assertEqual(decision.allowed_tools, ("mcp_filesystem_read_file",))
+        self.assertEqual(decision.source, "rules")
+
     def test_file_backed_calculation_prefers_python_only(self) -> None:
         strategy = parse_execution_strategy("Count how many rows are in knowledge/E-commerce Data/sales_orders.xlsx.")
         decision = deterministic_route(
@@ -109,6 +126,17 @@ class LightweightRouterTests(unittest.IsolatedAsyncioTestCase):
         mocked_route.assert_not_awaited()
         self.assertEqual(decision.intent, "direct_answer")
         self.assertEqual(decision.allowed_tools, ())
+
+    async def test_resolve_routing_skips_llm_for_explicit_filesystem_mcp(self) -> None:
+        with patch.object(self.manager._lightweight_router, "route", new_callable=AsyncMock) as mocked_route:
+            _strategy, decision = await self.manager.resolve_routing(
+                "Use Filesystem MCP only, read mcp_manual/read_me.txt, and tell me the exact content.",
+                [],
+            )
+        mocked_route.assert_not_awaited()
+        self.assertEqual(decision.intent, "workspace_file_ops")
+        self.assertEqual(decision.allowed_tools, ("mcp_filesystem_read_file",))
+        self.assertEqual(decision.source, "rules")
 
     async def test_resolve_routing_uses_llm_for_ambiguous_message(self) -> None:
         mocked_decision = RoutingDecision(

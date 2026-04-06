@@ -367,6 +367,25 @@ def deterministic_route(
             subtype=subtype,
         )
 
+    if strategy.allow_tools and any(pattern.search(normalized) for pattern in MCP_FILESYSTEM_PATTERNS):
+        subtype = "search_workspace_file"
+        if any(pattern.search(normalized) for pattern in READ_FILE_PATTERNS):
+            subtype = "read_existing_file"
+        elif any(pattern.search(normalized) for pattern in SEARCH_FILE_PATTERNS):
+            subtype = "search_workspace_file"
+        allowed_tools = _intent_tools("workspace_file_ops", subtype, normalized, allowed_tool_names)
+        if allowed_tools:
+            return RoutingDecision(
+                intent="workspace_file_ops",
+                needs_tools=True,
+                needs_retrieval=False,
+                allowed_tools=allowed_tools,
+                confidence=0.95,
+                reason_short="explicit filesystem mcp request",
+                source="rules",
+                subtype=subtype,
+            )
+
     if strategy.allow_tools and _is_workspace_request(normalized) and _has_explicit_workspace_anchor(normalized):
         subtype = _workspace_subtype(normalized)
         if (
