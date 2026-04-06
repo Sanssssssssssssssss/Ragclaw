@@ -5,12 +5,19 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Iterable
 
-from src.backend.capabilities.mcp_registry import is_mcp_service_tool, mcp_spec_from_instance
+from src.backend.capabilities.mcp_registry import (
+    is_mcp_service_tool as is_filesystem_mcp_service_tool,
+    mcp_spec_from_instance as filesystem_mcp_spec_from_instance,
+)
 from src.backend.capabilities.types import (
     DEFAULT_ERROR_SCHEMA,
     CapabilityRetryPolicy,
     CapabilitySpec,
     schema_for_model,
+)
+from src.backend.capabilities.web_mcp_registry import (
+    is_web_mcp_service_tool,
+    web_mcp_spec_from_instance,
 )
 
 
@@ -219,8 +226,10 @@ class CapabilityRegistry:
 
 def _tool_spec_from_instance(tool: Any) -> CapabilitySpec:
     name = str(getattr(tool, "name", "") or "").strip()
-    if is_mcp_service_tool(name):
-        return mcp_spec_from_instance(tool)
+    if is_filesystem_mcp_service_tool(name):
+        return filesystem_mcp_spec_from_instance(tool)
+    if is_web_mcp_service_tool(name):
+        return web_mcp_spec_from_instance(tool)
     if name not in _TOOL_METADATA:
         raise KeyError(f"missing tool capability metadata for {name}")
     metadata = dict(_TOOL_METADATA[name])

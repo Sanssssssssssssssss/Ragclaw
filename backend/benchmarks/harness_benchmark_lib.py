@@ -4,13 +4,15 @@ import asyncio
 import json
 import tempfile
 import time
-from dataclasses import dataclass, field
+from contextlib import ExitStack
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Literal
 from unittest.mock import patch
 
+from benchmarks.local_http_fixture import serve_local_http_routes, substitute_web_base_url
 from src.backend.capabilities import build_tools_and_registry
 from src.backend.capabilities.registry import build_capability_registry
 from src.backend.decision.execution_strategy import ExecutionStrategy
@@ -571,6 +573,26 @@ def _materialize_case_setup(root: Path, setup: dict[str, Any]) -> None:
         file_path.write_text(str(raw_file.get("content", "") or ""), encoding="utf-8")
 
 
+def _collect_http_routes(cases: list[BenchmarkCase]) -> list[dict[str, Any]]:
+    routes: list[dict[str, Any]] = []
+    for case in cases:
+        for route in case.setup.get("http_routes", []) or []:
+            routes.append(dict(route))
+    return routes
+
+
+def _with_web_base_url(case: BenchmarkCase, base_url: str) -> BenchmarkCase:
+    return replace(
+        case,
+        message=str(substitute_web_base_url(case.message, base_url)),
+        answer=str(substitute_web_base_url(case.answer, base_url)),
+        expect=dict(substitute_web_base_url(case.expect, base_url)),
+        retrieval_result=dict(substitute_web_base_url(case.retrieval_result, base_url)) if case.retrieval_result is not None else None,
+        setup=dict(substitute_web_base_url(case.setup, base_url)),
+        tool_calls=tuple(dict(item) for item in substitute_web_base_url(list(case.tool_calls), base_url)),
+    )
+
+
 def _lifecycle_case_result(case: BenchmarkCase, trace: dict[str, Any], elapsed_ms: int) -> dict[str, Any]:
     event_names = _trace_event_names(trace)
     outcome = trace.get("outcome") or {}
@@ -783,10 +805,16 @@ async def _run_integration_lifecycle_cases(
     *,
     use_live_llm_decisions: bool = True,
 ) -> list[dict[str, Any]]:
-    case_specs = {case.message: case for case in cases}
     support: IntegrationBenchmarkSupport | None = None
-    with tempfile.TemporaryDirectory() as temp_dir:
+    with tempfile.TemporaryDirectory() as temp_dir, ExitStack() as stack:
         root = Path(temp_dir)
+        for case in cases:
+            _materialize_case_setup(root, case.setup)
+        http_routes = _collect_http_routes(cases)
+        if http_routes:
+            base_url = stack.enter_context(serve_local_http_routes(http_routes))
+            cases = [_with_web_base_url(case, base_url) for case in cases]
+        case_specs = {case.message: case for case in cases}
         runtime = HarnessRuntime(
             RuntimeDependencies(
                 trace_store=RunTraceStore(root / "runs"),
@@ -798,8 +826,6 @@ async def _run_integration_lifecycle_cases(
         manager.tools, manager._capability_registry = build_tools_and_registry(root)  # noqa: SLF001
         support = IntegrationBenchmarkSupport(manager, case_specs)
         manager.create_execution_support = lambda: support  # type: ignore[method-assign]
-        for case in cases:
-            _materialize_case_setup(root, case.setup)
         if not use_live_llm_decisions:
             async def _resolve_case_routing(message: str, history: list[dict[str, Any]]):
                 spec = support.spec_for_message(message)
@@ -849,6 +875,25 @@ async def _run_integration_lifecycle_cases(
                             reason_short=spec.scenario,
                             source="benchmark",
                             subtype=subtype,
+                        ),
+                    )
+                if spec.scenario.startswith("mcp_web_"):
+                    allowed_tool = tuple(
+                        str(item.get("name", "") or "")
+                        for item in spec.tool_calls[:1]
+                        if str(item.get("name", "") or "").strip()
+                    ) or ("mcp_web_fetch_url",)
+                    return (
+                        ExecutionStrategy(allow_tools=True, allow_knowledge=False, allow_retrieval=False),
+                        RoutingDecision(
+                            intent="web_lookup",
+                            needs_tools=True,
+                            needs_retrieval=False,
+                            allowed_tools=allowed_tool,
+                            confidence=1.0,
+                            reason_short=spec.scenario,
+                            source="benchmark",
+                            subtype="",
                         ),
                     )
                 return (
@@ -921,6 +966,7 @@ async def _run_route_skill_cases(
         SimpleNamespace(name="python_repl"),
         SimpleNamespace(name="mcp_filesystem_read_file"),
         SimpleNamespace(name="mcp_filesystem_list_directory"),
+        SimpleNamespace(name="mcp_web_fetch_url"),
     ]
     manager._capability_registry = build_capability_registry(manager.tools)  # noqa: SLF001
     if not use_live_llm_decisions:

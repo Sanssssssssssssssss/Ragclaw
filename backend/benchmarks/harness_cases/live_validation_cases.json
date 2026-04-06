@@ -191,6 +191,34 @@
         }
       ],
       "tags": ["smoke", "mcp", "governance"]
+    },
+    {
+      "case_id": "live_mcp_web_fetch",
+      "scenario": "mcp_web_fetch_success",
+      "message": "Use Web MCP only, fetch {{web_base_url}}/live/doc, and answer with the page text.",
+      "expect_route": "web_lookup",
+      "expect_tool": true,
+      "expect_capability": true,
+      "expect_final_contains": ["live web mcp hello"],
+      "model_answer": "live web mcp hello",
+      "setup": {
+        "http_routes": [
+          {
+            "path": "/live/doc",
+            "content_type": "text/plain; charset=utf-8",
+            "body": "live web mcp hello"
+          }
+        ]
+      },
+      "tool_calls": [
+        {
+          "name": "mcp_web_fetch_url",
+          "args": {
+            "url": "{{web_base_url}}/live/doc"
+          }
+        }
+      ],
+      "tags": ["smoke", "mcp", "web"]
     }
   ]
 }

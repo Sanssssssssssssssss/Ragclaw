@@ -49,6 +49,10 @@ _EXPLICIT_MCP_PATTERNS = (
     re.compile(r"\bfilesystem mcp\b", re.IGNORECASE),
     re.compile(r"\bmcp filesystem\b", re.IGNORECASE),
 )
+_EXPLICIT_WEB_MCP_PATTERNS = (
+    re.compile(r"\bweb mcp\b", re.IGNORECASE),
+    re.compile(r"\bdocument fetch mcp\b", re.IGNORECASE),
+)
 _REPEATED_MCP_PATTERNS = (
     re.compile(r"\b(?:twice|three times|repeat(?:ed)?|again|\d+\s+times)\b", re.IGNORECASE),
     re.compile(r"(?:两次|三次|重复|再来一次)"),
@@ -60,6 +64,11 @@ _READ_PATH_PATTERNS = (
 _LIST_PATH_PATTERNS = (
     re.compile(r"\blist\s+([A-Za-z0-9_./\\-]+)", re.IGNORECASE),
     re.compile(r"\bshow\s+([A-Za-z0-9_./\\-]+)", re.IGNORECASE),
+)
+_FETCH_URL_PATTERNS = (
+    re.compile(r"\bfetch\s+(https?://[^\s]+)", re.IGNORECASE),
+    re.compile(r"\bread\s+(https?://[^\s]+)", re.IGNORECASE),
+    re.compile(r"\bvisit\s+(https?://[^\s]+)", re.IGNORECASE),
 )
 
 
@@ -328,7 +337,7 @@ class HarnessExecutors:
         state: RunSummaryState,
     ) -> str | None:
         normalized_message = str(message or "")
-        if not any(pattern.search(normalized_message) for pattern in _EXPLICIT_MCP_PATTERNS):
+        if not any(pattern.search(normalized_message) for pattern in (*_EXPLICIT_MCP_PATTERNS, *_EXPLICIT_WEB_MCP_PATTERNS)):
             return None
         if any(pattern.search(normalized_message) for pattern in _REPEATED_MCP_PATTERNS):
             return None
@@ -340,7 +349,7 @@ class HarnessExecutors:
             return None
 
         tool_name = str(getattr(tool, "name", "") or "")
-        if tool_name not in {"mcp_filesystem_read_file", "mcp_filesystem_list_directory"}:
+        if tool_name not in {"mcp_filesystem_read_file", "mcp_filesystem_list_directory", "mcp_web_fetch_url"}:
             return None
 
         payload = self._explicit_mcp_payload(tool_name, normalized_message)
@@ -386,11 +395,17 @@ class HarnessExecutors:
         return rendered
 
     def _explicit_mcp_payload(self, tool_name: str, message: str) -> dict[str, str] | None:
-        patterns = _READ_PATH_PATTERNS if tool_name == "mcp_filesystem_read_file" else _LIST_PATH_PATTERNS
+        if tool_name == "mcp_filesystem_read_file":
+            patterns = _READ_PATH_PATTERNS
+        elif tool_name == "mcp_filesystem_list_directory":
+            patterns = _LIST_PATH_PATTERNS
+        else:
+            patterns = _FETCH_URL_PATTERNS
         for pattern in patterns:
             match = pattern.search(message)
             if match:
-                return {"path": str(match.group(1)).strip().rstrip(".,;:")}
+                key = "url" if tool_name == "mcp_web_fetch_url" else "path"
+                return {key: str(match.group(1)).strip().rstrip(".,;:")}
         return None
 
     async def _activate_skill_capability(

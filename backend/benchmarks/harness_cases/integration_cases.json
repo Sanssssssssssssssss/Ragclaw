@@ -243,6 +243,154 @@
         "queue": false,
         "answer_fragment": "file does not exist"
       }
+    },
+    {
+      "case_id": "mcp_web_fetch_success",
+      "suite": "integration",
+      "runner": "integration_lifecycle",
+      "scenario": "mcp_web_fetch_success",
+      "message": "Use Web MCP only, fetch {{web_base_url}}/docs/readme, and tell me the page text.",
+      "session_id": "integration-mcp-web-read",
+      "tags": ["smoke", "mcp", "integration", "web"],
+      "difficulty": "smoke",
+      "setup": {
+        "http_routes": [
+          {
+            "path": "/docs/readme",
+            "content_type": "text/plain; charset=utf-8",
+            "body": "web mcp says hello"
+          }
+        ]
+      },
+      "tool_calls": [
+        {
+          "name": "mcp_web_fetch_url",
+          "args": {
+            "url": "{{web_base_url}}/docs/readme"
+          }
+        }
+      ],
+      "expect": {
+        "route_intent": "web_lookup",
+        "skill_name": "",
+        "retrieval": false,
+        "tool": true,
+        "failure": false,
+        "queue": false,
+        "answer_fragment": "web mcp says hello"
+      }
+    },
+    {
+      "case_id": "mcp_web_fetch_invalid_url",
+      "suite": "integration",
+      "runner": "integration_lifecycle",
+      "scenario": "mcp_web_fetch_invalid_url",
+      "message": "Use Web MCP only, fetch ftp://bad-url, and tell me the result.",
+      "session_id": "integration-mcp-web-invalid",
+      "tags": ["smoke", "mcp", "integration", "web", "error"],
+      "difficulty": "smoke",
+      "tool_calls": [
+        {
+          "name": "mcp_web_fetch_url",
+          "args": {
+            "url": "ftp://bad-url"
+          }
+        }
+      ],
+      "expect": {
+        "route_intent": "web_lookup",
+        "skill_name": "",
+        "retrieval": false,
+        "tool": true,
+        "failure": false,
+        "queue": false,
+        "answer_fragment": "valid http or https URL"
+      }
+    },
+    {
+      "case_id": "mcp_web_fetch_timeout_or_unavailable",
+      "suite": "integration",
+      "runner": "integration_lifecycle",
+      "scenario": "mcp_web_fetch_timeout_or_unavailable",
+      "message": "Use Web MCP only, fetch {{web_base_url}}/docs/slow, and tell me the result.",
+      "session_id": "integration-mcp-web-timeout",
+      "tags": ["smoke", "mcp", "integration", "web", "error"],
+      "difficulty": "smoke",
+      "setup": {
+        "http_routes": [
+          {
+            "path": "/docs/slow",
+            "content_type": "text/plain; charset=utf-8",
+            "body": "too slow",
+            "delay_seconds": 4
+          }
+        ]
+      },
+      "tool_calls": [
+        {
+          "name": "mcp_web_fetch_url",
+          "args": {
+            "url": "{{web_base_url}}/docs/slow"
+          }
+        }
+      ],
+      "expect": {
+        "route_intent": "web_lookup",
+        "skill_name": "",
+        "retrieval": false,
+        "tool": true,
+        "failure": false,
+        "queue": false,
+        "answer_fragment": "timed out"
+      }
+    },
+    {
+      "case_id": "mcp_web_fetch_blocked_by_governance",
+      "suite": "integration",
+      "runner": "integration_lifecycle",
+      "scenario": "mcp_web_fetch_blocked_by_governance",
+      "message": "Use Web MCP only, fetch {{web_base_url}}/docs/repeat three times, then tell me what happened.",
+      "session_id": "integration-mcp-web-blocked",
+      "tags": ["smoke", "mcp", "integration", "web", "governance"],
+      "difficulty": "smoke",
+      "setup": {
+        "http_routes": [
+          {
+            "path": "/docs/repeat",
+            "content_type": "text/plain; charset=utf-8",
+            "body": "repeat web"
+          }
+        ]
+      },
+      "tool_calls": [
+        {
+          "name": "mcp_web_fetch_url",
+          "args": {
+            "url": "{{web_base_url}}/docs/repeat"
+          }
+        },
+        {
+          "name": "mcp_web_fetch_url",
+          "args": {
+            "url": "{{web_base_url}}/docs/repeat"
+          }
+        },
+        {
+          "name": "mcp_web_fetch_url",
+          "args": {
+            "url": "{{web_base_url}}/docs/repeat"
+          }
+        }
+      ],
+      "expect": {
+        "route_intent": "web_lookup",
+        "skill_name": "",
+        "retrieval": false,
+        "tool": true,
+        "failure": false,
+        "queue": false,
+        "answer_fragment": "repeated_call_limit"
+      }
     }
   ]
 }

@@ -9,7 +9,7 @@ import tempfile
 import threading
 import time
 from contextlib import ExitStack, contextmanager
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterator
@@ -26,6 +26,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from benchmarks.storage_layout import harness_live_output_path
+from benchmarks.local_http_fixture import serve_local_http_routes, substitute_web_base_url
 from src.backend.capabilities import build_tools_and_registry
 from src.backend.decision.execution_strategy import ExecutionStrategy
 from src.backend.decision.lightweight_router import RoutingDecision
@@ -366,6 +367,29 @@ def _materialize_case_setup(root: Path, setup: dict[str, Any]) -> None:
         file_path.write_text(str(raw_file.get("content", "") or ""), encoding="utf-8")
 
 
+def _collect_http_routes(cases: list[LiveValidationCase]) -> list[dict[str, Any]]:
+    routes: list[dict[str, Any]] = []
+    for case in cases:
+        for route in case.setup.get("http_routes", []) or []:
+            routes.append(dict(route))
+    return routes
+
+
+def _with_web_base_url(case: LiveValidationCase, base_url: str) -> LiveValidationCase:
+    return replace(
+        case,
+        message=str(substitute_web_base_url(case.message, base_url)),
+        companion_message=str(substitute_web_base_url(case.companion_message, base_url)),
+        model_answer=str(substitute_web_base_url(case.model_answer, base_url)),
+        companion_model_answer=str(substitute_web_base_url(case.companion_model_answer, base_url)),
+        retrieval_result=dict(substitute_web_base_url(case.retrieval_result, base_url)) if case.retrieval_result is not None else None,
+        setup=dict(substitute_web_base_url(case.setup, base_url)),
+        tool_calls=tuple(dict(item) for item in substitute_web_base_url(list(case.tool_calls), base_url)),
+        expect_final_contains=tuple(str(item) for item in substitute_web_base_url(list(case.expect_final_contains), base_url)),
+        expect_final_excludes=tuple(str(item) for item in substitute_web_base_url(list(case.expect_final_excludes), base_url)),
+    )
+
+
 def _summarize_results(results: list[dict[str, Any]]) -> dict[str, Any]:
     total = len(results)
     passed = sum(1 for item in results if item.get("status") == "passed")
@@ -608,7 +632,6 @@ async def run_live_validation(
     if not cases:
         raise ValueError("no live validation cases selected")
 
-    support = _LiveValidationSupport(cases)
     started_at = datetime.now(timezone.utc).isoformat()
     with tempfile.TemporaryDirectory(prefix="harness-live-runs-") as temp_runs_dir, tempfile.TemporaryDirectory(prefix="harness-live-mcp-") as temp_tools_dir, ExitStack() as stack:
         runtime = build_harness_runtime(Path(temp_runs_dir))
@@ -616,6 +639,11 @@ async def run_live_validation(
         mcp_root = Path(temp_tools_dir)
         for case in cases:
             _materialize_case_setup(mcp_root, case.setup)
+        http_routes = _collect_http_routes(cases)
+        if http_routes:
+            base_url = stack.enter_context(serve_local_http_routes(http_routes))
+            cases = [_with_web_base_url(case, base_url) for case in cases]
+        support = _LiveValidationSupport(cases)
         mcp_tools, mcp_registry = build_tools_and_registry(mcp_root)
 
         original_resolve_routing = agent_manager.resolve_routing
@@ -656,6 +684,25 @@ async def run_live_validation(
                         reason_short=case.scenario,
                         source="live_validation",
                         subtype=subtype,
+                    ),
+                )
+            if case.scenario.startswith("mcp_web_"):
+                allowed_tool = tuple(
+                    str(item.get("name", "") or "")
+                    for item in case.tool_calls[:1]
+                    if str(item.get("name", "") or "").strip()
+                ) or ("mcp_web_fetch_url",)
+                return (
+                    ExecutionStrategy(allow_tools=True, allow_knowledge=False, allow_retrieval=False),
+                    RoutingDecision(
+                        intent="web_lookup",
+                        needs_tools=True,
+                        needs_retrieval=False,
+                        allowed_tools=allowed_tool,
+                        confidence=1.0,
+                        reason_short=case.scenario,
+                        source="live_validation",
+                        subtype="",
                     ),
                 )
             return await original_resolve_routing(message, history)

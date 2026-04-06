@@ -49,6 +49,7 @@ Tool guide:
 - read_file: known file content only.
 - mcp_filesystem_read_file: read one known local file through the read-only Filesystem MCP path.
 - mcp_filesystem_list_directory: list one known local directory through the read-only Filesystem MCP path.
+- mcp_web_fetch_url: fetch one public URL through the read-only Web MCP path when the user explicitly asks for Web MCP.
 - terminal: search/list workspace files or run workspace commands.
 - python_repl: structured computation, parsing, transforms, or code execution.
 - fetch_url: live web pages, links, docs, and weather.
@@ -80,6 +81,12 @@ MCP_FILESYSTEM_PATTERNS = (
     re.compile(r"\bfilesystem mcp\b", re.IGNORECASE),
     re.compile(r"\bmcp filesystem\b", re.IGNORECASE),
     re.compile(r"\bmcp\b.{0,20}\b(file|directory|folder|path|workspace)\b", re.IGNORECASE),
+)
+
+MCP_WEB_PATTERNS = (
+    re.compile(r"\bweb mcp\b", re.IGNORECASE),
+    re.compile(r"\bdocument fetch mcp\b", re.IGNORECASE),
+    re.compile(r"\bmcp\b.{0,20}\b(url|web|website|webpage|document|page)\b", re.IGNORECASE),
 )
 
 SEARCH_FILE_PATTERNS = (
@@ -203,6 +210,11 @@ def _normalize_allowed_tools(tools: list[str] | tuple[str, ...], allowed_tool_na
 
 
 def _intent_tools(intent: str, subtype: str, message: str, allowed_tool_names: set[str]) -> tuple[str, ...]:
+    if any(pattern.search(str(message or "")) for pattern in MCP_WEB_PATTERNS):
+        if intent == "web_lookup":
+            selected = tuple(tool for tool in ("mcp_web_fetch_url",) if tool in allowed_tool_names)
+            if selected:
+                return selected
     if any(pattern.search(str(message or "")) for pattern in MCP_FILESYSTEM_PATTERNS):
         if intent == "workspace_file_ops":
             preferred = (
@@ -350,6 +362,9 @@ def deterministic_route(
         elif allowed_tools == ("fetch_url",):
             intent = "web_lookup"
             subtype = ""
+        elif allowed_tools == ("mcp_web_fetch_url",):
+            intent = "web_lookup"
+            subtype = ""
         elif allowed_tools == ("read_file",):
             intent = "workspace_file_ops"
             subtype = "read_existing_file"
@@ -384,6 +399,19 @@ def deterministic_route(
                 reason_short="explicit filesystem mcp request",
                 source="rules",
                 subtype=subtype,
+            )
+
+    if strategy.allow_tools and any(pattern.search(normalized) for pattern in MCP_WEB_PATTERNS):
+        allowed_tools = _intent_tools("web_lookup", "", normalized, allowed_tool_names)
+        if allowed_tools:
+            return RoutingDecision(
+                intent="web_lookup",
+                needs_tools=True,
+                needs_retrieval=False,
+                allowed_tools=allowed_tools,
+                confidence=0.95,
+                reason_short="explicit web mcp request",
+                source="rules",
             )
 
     if strategy.allow_tools and _is_workspace_request(normalized) and _has_explicit_workspace_anchor(normalized):

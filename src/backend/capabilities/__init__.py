@@ -11,6 +11,7 @@ from src.backend.capabilities.python_repl_tool import PythonReplTool
 from src.backend.capabilities.read_file_tool import ReadFileTool
 from src.backend.capabilities.registry import CapabilityRegistry, build_capability_registry
 from src.backend.capabilities.terminal_tool import TerminalTool
+from src.backend.capabilities.web_mcp_adapter import WebMcpFetchTool
 
 
 def _build_raw_tools(base_dir: Path) -> list[BaseTool]:
@@ -21,6 +22,7 @@ def _build_raw_tools(base_dir: Path) -> list[BaseTool]:
         ReadFileTool(root_dir=base_dir),
         FilesystemMcpReadTool(root_dir=base_dir, timeout_seconds=5),
         FilesystemMcpListTool(root_dir=base_dir, timeout_seconds=5),
+        WebMcpFetchTool(timeout_seconds=3),
     ]
 
 

@@ -24,6 +24,7 @@ class CapabilityRegistryTests(unittest.TestCase):
         self.assertIn("fetch_url", capability_ids)
         self.assertIn("mcp_filesystem_read_file", capability_ids)
         self.assertIn("mcp_filesystem_list_directory", capability_ids)
+        self.assertIn("mcp_web_fetch_url", capability_ids)
         self.assertIn("skill.get_weather", capability_ids)
         self.assertIn("skill.web_search", capability_ids)
 
@@ -45,6 +46,12 @@ class CapabilityRegistryTests(unittest.TestCase):
         self.assertFalse(mcp_spec.approval_required)
         self.assertIn("filesystem", mcp_spec.tags)
 
+        web_mcp_spec = registry.get("mcp_web_fetch_url")
+        self.assertEqual(web_mcp_spec.capability_type, "mcp_service")
+        self.assertEqual(web_mcp_spec.risk_level, "medium")
+        self.assertFalse(web_mcp_spec.approval_required)
+        self.assertIn("web", web_mcp_spec.tags)
+
         wrapped_names = {getattr(tool, "name", "") for tool in tools}
         self.assertEqual(
             wrapped_names,
@@ -55,6 +62,7 @@ class CapabilityRegistryTests(unittest.TestCase):
                 "fetch_url",
                 "mcp_filesystem_read_file",
                 "mcp_filesystem_list_directory",
+                "mcp_web_fetch_url",
             },
         )
 

@@ -78,6 +78,22 @@ class LightweightRouterTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(decision.allowed_tools, ("mcp_filesystem_read_file",))
         self.assertEqual(decision.source, "rules")
 
+    def test_explicit_web_mcp_fetch_routes_without_llm(self) -> None:
+        strategy = parse_execution_strategy(
+            "Use Web MCP only, fetch https://example.com/docs/readme, and tell me the page text."
+        )
+        decision = deterministic_route(
+            message="Use Web MCP only, fetch https://example.com/docs/readme, and tell me the page text.",
+            strategy=strategy,
+            tool_names=("fetch_url", "mcp_web_fetch_url", "python_repl", "read_file", "terminal"),
+            is_knowledge_query=False,
+            prefer_tool_agent=True,
+        )
+        self.assertIsNotNone(decision)
+        self.assertEqual(decision.intent, "web_lookup")
+        self.assertEqual(decision.allowed_tools, ("mcp_web_fetch_url",))
+        self.assertEqual(decision.source, "rules")
+
     def test_file_backed_calculation_prefers_python_only(self) -> None:
         strategy = parse_execution_strategy("Count how many rows are in knowledge/E-commerce Data/sales_orders.xlsx.")
         decision = deterministic_route(
@@ -136,6 +152,17 @@ class LightweightRouterTests(unittest.IsolatedAsyncioTestCase):
         mocked_route.assert_not_awaited()
         self.assertEqual(decision.intent, "workspace_file_ops")
         self.assertEqual(decision.allowed_tools, ("mcp_filesystem_read_file",))
+        self.assertEqual(decision.source, "rules")
+
+    async def test_resolve_routing_skips_llm_for_explicit_web_mcp(self) -> None:
+        with patch.object(self.manager._lightweight_router, "route", new_callable=AsyncMock) as mocked_route:
+            _strategy, decision = await self.manager.resolve_routing(
+                "Use Web MCP only, fetch https://example.com/docs/readme, and tell me the page text.",
+                [],
+            )
+        mocked_route.assert_not_awaited()
+        self.assertEqual(decision.intent, "web_lookup")
+        self.assertEqual(decision.allowed_tools, ("mcp_web_fetch_url",))
         self.assertEqual(decision.source, "rules")
 
     async def test_resolve_routing_uses_llm_for_ambiguous_message(self) -> None:
