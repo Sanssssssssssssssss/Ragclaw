@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from contextlib import asynccontextmanager
+from typing import Any
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -21,6 +22,7 @@ from src.backend.runtime.agent_manager import agent_manager
 from src.backend.runtime.config import get_settings
 
 logger = logging.getLogger(__name__)
+_startup_tasks: set[asyncio.Task[Any]] = set()
 
 
 async def _warm_knowledge_index() -> None:
@@ -28,6 +30,23 @@ async def _warm_knowledge_index() -> None:
         await asyncio.to_thread(knowledge_indexer.warm_start)
     except Exception:  # pragma: no cover - startup/runtime environment dependent
         logger.exception("Knowledge index warm start failed")
+
+
+def _schedule_knowledge_warm_start() -> asyncio.Task[Any]:
+    task: asyncio.Task[Any] = asyncio.create_task(_warm_knowledge_index(), name="knowledge-warm-start")
+    _startup_tasks.add(task)
+
+    def _cleanup(completed: asyncio.Task[Any]) -> None:
+        _startup_tasks.discard(completed)
+        try:
+            completed.result()
+        except asyncio.CancelledError:
+            logger.info("Knowledge index warm start task cancelled during shutdown")
+        except Exception:  # pragma: no cover - defensive logging
+            logger.exception("Knowledge index warm start task failed")
+
+    task.add_done_callback(_cleanup)
+    return task
 
 
 @asynccontextmanager
@@ -38,8 +57,13 @@ async def lifespan(_: FastAPI):
     memory_indexer.configure(settings.backend_dir)
     memory_indexer.rebuild_index()
     knowledge_indexer.configure(settings.backend_dir)
-    await _warm_knowledge_index()
-    yield
+    _schedule_knowledge_warm_start()
+    try:
+        yield
+    finally:
+        for task in list(_startup_tasks):
+            if not task.done():
+                task.cancel()
 
 
 app = FastAPI(
