@@ -3,10 +3,16 @@
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, AsyncIterator
 
-from src.backend.capabilities.invocation import CapabilityRuntimeContext, capability_runtime_scope, invoke_capability
+from src.backend.capabilities.invocation import (
+    CapabilityRuntimeContext,
+    GovernedCapabilityTool,
+    capability_runtime_scope,
+    invoke_capability,
+)
 from src.backend.capabilities.types import CapabilityResult
 from src.backend.decision.execution_strategy import ExecutionStrategy
 from src.backend.decision.skill_gate import SkillDecision, skill_instruction
@@ -37,6 +43,24 @@ def _stringify_content(content: Any) -> str:
                 parts.append(str(block.get("text", "")))
         return "".join(parts)
     return str(content or "")
+
+
+_EXPLICIT_MCP_PATTERNS = (
+    re.compile(r"\bfilesystem mcp\b", re.IGNORECASE),
+    re.compile(r"\bmcp filesystem\b", re.IGNORECASE),
+)
+_REPEATED_MCP_PATTERNS = (
+    re.compile(r"\b(?:twice|three times|repeat(?:ed)?|again|\d+\s+times)\b", re.IGNORECASE),
+    re.compile(r"(?:两次|三次|重复|再来一次)"),
+)
+_READ_PATH_PATTERNS = (
+    re.compile(r"\bread\s+([A-Za-z0-9_./\\-]+\.[A-Za-z0-9_]+)", re.IGNORECASE),
+    re.compile(r"\bopen\s+([A-Za-z0-9_./\\-]+\.[A-Za-z0-9_]+)", re.IGNORECASE),
+)
+_LIST_PATH_PATTERNS = (
+    re.compile(r"\blist\s+([A-Za-z0-9_./\\-]+)", re.IGNORECASE),
+    re.compile(r"\bshow\s+([A-Za-z0-9_./\\-]+)", re.IGNORECASE),
+)
 
 
 @dataclass
@@ -270,6 +294,17 @@ class HarnessExecutors:
                 state.final_answer = final_answer
                 return state
 
+            explicit_mcp_answer = await self._maybe_execute_explicit_mcp_path(
+                runtime,
+                handle,
+                message=message,
+                allowed_tools=allowed_tools,
+                state=state,
+            )
+            if explicit_mcp_answer is not None:
+                state.final_answer = explicit_mcp_answer
+                return state
+
             final_answer = await self._stream_tool_path(
                 runtime,
                 handle,
@@ -282,6 +317,81 @@ class HarnessExecutors:
             )
             state.final_answer = final_answer
             return state
+
+    async def _maybe_execute_explicit_mcp_path(
+        self,
+        runtime: "HarnessRuntime",
+        handle: "RuntimeRunHandle",
+        *,
+        message: str,
+        allowed_tools: list[Any],
+        state: RunSummaryState,
+    ) -> str | None:
+        normalized_message = str(message or "")
+        if not any(pattern.search(normalized_message) for pattern in _EXPLICIT_MCP_PATTERNS):
+            return None
+        if any(pattern.search(normalized_message) for pattern in _REPEATED_MCP_PATTERNS):
+            return None
+        if len(allowed_tools) != 1:
+            return None
+
+        tool = allowed_tools[0]
+        if not isinstance(tool, GovernedCapabilityTool):
+            return None
+
+        tool_name = str(getattr(tool, "name", "") or "")
+        if tool_name not in {"mcp_filesystem_read_file", "mcp_filesystem_list_directory"}:
+            return None
+
+        payload = self._explicit_mcp_payload(tool_name, normalized_message)
+        if payload is None:
+            return None
+
+        call_id = f"explicit-{tool_name}"
+        serialized_input = json.dumps(payload, ensure_ascii=False)
+        state.add_tool(tool_name)
+        await runtime.emit(
+            handle,
+            "tool.started",
+            ToolCallRecord(tool=tool_name, input=serialized_input, call_id=call_id).to_dict(),
+        )
+        result = await tool.aexecute_capability(payload)
+        rendered = tool.render_capability_result(result)
+        await runtime.emit(
+            handle,
+            "tool.completed",
+            ToolCallRecord(
+                tool=tool_name,
+                input=serialized_input,
+                output=rendered,
+                call_id=call_id,
+            ).to_dict(),
+        )
+        await runtime.emit(
+            handle,
+            "answer.started",
+            AnswerRecord(content="", segment_index=runtime.current_segment_index(handle), final=False).to_dict(),
+        )
+        if rendered:
+            await runtime.emit(
+                handle,
+                "answer.delta",
+                AnswerRecord(content=rendered, segment_index=runtime.current_segment_index(handle), final=False).to_dict(),
+            )
+        await runtime.emit(
+            handle,
+            "answer.completed",
+            AnswerRecord(content=rendered, segment_index=runtime.current_segment_index(handle), final=True).to_dict(),
+        )
+        return rendered
+
+    def _explicit_mcp_payload(self, tool_name: str, message: str) -> dict[str, str] | None:
+        patterns = _READ_PATH_PATTERNS if tool_name == "mcp_filesystem_read_file" else _LIST_PATH_PATTERNS
+        for pattern in patterns:
+            match = pattern.search(message)
+            if match:
+                return {"path": str(match.group(1)).strip().rstrip(".,;:")}
+        return None
 
     async def _activate_skill_capability(
         self,

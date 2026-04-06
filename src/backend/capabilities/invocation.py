@@ -350,26 +350,39 @@ class GovernedCapabilityTool(BaseTool):
     def _render_result(self, result: CapabilityResult) -> str:
         return self._inner_tool.render_capability_result(result)
 
-    def _run(self, *args: Any, run_manager: CallbackManagerForToolRun | None = None, **kwargs: Any) -> str:
-        payload = self._payload_from_call(*args, **kwargs)
+    def render_capability_result(self, result: CapabilityResult) -> str:
+        return self._render_result(result)
+
+    def execute_capability(self, payload: dict[str, Any]) -> CapabilityResult:
         started_at = time.perf_counter()
         try:
             raw_result = self._inner_tool.execute_capability(payload)
         except Exception as exc:  # pragma: no cover - defensive boundary
-            raw_result = _exception_result(
+            return _exception_result(
                 exc,
                 self._capability_spec,
                 call_id=_new_call_id(),
                 retry_count=0,
                 latency_ms=int((time.perf_counter() - started_at) * 1000),
             )
-        else:
-            raw_result = _normalize_capability_result(
-                raw_result,
-                call_id=raw_result.call_id or _new_call_id(),
-                retry_count=raw_result.retry_count,
-                latency_ms=raw_result.latency_ms or int((time.perf_counter() - started_at) * 1000),
-            )
+        return _normalize_capability_result(
+            raw_result,
+            call_id=raw_result.call_id or _new_call_id(),
+            retry_count=raw_result.retry_count,
+            latency_ms=raw_result.latency_ms or int((time.perf_counter() - started_at) * 1000),
+        )
+
+    async def aexecute_capability(self, payload: dict[str, Any]) -> CapabilityResult:
+        return await invoke_capability(
+            spec=self._capability_spec,
+            payload=payload,
+            execute_async=self._inner_tool.aexecute_capability,
+            execute_sync=self._inner_tool.execute_capability,
+        )
+
+    def _run(self, *args: Any, run_manager: CallbackManagerForToolRun | None = None, **kwargs: Any) -> str:
+        payload = self._payload_from_call(*args, **kwargs)
+        raw_result = self.execute_capability(payload)
         context = current_capability_context()
         if context is not None:
             invocation = CapabilityInvocation(
@@ -430,12 +443,7 @@ class GovernedCapabilityTool(BaseTool):
 
     async def _arun(self, *args: Any, run_manager: AsyncCallbackManagerForToolRun | None = None, **kwargs: Any) -> str:
         payload = self._payload_from_call(*args, **kwargs)
-        result = await invoke_capability(
-            spec=self._capability_spec,
-            payload=payload,
-            execute_async=self._inner_tool.aexecute_capability,
-            execute_sync=self._inner_tool.execute_capability,
-        )
+        result = await self.aexecute_capability(payload)
         return self._render_result(result)
 
 

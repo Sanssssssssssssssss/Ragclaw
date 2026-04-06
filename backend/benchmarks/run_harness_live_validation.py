@@ -619,6 +619,7 @@ async def run_live_validation(
         mcp_tools, mcp_registry = build_tools_and_registry(mcp_root)
 
         original_resolve_routing = agent_manager.resolve_routing
+        original_initialize = agent_manager.initialize
 
         async def _resolve_with_tracking(message: str, history: list[dict[str, Any]]):
             case = support.case_for_message(message)
@@ -659,11 +660,17 @@ async def run_live_validation(
                 )
             return await original_resolve_routing(message, history)
 
+        def _initialize_with_live_tools(base_dir: Path) -> None:
+            original_initialize(base_dir)
+            agent_manager.tools = list(mcp_tools)
+            agent_manager._capability_registry = mcp_registry
+
         stack.enter_context(patch.object(backend_app, "refresh_snapshot", lambda *_args, **_kwargs: None))
         stack.enter_context(patch.object(backend_app.memory_indexer, "rebuild_index", lambda *_args, **_kwargs: None))
         stack.enter_context(patch.object(backend_app, "_warm_knowledge_index", AsyncMock(return_value=None)))
         stack.enter_context(patch.object(agent_manager, "get_harness_runtime", return_value=runtime))
         stack.enter_context(patch.object(agent_manager, "resolve_routing", side_effect=_resolve_with_tracking))
+        stack.enter_context(patch.object(agent_manager, "initialize", side_effect=_initialize_with_live_tools))
         stack.enter_context(patch.object(agent_manager, "create_execution_support", return_value=support))
         stack.enter_context(patch.object(agent_manager, "tools", mcp_tools))
         stack.enter_context(patch.object(agent_manager, "_capability_registry", mcp_registry))
