@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import sys
 import unittest
@@ -91,9 +91,9 @@ class SkillGateTests(unittest.TestCase):
 
     def test_workspace_request_does_not_use_skill(self) -> None:
         decision = self.gate.decide(
-            message="Read backend/config.py and tell me what ROUTER_MODEL is set to.",
+            message="Read src/backend/runtime/config.py and tell me what ROUTER_MODEL is set to.",
             history=[],
-            strategy=parse_execution_strategy("Read backend/config.py and tell me what ROUTER_MODEL is set to."),
+            strategy=parse_execution_strategy("Read src/backend/runtime/config.py and tell me what ROUTER_MODEL is set to."),
             routing_decision=RoutingDecision(
                 intent="workspace_file_ops",
                 needs_tools=True,
@@ -128,3 +128,4 @@ class SkillGateTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+

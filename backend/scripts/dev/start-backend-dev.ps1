@@ -5,12 +5,12 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
-$root = Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path))
-$backendDir = Join-Path $root "backend"
+$backendDir = Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path))
+$projectRoot = Split-Path -Parent $backendDir
 
-Set-Location $root
+Set-Location $projectRoot
 
-if (-not (Test-Path ".env")) {
+if (-not (Test-Path (Join-Path $backendDir ".env"))) {
     Write-Host "[tip] backend/.env is missing. Copy .env.example to .env and add your Kimi API key." -ForegroundColor Yellow
 }
 

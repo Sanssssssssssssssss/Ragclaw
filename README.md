@@ -2,6 +2,11 @@
 
 Ragclaw is a local-first RAG and agent workbench built for iterative research, transparent retrieval, and editable long-term context.
 
+Start here if you just downloaded the repo:
+
+- [QUICKSTART.md](/D:/GPT_Project/RAG_Model/QUICKSTART.md)
+- [LOCAL_DEV.md](/D:/GPT_Project/RAG_Model/LOCAL_DEV.md)
+
 This repository started from the ideas in `Skill-First-Hybrid-RAG`, but it is no longer a simple mirror or light fork. The retrieval stack, benchmark framework, runtime controls, knowledge ingestion pipeline, and project-memory workflow have all been expanded for an ongoing private-to-public research build.
 
 ## Project Status
@@ -32,6 +37,12 @@ The repo is intentionally opinionated:
 - project context is rebuilt from Markdown memory files
 - retrieval quality should be measurable without being silently repaired by tool backreads
 - benchmarks should be cheap to slice and rerun by module, subtype, modality, and question type
+
+Repository orientation:
+
+- everyday startup, benchmark, and validation commands live in [QUICKSTART.md](/D:/GPT_Project/RAG_Model/QUICKSTART.md)
+- deeper local setup notes live in [LOCAL_DEV.md](/D:/GPT_Project/RAG_Model/LOCAL_DEV.md)
+- Codex-only project memory now lives in local `.codex/memory/` and is not part of the tracked repo
 
 ## Current Retrieval Direction
 
@@ -69,11 +80,10 @@ This means benchmark scores may become more honest:
 
 ```text
 backend/
-  api/                   FastAPI routes
   benchmarks/            modular benchmark runner, evaluators, judge hooks, cases
   knowledge/             local knowledge corpus
   memory/                persistent Markdown memory
-  scripts/               backend validation and maintenance scripts
+  scripts/               backend validation, maintenance, and dev launcher scripts
   sessions/              persisted chat sessions
   skills/                local skill specs
   storage/               derived benchmark and index artifacts
@@ -82,8 +92,6 @@ backend/
 src/
   backend/               backend runtime, capability, decision, knowledge, API, observability code
   frontend/              UI app, state, components
-scripts/
-  dev/                   one-shot startup and benchmark scripts
 ```
 
 ## Knowledge Indexing Scope
@@ -129,7 +137,7 @@ RAG benchmark cases are maintained as hand-editable JSON files under:
 Typical usage:
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\dev\run-backend-benchmarks.ps1 -Module rag -RagSubtype retrieval -SamplePerType 2 -Port 8015
+powershell -NoProfile -ExecutionPolicy Bypass -File .\backend\scripts\dev\run-backend-benchmarks.ps1 -Module rag -RagSubtype retrieval -SamplePerType 2 -Port 8015
 ```
 
 ## Local Development
@@ -137,19 +145,19 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\dev\run-backend-be
 Start the full app:
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File .\start-dev.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File .\backend\scripts\dev\start-dev.ps1
 ```
 
 Restart the full app:
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File .\start-dev.ps1 -Restart
+powershell -NoProfile -ExecutionPolicy Bypass -File .\backend\scripts\dev\start-dev.ps1 -Restart
 ```
 
 Backend only:
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\dev\start-backend-dev.ps1 -Port 8015
+powershell -NoProfile -ExecutionPolicy Bypass -File .\backend\scripts\dev\start-backend-dev.ps1 -Port 8015
 ```
 
 ## Configuration
@@ -157,7 +165,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\dev\start-backend-
 Configuration is primarily loaded from:
 
 - `backend/.env`
-- `backend/config.py`
+- `src/backend/runtime/config.py`
 
 The repository currently supports multiple providers for LLMs and embeddings. The active local setup can differ from the example file, depending on the machine and current experiment.
 

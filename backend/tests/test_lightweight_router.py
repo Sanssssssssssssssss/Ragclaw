@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import sys
 import unittest
@@ -34,9 +34,9 @@ class LightweightRouterTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(decision.subtype, "code_execution_request")
 
     def test_known_file_prefers_read_file_only(self) -> None:
-        strategy = parse_execution_strategy("Read backend/config.py and summarize router_model.")
+        strategy = parse_execution_strategy("Read src/backend/runtime/config.py and summarize router_model.")
         decision = deterministic_route(
-            message="Read backend/config.py and summarize router_model.",
+            message="Read src/backend/runtime/config.py and summarize router_model.",
             strategy=strategy,
             tool_names=("fetch_url", "python_repl", "read_file", "terminal"),
             is_knowledge_query=False,
@@ -184,3 +184,4 @@ class LightweightRouterTests(unittest.IsolatedAsyncioTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+

@@ -264,7 +264,7 @@ function toUiMessages(history: Awaited<ReturnType<typeof getSessionHistory>>["me
  */
 function toErrorMessage(error: unknown) {
   if (error instanceof ApiConnectionError) {
-    return `${error.message} If you started the app with start-dev.ps1, wait for the backend to finish booting and try again.`;
+    return `${error.message} If you started the app with backend/scripts/dev/start-dev.ps1, wait for the backend to finish booting and try again.`;
   }
   if (error instanceof Error && error.message.trim()) {
     return error.message.trim();

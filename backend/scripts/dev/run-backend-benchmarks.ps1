@@ -18,10 +18,10 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
-$root = Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path))
-$backendDir = Join-Path $root "backend"
+$backendDir = Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path))
+$root = Split-Path -Parent $backendDir
 $pythonExe = Join-Path $backendDir ".venv\\Scripts\\python.exe"
-$backendStartScript = Join-Path $root "scripts\\dev\\start-backend-dev.ps1"
+$backendStartScript = Join-Path $backendDir "scripts\\dev\\start-backend-dev.ps1"
 $powershellExe = Join-Path $env:SystemRoot "System32\\WindowsPowerShell\\v1.0\\powershell.exe"
 if (-not (Test-Path $powershellExe)) {
     $powershellExe = "powershell.exe"

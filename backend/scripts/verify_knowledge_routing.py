@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import json
 import os
@@ -26,7 +26,7 @@ CASES = [
     },
     {
         "label": "chat-negative-codebase",
-        "message": "\u8bfb\u53d6 backend/config.py\uff0c\u544a\u8bc9\u6211 router model \u73b0\u5728\u600e\u4e48\u914d\u7f6e\u7684\u3002",
+        "message": "\u8bfb\u53d6 src/backend/runtime/config.py\uff0c\u544a\u8bc9\u6211 router model \u73b0\u5728\u600e\u4e48\u914d\u7f6e\u7684\u3002",
         "expected": "chat",
     },
     {
@@ -127,3 +127,4 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+

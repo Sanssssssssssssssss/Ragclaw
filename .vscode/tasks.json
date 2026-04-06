@@ -75,9 +75,9 @@
       ]
     },
     {
-      "label": "App: Start all (root script)",
+      "label": "App: Start all",
       "type": "shell",
-      "command": "powershell -ExecutionPolicy Bypass -File .\\start-dev.ps1",
+      "command": "powershell -ExecutionPolicy Bypass -File .\\backend\\scripts\\dev\\start-dev.ps1",
       "options": {
         "cwd": "${workspaceFolder}"
       }

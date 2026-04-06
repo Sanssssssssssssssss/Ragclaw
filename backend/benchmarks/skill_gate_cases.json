@@ -1,4 +1,4 @@
-[
+﻿[
   {
     "id": "skill_web_001",
     "bucket": "web_search_should_use",
@@ -162,7 +162,7 @@
   {
     "id": "skill_workspace_001",
     "bucket": "workspace_should_not_use",
-    "input": "Read backend/config.py and tell me what ROUTER_MODEL is set to.",
+    "input": "Read src/backend/runtime/config.py and tell me what ROUTER_MODEL is set to.",
     "expected_use_skill": false,
     "expected_skill_name": "",
     "expected_route": "workspace_file_ops",
@@ -273,7 +273,7 @@
   {
     "id": "skill_direct_002",
     "bucket": "direct_should_not_use",
-    "input": "Translate this sentence into English without using tools: 知识库检索可以提升答案可靠性。",
+    "input": "Translate this sentence into English without using tools: 鐭ヨ瘑搴撴绱㈠彲浠ユ彁鍗囩瓟妗堝彲闈犳€с€?,
     "expected_use_skill": false,
     "expected_skill_name": "",
     "expected_route": "direct_answer",
@@ -322,3 +322,4 @@
     "ambiguous": true
   }
 ]
+
