@@ -11,6 +11,10 @@ from src.backend.capabilities.mcp_transport import McpTransportError
 
 
 MAX_WEB_TEXT_CHARS = 12_000
+DEFAULT_WEB_HEADERS = {
+    "User-Agent": "Ragclaw-Web-MCP/1.0",
+    "Accept": "text/html,application/json,text/plain;q=0.9,*/*;q=0.8",
+}
 
 
 class WebDocumentMcpTransport:
@@ -27,6 +31,14 @@ class WebDocumentMcpTransport:
             # do not fail closed on public HTTPS fetches that the machine itself already trusts.
             return ssl.create_default_context()
         return True
+
+    def _timeout_config(self) -> httpx.Timeout:
+        return httpx.Timeout(
+            connect=float(self._timeout_seconds),
+            read=float(self._timeout_seconds),
+            write=float(self._timeout_seconds),
+            pool=float(self._timeout_seconds),
+        )
 
     def _ensure_available(self) -> None:
         if not self._available:
@@ -76,8 +88,9 @@ class WebDocumentMcpTransport:
         try:
             with httpx.Client(
                 follow_redirects=True,
-                timeout=self._timeout_seconds,
+                timeout=self._timeout_config(),
                 verify=self._verify_config_for_url(validated_url),
+                headers=dict(DEFAULT_WEB_HEADERS),
             ) as client:
                 response = client.get(validated_url)
                 response.raise_for_status()
@@ -103,8 +116,9 @@ class WebDocumentMcpTransport:
         try:
             async with httpx.AsyncClient(
                 follow_redirects=True,
-                timeout=self._timeout_seconds,
+                timeout=self._timeout_config(),
                 verify=self._verify_config_for_url(validated_url),
+                headers=dict(DEFAULT_WEB_HEADERS),
             ) as client:
                 response = await client.get(validated_url)
                 response.raise_for_status()

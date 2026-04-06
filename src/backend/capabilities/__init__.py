@@ -22,7 +22,7 @@ def _build_raw_tools(base_dir: Path) -> list[BaseTool]:
         ReadFileTool(root_dir=base_dir),
         FilesystemMcpReadTool(root_dir=base_dir, timeout_seconds=5),
         FilesystemMcpListTool(root_dir=base_dir, timeout_seconds=5),
-        WebMcpFetchTool(timeout_seconds=3),
+        WebMcpFetchTool(timeout_seconds=10),
     ]
 
 

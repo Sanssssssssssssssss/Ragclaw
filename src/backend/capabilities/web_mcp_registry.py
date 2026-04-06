@@ -32,7 +32,7 @@ WEB_MCP_METADATA: dict[str, dict[str, Any]] = {
             "required": ["url", "text", "content_type", "status_code", "truncated"],
         },
         "risk_level": "medium",
-        "timeout_seconds": 3,
+        "timeout_seconds": 10,
         "retry_policy": CapabilityRetryPolicy(max_retries=0),
         "approval_required": False,
         "tags": ("mcp", "web", "document", "read_only", "phase1"),

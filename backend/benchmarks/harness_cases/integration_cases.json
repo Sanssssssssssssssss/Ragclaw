@@ -312,25 +312,15 @@
       "suite": "integration",
       "runner": "integration_lifecycle",
       "scenario": "mcp_web_fetch_timeout_or_unavailable",
-      "message": "Use Web MCP only, fetch {{web_base_url}}/docs/slow, and tell me the result.",
+      "message": "Use Web MCP only, fetch http://127.0.0.1:9/docs/unavailable, and tell me the result.",
       "session_id": "integration-mcp-web-timeout",
       "tags": ["smoke", "mcp", "integration", "web", "error"],
       "difficulty": "smoke",
-      "setup": {
-        "http_routes": [
-          {
-            "path": "/docs/slow",
-            "content_type": "text/plain; charset=utf-8",
-            "body": "too slow",
-            "delay_seconds": 4
-          }
-        ]
-      },
       "tool_calls": [
         {
           "name": "mcp_web_fetch_url",
           "args": {
-            "url": "{{web_base_url}}/docs/slow"
+            "url": "http://127.0.0.1:9/docs/unavailable"
           }
         }
       ],
@@ -341,7 +331,7 @@
         "tool": true,
         "failure": false,
         "queue": false,
-        "answer_fragment": "timed out"
+        "answer_fragment": "unavailable"
       }
     },
     {
