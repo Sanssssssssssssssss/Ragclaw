@@ -4,6 +4,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 BACKEND_DIR = Path(__file__).resolve().parents[1]
 PROJECT_ROOT = BACKEND_DIR.parent
@@ -15,6 +16,7 @@ if str(PROJECT_ROOT) not in sys.path:
 from benchmarks.local_http_fixture import serve_local_http_routes
 from src.backend.capabilities import build_tools_and_registry
 from src.backend.capabilities.web_mcp_adapter import WebMcpFetchTool
+from src.backend.capabilities.web_mcp_transport import WebDocumentMcpTransport
 
 
 class WebMcpTests(unittest.IsolatedAsyncioTestCase):
@@ -39,3 +41,35 @@ class WebMcpTests(unittest.IsolatedAsyncioTestCase):
         spec = registry.get("mcp_web_fetch_url")
         self.assertEqual(spec.capability_type, "mcp_service")
         self.assertEqual(spec.repeated_call_limit, 2)
+
+    def test_https_fetch_uses_system_ssl_context(self) -> None:
+        captured_verify = None
+
+        class _StubClient:
+            def __init__(self, **kwargs):
+                nonlocal captured_verify
+                captured_verify = kwargs.get("verify")
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+            def get(self, url):
+                class _Response:
+                    status_code = 200
+                    headers = {"content-type": "text/plain; charset=utf-8"}
+                    text = "ok"
+
+                    def raise_for_status(self):
+                        return None
+
+                return _Response()
+
+        transport = WebDocumentMcpTransport(timeout_seconds=3)
+        with patch("src.backend.capabilities.web_mcp_transport.httpx.Client", _StubClient):
+            payload = transport.fetch_url("https://example.com/")
+        self.assertEqual(payload["status_code"], 200)
+        self.assertIsNotNone(captured_verify)
+        self.assertNotEqual(captured_verify, True)

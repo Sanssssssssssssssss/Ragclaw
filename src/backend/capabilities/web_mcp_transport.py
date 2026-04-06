@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import ssl
 from urllib.parse import urlparse
 
 import html2text
@@ -18,6 +19,14 @@ class WebDocumentMcpTransport:
     def __init__(self, *, available: bool = True, timeout_seconds: int = 5) -> None:
         self._available = bool(available)
         self._timeout_seconds = max(1, int(timeout_seconds))
+
+    def _verify_config_for_url(self, url: str) -> bool | ssl.SSLContext:
+        parsed = urlparse(url)
+        if parsed.scheme == "https":
+            # Prefer the OS certificate store so desktop/dev environments with local trust roots
+            # do not fail closed on public HTTPS fetches that the machine itself already trusts.
+            return ssl.create_default_context()
+        return True
 
     def _ensure_available(self) -> None:
         if not self._available:
@@ -65,7 +74,11 @@ class WebDocumentMcpTransport:
     def fetch_url(self, url: str) -> dict[str, object]:
         validated_url = self._validate_url(url)
         try:
-            with httpx.Client(follow_redirects=True, timeout=self._timeout_seconds) as client:
+            with httpx.Client(
+                follow_redirects=True,
+                timeout=self._timeout_seconds,
+                verify=self._verify_config_for_url(validated_url),
+            ) as client:
                 response = client.get(validated_url)
                 response.raise_for_status()
         except httpx.TimeoutException as exc:
@@ -88,7 +101,11 @@ class WebDocumentMcpTransport:
     async def afetch_url(self, url: str) -> dict[str, object]:
         validated_url = self._validate_url(url)
         try:
-            async with httpx.AsyncClient(follow_redirects=True, timeout=self._timeout_seconds) as client:
+            async with httpx.AsyncClient(
+                follow_redirects=True,
+                timeout=self._timeout_seconds,
+                verify=self._verify_config_for_url(validated_url),
+            ) as client:
                 response = await client.get(validated_url)
                 response.raise_for_status()
         except httpx.TimeoutException as exc:
