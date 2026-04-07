@@ -9,6 +9,7 @@ from src.backend.capabilities.invocation import CapabilityRuntimeContext, Govern
 from src.backend.capabilities.types import CapabilityResult
 from src.backend.decision.skill_gate import SkillDecision, skill_instruction
 from src.backend.observability.types import AnswerRecord, RetrievalRecord, RouteDecisionRecord, SkillDecisionRecord, ToolCallRecord
+from src.backend.orchestration.checkpointing import checkpoint_store
 from src.backend.orchestration.compiler import compile_harness_orchestration_graph
 from src.backend.orchestration.state import GraphState, create_initial_graph_state
 from src.backend.runtime.graders import KnowledgeAnswerGrader
@@ -64,12 +65,24 @@ class _ExecutionBindings:
 
 
 class HarnessLangGraphOrchestrator:
-    def __init__(self, agent_manager: "AgentManager", *, execution_support, knowledge_grader: KnowledgeAnswerGrader | None = None) -> None:
+    def __init__(
+        self,
+        agent_manager: "AgentManager",
+        *,
+        execution_support,
+        knowledge_grader: KnowledgeAnswerGrader | None = None,
+        resume_checkpoint_id: str = "",
+        resume_thread_id: str = "",
+        resume_source: str = "",
+    ) -> None:
         self._agent = agent_manager
         self._execution = execution_support
         self._knowledge_grader = knowledge_grader or KnowledgeAnswerGrader(agent_manager)
         self._graph = compile_harness_orchestration_graph(self)
         self._bindings: _ExecutionBindings | None = None
+        self._resume_checkpoint_id = str(resume_checkpoint_id or "")
+        self._resume_thread_id = str(resume_thread_id or "")
+        self._resume_source = str(resume_source or "")
 
     async def run(self, runtime: "HarnessRuntime", handle: "RuntimeRunHandle", *, message: str, history: list[dict[str, Any]]) -> GraphState:
         context = CapabilityRuntimeContext(
@@ -81,15 +94,31 @@ class HarnessLangGraphOrchestrator:
         self._bindings = _ExecutionBindings(runtime=runtime, handle=handle, context=context)
         try:
             async with capability_runtime_scope(context):
-                return await self._graph.ainvoke(
-                    create_initial_graph_state(
-                        run_id=handle.run_id,
-                        session_id=getattr(handle.metadata, "session_id", None),
-                        user_message=message,
-                        history=history,
-                    ),
-                    config={"configurable": {"thread_id": str(getattr(handle.metadata, "session_id", None) or handle.run_id)}},
-                )
+                thread_id = self._thread_id_for(handle)
+                if self._resume_checkpoint_id:
+                    await self._emit_resume_events(runtime, handle, thread_id)
+                    result = await self._graph.ainvoke(
+                        None,
+                        config={
+                            "configurable": {
+                                "thread_id": thread_id,
+                                "checkpoint_id": self._resume_checkpoint_id,
+                            }
+                        },
+                    )
+                else:
+                    result = await self._graph.ainvoke(
+                        create_initial_graph_state(
+                            run_id=handle.run_id,
+                            session_id=getattr(handle.metadata, "session_id", None),
+                            thread_id=thread_id,
+                            user_message=message,
+                            history=history,
+                        ),
+                        config={"configurable": {"thread_id": thread_id}},
+                    )
+                await self._emit_checkpoint_created(runtime, handle, thread_id)
+                return result
         finally:
             self._bindings = None
 
@@ -239,7 +268,7 @@ class HarnessLangGraphOrchestrator:
     async def capability_selection_node(self, state: GraphState) -> dict[str, Any]:
         strategy = state.get("execution_strategy")
         if strategy is None:
-            return {"selected_capabilities": [], "resolved_tools": []}
+            return {"selected_capabilities": []}
         decision = state.get("route_decision")
         tools = self._agent._resolve_tools_for_strategy(strategy)
         if decision is not None and decision.allowed_tools:
@@ -247,7 +276,6 @@ class HarnessLangGraphOrchestrator:
             tools = [tool for tool in tools if getattr(tool, "name", "") in allowed_names]
         explicit_id, explicit_payload = self._explicit_capability_selection(state["user_message"], tools) if tools else ("", None)
         return {
-            "resolved_tools": tools,
             "selected_capabilities": [str(getattr(tool, "name", "") or "") for tool in tools],
             "explicit_capability_id": explicit_id,
             "explicit_capability_payload": explicit_payload,
@@ -256,13 +284,21 @@ class HarnessLangGraphOrchestrator:
 
     async def capability_invoke_node(self, state: GraphState) -> dict[str, Any]:
         bindings = self._bindings_or_raise()
-        tools = list(state.get("resolved_tools", []))
+        strategy = state.get("execution_strategy")
+        selected_capabilities = set(str(item or "") for item in state.get("selected_capabilities", []) or [])
+        tools = []
+        if strategy is not None:
+            tools = [
+                tool
+                for tool in self._agent._resolve_tools_for_strategy(strategy)
+                if str(getattr(tool, "name", "") or "") in selected_capabilities
+            ]
         if not tools:
-            return {"selected_capabilities": [], "resolved_tools": []}
+            return {"selected_capabilities": []}
         explicit_id = str(state.get("explicit_capability_id", "") or "")
         explicit_payload = state.get("explicit_capability_payload")
         if explicit_id and explicit_payload is not None:
-            tool = tools[0]
+            tool = next((item for item in tools if str(getattr(item, "name", "") or "") == explicit_id), tools[0])
             call_id = f"explicit-{explicit_id}"
             tool_input = json.dumps(explicit_payload, ensure_ascii=False)
             await bindings.runtime.emit(bindings.handle, "tool.started", ToolCallRecord(tool=explicit_id, input=tool_input, call_id=call_id).to_dict())
@@ -309,6 +345,59 @@ class HarnessLangGraphOrchestrator:
     async def finalize_node(self, state: GraphState) -> dict[str, Any]:
         bindings = self._bindings_or_raise()
         return {"governor_snapshot": bindings.runtime.governor_for(bindings.handle.run_id).snapshot()}
+
+    def _thread_id_for(self, handle: "RuntimeRunHandle") -> str:
+        return self._resume_thread_id or checkpoint_store.thread_id_for(
+            session_id=getattr(handle.metadata, "session_id", None),
+            run_id=handle.run_id,
+        )
+
+    async def _emit_resume_events(self, runtime: "HarnessRuntime", handle: "RuntimeRunHandle", thread_id: str) -> None:
+        summary = checkpoint_store.get_checkpoint(thread_id=thread_id, checkpoint_id=self._resume_checkpoint_id)
+        if summary is None:
+            raise RuntimeError(f"checkpoint not found: {self._resume_checkpoint_id}")
+        if summary.state_label == "interrupted":
+            await runtime.emit(
+                handle,
+                "checkpoint.interrupted",
+                {
+                    "thread_id": thread_id,
+                    "checkpoint_id": summary.checkpoint_id,
+                    "resume_source": self._resume_source or "checkpoint",
+                    "orchestration_engine": "langgraph",
+                    "state_label": summary.state_label,
+                    "created_at": summary.created_at,
+                },
+            )
+        await runtime.emit(
+            handle,
+            "checkpoint.resumed",
+            {
+                "thread_id": thread_id,
+                "checkpoint_id": summary.checkpoint_id,
+                "resume_source": self._resume_source or "checkpoint",
+                "orchestration_engine": "langgraph",
+                "state_label": summary.state_label,
+                "created_at": summary.created_at,
+            },
+        )
+
+    async def _emit_checkpoint_created(self, runtime: "HarnessRuntime", handle: "RuntimeRunHandle", thread_id: str) -> None:
+        latest = checkpoint_store.latest_checkpoint(thread_id=thread_id)
+        if latest is None:
+            return
+        await runtime.emit(
+            handle,
+            "checkpoint.created",
+            {
+                "thread_id": latest.thread_id,
+                "checkpoint_id": latest.checkpoint_id,
+                "created_at": latest.created_at,
+                "state_label": latest.state_label,
+                "resume_eligible": latest.resume_eligible,
+                "orchestration_engine": "langgraph",
+            },
+        )
 
     def _path_kind_from_decision(self, decision: "RoutingDecision") -> str:
         if decision.intent == "knowledge_qa":

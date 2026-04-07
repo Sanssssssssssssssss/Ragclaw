@@ -215,6 +215,7 @@ export function ChatPanel() {
                   content={message.content}
                   key={message.id}
                   role={message.role}
+                  runMeta={message.runMeta}
                   streaming={message.streaming}
                   usage={message.usage}
                 />

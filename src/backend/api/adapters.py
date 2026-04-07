@@ -8,8 +8,19 @@ from typing import Any
 from src.backend.observability.types import HarnessEvent
 
 
-def _new_segment() -> dict[str, Any]:
-    return {"content": "", "tool_calls": [], "retrieval_steps": [], "usage": None}
+def _new_segment(
+    *,
+    run_meta: dict[str, Any] | None = None,
+    checkpoint_events: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    return {
+        "content": "",
+        "tool_calls": [],
+        "retrieval_steps": [],
+        "usage": None,
+        "run_meta": dict(run_meta or {}),
+        "checkpoint_events": [dict(item) for item in (checkpoint_events or [])],
+    }
 
 
 @dataclass
@@ -21,15 +32,21 @@ class LegacyChatAccumulator:
     segments: list[dict[str, Any]] = field(default_factory=list)
     final_answer: str = ""
     last_done_payload: dict[str, Any] = field(default_factory=dict)
+    run_meta: dict[str, Any] = field(default_factory=dict)
+    checkpoint_events: list[dict[str, Any]] = field(default_factory=list)
 
     def _commit_current_segment(self) -> None:
         if (
             self.current_segment["content"].strip()
             or self.current_segment["tool_calls"]
             or self.current_segment["retrieval_steps"]
+            or self.current_segment["checkpoint_events"]
         ):
             self.segments.append(self.current_segment)
-        self.current_segment = _new_segment()
+        self.current_segment = _new_segment(
+            run_meta=self.run_meta,
+            checkpoint_events=self.checkpoint_events,
+        )
 
     def _ensure_segment(self, segment_index: int) -> list[tuple[str, dict[str, Any]]]:
         legacy_events: list[tuple[str, dict[str, Any]]] = []
@@ -39,12 +56,68 @@ class LegacyChatAccumulator:
             legacy_events.append(("new_response", {}))
         return legacy_events
 
+    def _set_run_meta(self, payload: dict[str, Any]) -> dict[str, Any]:
+        next_meta = {
+            "status": str(payload.get("run_status", "") or self.run_meta.get("status") or "fresh"),
+            "thread_id": str(payload.get("thread_id", "") or self.run_meta.get("thread_id", "") or ""),
+            "checkpoint_id": str(payload.get("checkpoint_id", "") or self.run_meta.get("checkpoint_id", "") or ""),
+            "resume_source": str(payload.get("resume_source", "") or self.run_meta.get("resume_source", "") or ""),
+            "orchestration_engine": str(
+                payload.get("orchestration_engine", "") or self.run_meta.get("orchestration_engine", "") or ""
+            ),
+        }
+        self.run_meta = next_meta
+        self.current_segment["run_meta"] = dict(next_meta)
+        return next_meta
+
+    def _append_checkpoint_event(self, event_type: str, payload: dict[str, Any]) -> dict[str, Any]:
+        checkpoint_event = {
+            "type": event_type,
+            "checkpoint_id": str(payload.get("checkpoint_id", "") or ""),
+            "thread_id": str(payload.get("thread_id", "") or self.run_meta.get("thread_id", "") or ""),
+            "resume_source": str(payload.get("resume_source", "") or self.run_meta.get("resume_source", "") or ""),
+            "state_label": str(payload.get("state_label", "") or ""),
+            "created_at": str(payload.get("created_at", "") or ""),
+            "orchestration_engine": str(
+                payload.get("orchestration_engine", "") or self.run_meta.get("orchestration_engine", "") or ""
+            ),
+        }
+        self.checkpoint_events.append(checkpoint_event)
+        self.current_segment["checkpoint_events"] = [dict(item) for item in self.checkpoint_events]
+        return checkpoint_event
+
     def consume(self, event: HarnessEvent) -> list[tuple[str, dict[str, Any]]]:
         payload = dict(event.payload)
         legacy_events: list[tuple[str, dict[str, Any]]] = []
 
+        if event.name == "run.started":
+            legacy_events.append(("run_status", self._set_run_meta(payload)))
+            return legacy_events
+
         if event.name in {"run.queued", "run.dequeued"}:
             legacy_events.append((event.name, payload))
+            return legacy_events
+
+        if event.name == "checkpoint.created":
+            checkpoint_event = self._append_checkpoint_event("created", payload)
+            self._set_run_meta(payload)
+            legacy_events.append(("checkpoint_created", checkpoint_event))
+            return legacy_events
+
+        if event.name == "checkpoint.resumed":
+            checkpoint_event = self._append_checkpoint_event("resumed", payload)
+            payload = dict(payload)
+            payload["run_status"] = "resumed"
+            legacy_events.append(("run_status", self._set_run_meta(payload)))
+            legacy_events.append(("checkpoint_resumed", checkpoint_event))
+            return legacy_events
+
+        if event.name == "checkpoint.interrupted":
+            checkpoint_event = self._append_checkpoint_event("interrupted", payload)
+            payload = dict(payload)
+            payload["run_status"] = "interrupted"
+            legacy_events.append(("run_status", self._set_run_meta(payload)))
+            legacy_events.append(("checkpoint_interrupted", checkpoint_event))
             return legacy_events
 
         if event.name == "retrieval.completed":
@@ -134,7 +207,12 @@ class LegacyChatAccumulator:
                 usage["output_tokens"] = int(payload["output_tokens"])
             if usage:
                 self.current_segment["usage"] = usage
-            self.last_done_payload = {"content": self.current_segment["content"], "usage": usage or None}
+            self.last_done_payload = {
+                "content": self.current_segment["content"],
+                "usage": usage or None,
+                "run_meta": dict(self.current_segment.get("run_meta") or {}),
+                "checkpoint_events": [dict(item) for item in self.current_segment.get("checkpoint_events", [])],
+            }
             legacy_events.append(("done", dict(self.last_done_payload)))
             return legacy_events
 
@@ -151,16 +229,18 @@ class LegacyChatAccumulator:
         session_id: str,
         user_message: str,
         error_message: str | None = None,
+        persist_user_message: bool = True,
     ) -> None:
         if error_message:
-            suffix = f"请求失败: {error_message}"
+            suffix = f"璇锋眰澶辫触: {error_message}"
             if self.current_segment["content"].strip():
                 self.current_segment["content"] = f"{self.current_segment['content'].rstrip()}\n\n{suffix}"
             else:
                 self.current_segment["content"] = suffix
 
         self._commit_current_segment()
-        session_manager.save_message(session_id, "user", user_message)
+        if persist_user_message:
+            session_manager.save_message(session_id, "user", user_message)
         for segment in self.segments:
             session_manager.save_message(
                 session_id,
@@ -169,4 +249,6 @@ class LegacyChatAccumulator:
                 tool_calls=segment["tool_calls"] or None,
                 retrieval_steps=segment["retrieval_steps"] or None,
                 usage=segment.get("usage") or None,
+                run_meta=segment.get("run_meta") or None,
+                checkpoint_events=segment.get("checkpoint_events") or None,
             )

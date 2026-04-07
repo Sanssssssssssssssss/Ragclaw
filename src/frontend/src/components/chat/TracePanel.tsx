@@ -6,7 +6,7 @@ import { MessageSquareText, Route, Sparkles } from "lucide-react";
 import { RetrievalCard } from "@/components/chat/RetrievalCard";
 import { ThoughtChain } from "@/components/chat/ThoughtChain";
 import { VirtualizedStack } from "@/components/chat/VirtualizedStack";
-import { useChatStore } from "@/lib/store";
+import { useChatStore, useSessionStore } from "@/lib/store";
 
 const TRACE_ITEM_ESTIMATE = 760;
 
@@ -17,11 +17,14 @@ type TraceTurn = {
   toolCalls: ReturnType<typeof useChatStore>["messages"][number]["toolCalls"];
   retrievalSteps: ReturnType<typeof useChatStore>["messages"][number]["retrievalSteps"];
   usage: ReturnType<typeof useChatStore>["messages"][number]["usage"];
+  runMeta: ReturnType<typeof useChatStore>["messages"][number]["runMeta"];
+  checkpointEvents: ReturnType<typeof useChatStore>["messages"][number]["checkpointEvents"];
   streaming: boolean;
 };
 
 const TraceTurnCard = memo(function TraceTurnCard({ turn }: { turn: TraceTurn }) {
-  const hasTrace = turn.toolCalls.length > 0 || turn.retrievalSteps.length > 0;
+  const hasTrace =
+    turn.toolCalls.length > 0 || turn.retrievalSteps.length > 0 || turn.checkpointEvents.length > 0;
 
   return (
     <article className="rounded-[28px] border border-[var(--color-line)] bg-[rgba(255,255,255,0.03)] p-5">
@@ -36,6 +39,22 @@ const TraceTurnCard = memo(function TraceTurnCard({ turn }: { turn: TraceTurn })
           </div>
         ) : null}
       </div>
+
+      {turn.runMeta ? (
+        <div className="mt-3 flex flex-wrap items-center gap-2 text-xs uppercase tracking-[0.18em] text-[var(--color-ink-muted)]">
+          <span className="rounded-full border border-[var(--color-line)] px-2 py-1">
+            {turn.runMeta.status}
+          </span>
+          <span className="rounded-full border border-[var(--color-line)] px-2 py-1">
+            {turn.runMeta.orchestration_engine || "langgraph"}
+          </span>
+          {turn.runMeta.thread_id ? (
+            <span className="mono normal-case tracking-normal text-[var(--color-ink-soft)]">
+              thread {turn.runMeta.thread_id}
+            </span>
+          ) : null}
+        </div>
+      ) : null}
 
       <div className="mt-4 grid gap-4 xl:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)]">
         <section className="rounded-[24px] border border-[var(--color-line)] bg-[rgba(255,255,255,0.02)] p-4">
@@ -60,6 +79,28 @@ const TraceTurnCard = memo(function TraceTurnCard({ turn }: { turn: TraceTurn })
       </div>
 
       <div className="mt-4">
+        {turn.checkpointEvents.length ? (
+          <div className="mb-4 rounded-[22px] border border-[var(--color-line)] bg-[rgba(255,255,255,0.02)] px-4 py-3 text-sm text-[var(--color-ink-soft)]">
+            <p className="mb-2 text-xs uppercase tracking-[0.18em] text-[var(--color-ink-muted)]">
+              Checkpoint trace
+            </p>
+            <div className="space-y-2">
+              {turn.checkpointEvents.map((item, index) => (
+                <div key={`${item.type}-${item.checkpoint_id}-${index}`} className="flex flex-wrap items-center gap-2">
+                  <span className="rounded-full border border-[var(--color-line)] px-2 py-1 uppercase">
+                    {item.type}
+                  </span>
+                  <span className="mono text-[12px] text-[var(--color-ink-soft)]">
+                    {item.checkpoint_id || "pending checkpoint"}
+                  </span>
+                  {item.type === "interrupted" ? <span>Interrupted before resume</span> : null}
+                  {item.type === "resumed" ? <span>Resumed from checkpoint</span> : null}
+                  {item.type === "created" ? <span>Checkpoint created</span> : null}
+                </div>
+              ))}
+            </div>
+          </div>
+        ) : null}
         {turn.retrievalSteps.length ? <RetrievalCard steps={turn.retrievalSteps} /> : null}
         {turn.toolCalls.length ? <ThoughtChain toolCalls={turn.toolCalls} /> : null}
         {!hasTrace ? (
@@ -76,7 +117,12 @@ const TraceTurnCard = memo(function TraceTurnCard({ turn }: { turn: TraceTurn })
  * Returns one rendered trace page from chat-store inputs and isolates per-turn traces away from the main chat view.
  */
 export function TracePanel() {
-  const { messages, streamingMessages, isStreaming, tokenStats } = useChatStore();
+  const { messages, streamingMessages, isStreaming, tokenStats, checkpoints, resumeCheckpoint } = useChatStore();
+  const { currentSessionId } = useSessionStore();
+  const resumableCheckpoint = useMemo(
+    () => checkpoints.find((item) => item.resume_eligible) ?? null,
+    [checkpoints]
+  );
 
   const turns = useMemo(() => {
     const combined = [...messages, ...streamingMessages];
@@ -96,6 +142,8 @@ export function TracePanel() {
         toolCalls: message.toolCalls,
         retrievalSteps: message.retrievalSteps,
         usage: message.usage,
+        runMeta: message.runMeta,
+        checkpointEvents: message.checkpointEvents,
         streaming: isStreaming && streamingMessages.some((item) => item.id === message.id)
       });
     }
@@ -114,15 +162,27 @@ export function TracePanel() {
             One page just for retrieval and tool traces
           </h2>
         </div>
-        <div className="mono rounded-[20px] border border-[var(--color-line)] bg-[var(--color-bg-soft)] px-4 py-2 text-right text-sm text-[var(--color-ink-soft)]">
-          {tokenStats ? (
-            <div className="space-y-1">
-              <div>{`Model call ${tokenStats.model_call_total_tokens.toLocaleString()} tokens`}</div>
-              <div className="text-[var(--color-ink-muted)]">{`Session trace ${tokenStats.session_trace_tokens.toLocaleString()} tokens`}</div>
-            </div>
-          ) : (
-            "No metrics yet"
-          )}
+        <div className="flex flex-wrap items-center justify-end gap-3">
+          {currentSessionId && resumableCheckpoint ? (
+            <button
+              className="ui-button"
+              disabled={isStreaming}
+              onClick={() => void resumeCheckpoint(resumableCheckpoint.checkpoint_id)}
+              type="button"
+            >
+              {isStreaming ? "Restoring..." : "Resume Latest Checkpoint"}
+            </button>
+          ) : null}
+          <div className="mono rounded-[20px] border border-[var(--color-line)] bg-[var(--color-bg-soft)] px-4 py-2 text-right text-sm text-[var(--color-ink-soft)]">
+            {tokenStats ? (
+              <div className="space-y-1">
+                <div>{`Model call ${tokenStats.model_call_total_tokens.toLocaleString()} tokens`}</div>
+                <div className="text-[var(--color-ink-muted)]">{`Session trace ${tokenStats.session_trace_tokens.toLocaleString()} tokens`}</div>
+              </div>
+            ) : (
+              "No metrics yet"
+            )}
+          </div>
         </div>
       </div>
 

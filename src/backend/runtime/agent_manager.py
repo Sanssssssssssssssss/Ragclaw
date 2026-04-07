@@ -151,10 +151,21 @@ class AgentManager:
             self._harness_runtime = build_harness_runtime(self.base_dir)
         return self._harness_runtime
 
-    def create_harness_executor(self):
+    def create_harness_executor(
+        self,
+        *,
+        resume_checkpoint_id: str = "",
+        resume_thread_id: str = "",
+        resume_source: str = "",
+    ):
         from src.backend.runtime.executors import HarnessExecutors  # pylint: disable=import-outside-toplevel
 
-        return HarnessExecutors(self)
+        return HarnessExecutors(
+            self,
+            resume_checkpoint_id=resume_checkpoint_id,
+            resume_thread_id=resume_thread_id,
+            resume_source=resume_source,
+        )
 
     def create_execution_support(self) -> HarnessExecutionSupport:
         return HarnessExecutionSupport(self)

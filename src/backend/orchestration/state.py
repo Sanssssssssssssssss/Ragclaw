@@ -47,14 +47,15 @@ def create_initial_graph_state(
     *,
     run_id: str,
     session_id: str | None,
+    thread_id: str | None,
     user_message: str,
     history: list[dict[str, Any]],
 ) -> GraphState:
-    thread_id = str(session_id or run_id)
+    resolved_thread_id = str(thread_id or session_id or run_id)
     return GraphState(
         run_id=run_id,
         session_id=session_id,
-        thread_id=thread_id,
+        thread_id=resolved_thread_id,
         user_message=user_message,
         history=list(history),
         augmented_history=list(history),
@@ -72,9 +73,9 @@ def create_initial_graph_state(
         interrupt_request=None,
         error_state=None,
         checkpoint_meta={
-            "thread_id": thread_id,
+            "thread_id": resolved_thread_id,
             "checkpoint_namespace": "harness_langgraph_orchestration_v1",
-            "checkpoint_enabled": False,
+            "checkpoint_enabled": True,
             "graph_version": "phase1",
         },
         path_kind="direct_answer",

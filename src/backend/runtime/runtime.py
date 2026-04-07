@@ -51,6 +51,11 @@ class _RunState:
     tool_names: list[str] = field(default_factory=list)
     retrieval_sources: list[str] = field(default_factory=list)
     segment_index: int = 0
+    thread_id: str | None = None
+    checkpoint_id: str = ""
+    resume_source: str = ""
+    orchestration_engine: str = ""
+    run_status: str = "fresh"
 
     def add_tool(self, tool_name: str) -> None:
         tool = str(tool_name or "").strip()
@@ -82,25 +87,46 @@ class HarnessRuntime:
         user_message: str,
         session_id: str | None = None,
         source: str = "chat_api",
+        thread_id: str | None = None,
+        checkpoint_id: str = "",
+        resume_source: str = "",
+        run_status: str = "fresh",
+        orchestration_engine: str = "langgraph",
     ) -> RuntimeRunHandle:
         metadata = RunMetadata(
             run_id=self._deps.run_id_factory(),
             session_id=session_id,
+            thread_id=thread_id,
             user_message=user_message,
             source=source,
             started_at=self._deps.now_factory(),
+            orchestration_engine=orchestration_engine,
+            checkpoint_id=checkpoint_id,
+            resume_source=resume_source,
+            run_status=run_status,
         )
         paths = self._deps.trace_store.create_run(metadata)
-        self._run_states[metadata.run_id] = _RunState()
+        self._run_states[metadata.run_id] = _RunState(
+            thread_id=thread_id,
+            checkpoint_id=checkpoint_id,
+            resume_source=resume_source,
+            orchestration_engine=orchestration_engine,
+            run_status=run_status,
+        )
         self._run_governors[metadata.run_id] = CapabilityGovernor(self._deps.capability_budget_policy)
         started_event = self.record_event(
             metadata.run_id,
             "run.started",
             {
                 "session_id": session_id,
+                "thread_id": thread_id,
                 "source": source,
                 "user_message": user_message,
                 "started_at": metadata.started_at,
+                "checkpoint_id": checkpoint_id,
+                "resume_source": resume_source,
+                "run_status": run_status,
+                "orchestration_engine": orchestration_engine,
             },
         )
         self._started_events[metadata.run_id] = started_event
@@ -179,6 +205,14 @@ class HarnessRuntime:
             content = str(payload.get("content", "") or "").strip()
             if content:
                 state.final_answer = content
+        elif name == "checkpoint.created":
+            state.checkpoint_id = str(payload.get("checkpoint_id", "") or state.checkpoint_id)
+        elif name == "checkpoint.resumed":
+            state.checkpoint_id = str(payload.get("checkpoint_id", "") or state.checkpoint_id)
+            state.resume_source = str(payload.get("resume_source", "") or state.resume_source)
+            state.run_status = "resumed"
+        elif name == "checkpoint.interrupted":
+            state.checkpoint_id = str(payload.get("checkpoint_id", "") or state.checkpoint_id)
 
     def complete_run(self, handle: RuntimeRunHandle) -> tuple[HarnessEvent, RunOutcome]:
         state = self._state_for(handle)
@@ -191,6 +225,11 @@ class HarnessRuntime:
                 "tool_names": list(state.tool_names),
                 "retrieval_sources": list(state.retrieval_sources),
                 "capability_governance": self.governor_for(handle.run_id).snapshot(),
+                "thread_id": state.thread_id,
+                "checkpoint_id": state.checkpoint_id,
+                "resume_source": state.resume_source,
+                "run_status": state.run_status,
+                "orchestration_engine": state.orchestration_engine,
             },
         )
         outcome = RunOutcome(
@@ -201,6 +240,11 @@ class HarnessRuntime:
             tool_names=tuple(state.tool_names),
             retrieval_sources=tuple(state.retrieval_sources),
             completed_at=self._deps.now_factory(),
+            thread_id=state.thread_id,
+            checkpoint_id=state.checkpoint_id,
+            resume_source=state.resume_source,
+            run_status=state.run_status,
+            orchestration_engine=state.orchestration_engine,
         )
         self._deps.trace_store.finalize_run(handle.run_id, outcome)
         self._run_states.pop(handle.run_id, None)
@@ -220,6 +264,11 @@ class HarnessRuntime:
                 "tool_names": list(state.tool_names),
                 "retrieval_sources": list(state.retrieval_sources),
                 "capability_governance": self.governor_for(handle.run_id).snapshot(),
+                "thread_id": state.thread_id,
+                "checkpoint_id": state.checkpoint_id,
+                "resume_source": state.resume_source,
+                "run_status": state.run_status,
+                "orchestration_engine": state.orchestration_engine,
             },
         )
         outcome = RunOutcome(
@@ -231,6 +280,11 @@ class HarnessRuntime:
             retrieval_sources=tuple(state.retrieval_sources),
             error_message=error_message,
             completed_at=self._deps.now_factory(),
+            thread_id=state.thread_id,
+            checkpoint_id=state.checkpoint_id,
+            resume_source=state.resume_source,
+            run_status=state.run_status,
+            orchestration_engine=state.orchestration_engine,
         )
         self._deps.trace_store.finalize_run(handle.run_id, outcome)
         self._run_states.pop(handle.run_id, None)
@@ -247,8 +301,22 @@ class HarnessRuntime:
         executor,
         history: list[dict[str, Any]] | None = None,
         suppress_failures: bool = False,
+        thread_id: str | None = None,
+        checkpoint_id: str = "",
+        resume_source: str = "",
+        run_status: str = "fresh",
+        orchestration_engine: str = "langgraph",
     ) -> AsyncIterator[HarnessEvent]:
-        handle = self.begin_run(user_message=user_message, session_id=session_id, source=source)
+        handle = self.begin_run(
+            user_message=user_message,
+            session_id=session_id,
+            source=source,
+            thread_id=thread_id,
+            checkpoint_id=checkpoint_id,
+            resume_source=resume_source,
+            run_status=run_status,
+            orchestration_engine=orchestration_engine,
+        )
         event_queue: asyncio.Queue[HarnessEvent | None] = asyncio.Queue()
         self._run_queues[handle.run_id] = event_queue
         started_event = self._started_events.get(handle.run_id)

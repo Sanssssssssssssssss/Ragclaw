@@ -4,6 +4,26 @@ export type ToolCall = {
   output: string;
 };
 
+export type RunStatus = "fresh" | "resumed" | "interrupted" | "restoring";
+
+export type RunMeta = {
+  status: RunStatus;
+  thread_id: string;
+  checkpoint_id: string;
+  resume_source: string;
+  orchestration_engine: string;
+};
+
+export type CheckpointEvent = {
+  type: "created" | "resumed" | "interrupted";
+  checkpoint_id: string;
+  thread_id: string;
+  resume_source: string;
+  state_label: string;
+  created_at: string;
+  orchestration_engine: string;
+};
+
 export type ExecutionPlatform = "windows" | "linux";
 
 export type MessageUsage = {
@@ -56,6 +76,23 @@ export type SessionTokenStats = {
   model_call_total_tokens: number;
 };
 
+export type CheckpointSummary = {
+  checkpoint_id: string;
+  thread_id: string;
+  checkpoint_ns: string;
+  created_at: string;
+  source: string;
+  step: number;
+  run_id: string;
+  session_id: string | null;
+  user_message: string;
+  route_intent: string;
+  final_answer: string;
+  is_latest: boolean;
+  state_label: string;
+  resume_eligible: boolean;
+};
+
 export type SessionHistory = {
   id: string;
   title: string;
@@ -68,6 +105,8 @@ export type SessionHistory = {
     tool_calls?: ToolCall[];
     retrieval_steps?: RetrievalStep[];
     usage?: MessageUsage;
+    run_meta?: RunMeta;
+    checkpoint_events?: CheckpointEvent[];
   }>;
 };
 
@@ -196,6 +235,18 @@ export async function deleteSession(sessionId: string) {
  */
 export async function getSessionHistory(sessionId: string) {
   return request<SessionHistory>(`/sessions/${sessionId}/history`);
+}
+
+export async function listSessionCheckpoints(sessionId: string) {
+  return request<{ session_id: string; thread_id: string; checkpoints: CheckpointSummary[] }>(
+    `/sessions/${sessionId}/checkpoints`
+  );
+}
+
+export async function getSessionCheckpoint(sessionId: string, checkpointId: string) {
+  return request<{ session_id: string; thread_id: string; checkpoint: CheckpointSummary }>(
+    `/sessions/${sessionId}/checkpoints/${checkpointId}`
+  );
 }
 
 /**
@@ -345,6 +396,81 @@ export async function streamChat(
   /**
    * Returns no value from one SSE block string input and dispatches a parsed event to the caller's handler.
    */
+  const flushBlock = (block: string) => {
+    const lines = block.split("\n");
+    let event = "message";
+    const dataLines: string[] = [];
+
+    for (const line of lines) {
+      if (line.startsWith("event:")) {
+        event = line.slice(6).trim();
+      }
+      if (line.startsWith("data:")) {
+        dataLines.push(line.slice(5).trim());
+      }
+    }
+
+    if (!dataLines.length) {
+      return;
+    }
+
+    const data = JSON.parse(dataLines.join("\n")) as Record<string, unknown>;
+    handlers.onEvent(event, data);
+  };
+
+  while (true) {
+    const { value, done } = await reader.read();
+    buffer += decoder.decode(value ?? new Uint8Array(), { stream: !done });
+
+    let boundary = buffer.indexOf("\n\n");
+    while (boundary >= 0) {
+      flushBlock(buffer.slice(0, boundary));
+      buffer = buffer.slice(boundary + 2);
+      boundary = buffer.indexOf("\n\n");
+    }
+
+    if (done) {
+      if (buffer.trim()) {
+        flushBlock(buffer);
+      }
+      break;
+    }
+  }
+}
+
+export async function streamCheckpointResume(
+  payload: {
+    session_id: string;
+    checkpoint_id: string;
+  },
+  handlers: StreamHandlers
+) {
+  const apiBase = getApiBase();
+  let response: Response;
+
+  try {
+    response = await fetch(
+      `${apiBase}/sessions/${encodeURIComponent(payload.session_id)}/checkpoints/${encodeURIComponent(payload.checkpoint_id)}/resume`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({ stream: true })
+      }
+    );
+  } catch (error) {
+    throw buildConnectionError(apiBase, error);
+  }
+
+  if (!response.ok || !response.body) {
+    throw new Error(`Checkpoint resume failed: ${response.status}`);
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+
   const flushBlock = (block: string) => {
     const lines = block.split("\n");
     let event = "message";

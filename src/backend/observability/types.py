@@ -12,6 +12,9 @@ HarnessEventName = Literal[
     "run.started",
     "run.queued",
     "run.dequeued",
+    "checkpoint.created",
+    "checkpoint.resumed",
+    "checkpoint.interrupted",
     "route.decided",
     "skill.decided",
     "capability.started",
@@ -35,6 +38,9 @@ CANONICAL_EVENT_NAMES: tuple[HarnessEventName, ...] = (
     "run.started",
     "run.queued",
     "run.dequeued",
+    "checkpoint.created",
+    "checkpoint.resumed",
+    "checkpoint.interrupted",
     "route.decided",
     "skill.decided",
     "capability.started",
@@ -64,9 +70,14 @@ RetrievalChannel = Literal["memory", "skill", "vector", "bm25", "fused"]
 class RunMetadata:
     run_id: str
     session_id: str | None = None
+    thread_id: str | None = None
     user_message: str = ""
     source: RunSource = "chat_api"
     started_at: str = ""
+    orchestration_engine: str = ""
+    checkpoint_id: str = ""
+    resume_source: str = ""
+    run_status: str = "fresh"
 
     def __post_init__(self) -> None:
         if not self.run_id.strip():
@@ -244,6 +255,11 @@ class RunOutcome:
     retrieval_sources: tuple[str, ...] = ()
     error_message: str = ""
     completed_at: str = ""
+    thread_id: str | None = None
+    orchestration_engine: str = ""
+    checkpoint_id: str = ""
+    resume_source: str = ""
+    run_status: str = "fresh"
 
     def __post_init__(self) -> None:
         if self.status == "failed" and not self.error_message.strip():

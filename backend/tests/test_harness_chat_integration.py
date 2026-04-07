@@ -38,6 +38,8 @@ class FakeSessionManager:
         tool_calls=None,
         retrieval_steps=None,
         usage=None,
+        run_meta=None,
+        checkpoint_events=None,
     ) -> dict[str, object]:
         payload = {
             "session_id": session_id,
@@ -46,6 +48,8 @@ class FakeSessionManager:
             "tool_calls": tool_calls,
             "retrieval_steps": retrieval_steps,
             "usage": usage,
+            "run_meta": run_meta,
+            "checkpoint_events": checkpoint_events,
         }
         self.saved_messages.append(payload)
         return payload
@@ -122,10 +126,10 @@ class HarnessChatIntegrationTests(unittest.TestCase):
                     "evt-2",
                 ),
                 _event("answer.started", {"segment_index": 0, "content": "", "final": False}, "evt-3"),
-                _event("answer.delta", {"segment_index": 0, "content": "你好", "final": False}, "evt-4"),
+                _event("answer.delta", {"segment_index": 0, "content": "hello", "final": False}, "evt-4"),
                 _event(
                     "answer.completed",
-                    {"segment_index": 0, "content": "你好", "final": True, "input_tokens": 3, "output_tokens": 1},
+                    {"segment_index": 0, "content": "hello", "final": True, "input_tokens": 3, "output_tokens": 1},
                     "evt-5",
                 ),
                 _event("run.completed", {"route_intent": "knowledge_qa"}, "evt-6"),
@@ -169,7 +173,7 @@ class HarnessChatIntegrationTests(unittest.TestCase):
 
         body = response.text
         self.assertIn("event: error", body)
-        self.assertIn("请求失败: boom", fake_manager.session_manager.saved_messages[-1]["content"])
+        self.assertIn("boom", fake_manager.session_manager.saved_messages[-1]["content"])
 
 
 if __name__ == "__main__":

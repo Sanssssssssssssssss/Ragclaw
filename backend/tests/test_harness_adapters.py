@@ -44,33 +44,84 @@ class HarnessAdapterTests(unittest.TestCase):
         accumulator = LegacyChatAccumulator()
         outputs = []
         outputs += accumulator.consume(_event("answer.started", {"segment_index": 0, "content": "", "final": False}, "evt-1"))
-        outputs += accumulator.consume(_event("answer.delta", {"segment_index": 0, "content": "你好", "final": False}, "evt-2"))
+        outputs += accumulator.consume(_event("answer.delta", {"segment_index": 0, "content": "hello ", "final": False}, "evt-2"))
         outputs += accumulator.consume(
             _event(
                 "answer.completed",
-                {"segment_index": 0, "content": "你好世界", "final": True, "input_tokens": 3, "output_tokens": 2},
+                {"segment_index": 0, "content": "hello world", "final": True, "input_tokens": 3, "output_tokens": 2},
                 "evt-3",
             )
         )
-        self.assertIn(("token", {"content": "你好"}), outputs)
-        self.assertIn(("done", {"content": "你好世界", "usage": {"input_tokens": 3, "output_tokens": 2}}), outputs)
-        self.assertEqual(accumulator.current_segment["content"], "你好世界")
+        self.assertIn(("token", {"content": "hello "}), outputs)
+        done_payload = next(payload for name, payload in outputs if name == "done")
+        self.assertEqual(done_payload["content"], "hello world")
+        self.assertEqual(done_payload["usage"], {"input_tokens": 3, "output_tokens": 2})
+        self.assertEqual(done_payload["run_meta"], {})
+        self.assertEqual(done_payload["checkpoint_events"], [])
+        self.assertEqual(accumulator.current_segment["content"], "hello world")
 
     def test_segment_index_jump_emits_new_response_once(self) -> None:
         accumulator = LegacyChatAccumulator()
         outputs = []
         outputs += accumulator.consume(_event("answer.started", {"segment_index": 0, "content": "", "final": False}, "evt-1"))
-        outputs += accumulator.consume(_event("answer.delta", {"segment_index": 0, "content": "第一段", "final": False}, "evt-2"))
+        outputs += accumulator.consume(_event("answer.delta", {"segment_index": 0, "content": "first segment", "final": False}, "evt-2"))
         outputs += accumulator.consume(_event("answer.started", {"segment_index": 1, "content": "", "final": False}, "evt-3"))
-        outputs += accumulator.consume(_event("answer.delta", {"segment_index": 1, "content": "第二段", "final": False}, "evt-4"))
+        outputs += accumulator.consume(_event("answer.delta", {"segment_index": 1, "content": "second segment", "final": False}, "evt-4"))
         self.assertEqual([item[0] for item in outputs].count("new_response"), 1)
-        self.assertEqual(accumulator.segments[0]["content"], "第一段")
+        self.assertEqual(accumulator.segments[0]["content"], "first segment")
 
     def test_tool_completion_matches_by_call_id(self) -> None:
         accumulator = LegacyChatAccumulator()
         accumulator.consume(_event("tool.started", {"tool": "terminal", "input": "dir", "call_id": "call-1"}, "evt-1"))
         accumulator.consume(_event("tool.completed", {"tool": "terminal", "input": "dir", "output": "a.txt", "call_id": "call-1"}, "evt-2"))
         self.assertEqual(accumulator.current_segment["tool_calls"][0]["output"], "a.txt")
+
+    def test_checkpoint_events_are_mapped_to_legacy_status_and_markers(self) -> None:
+        accumulator = LegacyChatAccumulator()
+        outputs = []
+        outputs += accumulator.consume(
+            _event(
+                "run.started",
+                {
+                    "run_status": "fresh",
+                    "thread_id": "session-1",
+                    "checkpoint_id": "",
+                    "resume_source": "",
+                    "orchestration_engine": "langgraph",
+                },
+                "evt-1",
+            )
+        )
+        outputs += accumulator.consume(
+            _event(
+                "checkpoint.interrupted",
+                {
+                    "thread_id": "session-1",
+                    "checkpoint_id": "cp-1",
+                    "resume_source": "checkpoint_api",
+                    "orchestration_engine": "langgraph",
+                },
+                "evt-2",
+            )
+        )
+        outputs += accumulator.consume(
+            _event(
+                "checkpoint.resumed",
+                {
+                    "thread_id": "session-1",
+                    "checkpoint_id": "cp-1",
+                    "resume_source": "checkpoint_api",
+                    "orchestration_engine": "langgraph",
+                },
+                "evt-3",
+            )
+        )
+        output_names = [name for name, _payload in outputs]
+        self.assertIn("run_status", output_names)
+        self.assertIn("checkpoint_interrupted", output_names)
+        self.assertIn("checkpoint_resumed", output_names)
+        self.assertEqual(accumulator.run_meta["status"], "resumed")
+        self.assertEqual(accumulator.checkpoint_events[-1]["checkpoint_id"], "cp-1")
 
 
 if __name__ == "__main__":

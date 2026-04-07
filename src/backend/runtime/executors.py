@@ -92,11 +92,24 @@ class RunSummaryState:
 class HarnessExecutors:
     """Thin compatibility adapter around the LangGraph orchestration executor."""
 
-    def __init__(self, agent_manager: "AgentManager") -> None:
+    def __init__(
+        self,
+        agent_manager: "AgentManager",
+        *,
+        resume_checkpoint_id: str = "",
+        resume_thread_id: str = "",
+        resume_source: str = "",
+    ) -> None:
         self._agent = agent_manager
+        self._resume_checkpoint_id = str(resume_checkpoint_id or "")
+        self._resume_thread_id = str(resume_thread_id or "")
+        self._resume_source = str(resume_source or "")
         self._graph_executor = HarnessLangGraphOrchestrator(
             agent_manager,
             execution_support=agent_manager.create_execution_support(),
+            resume_checkpoint_id=self._resume_checkpoint_id,
+            resume_thread_id=self._resume_thread_id,
+            resume_source=self._resume_source,
         )
 
     async def execute(

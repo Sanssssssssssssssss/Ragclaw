@@ -149,6 +149,8 @@ class SessionManager:
         tool_calls: list[dict[str, Any]] | None = None,
         retrieval_steps: list[dict[str, Any]] | None = None,
         usage: dict[str, int] | None = None,
+        run_meta: dict[str, Any] | None = None,
+        checkpoint_events: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
         """Returns one saved message payload from message fields and appends a chat turn to the session record."""
 
@@ -160,6 +162,10 @@ class SessionManager:
             message["retrieval_steps"] = retrieval_steps
         if usage:
             message["usage"] = usage
+        if run_meta:
+            message["run_meta"] = run_meta
+        if checkpoint_events:
+            message["checkpoint_events"] = checkpoint_events
         record["messages"].append(message)
         self._write_session(record)
         return message

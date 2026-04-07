@@ -44,6 +44,21 @@ def _build_runtime_and_executor():
     return runtime, executor
 
 
+def _build_runtime_and_resume_executor(
+    *,
+    checkpoint_id: str,
+    thread_id: str,
+    resume_source: str,
+):
+    runtime = agent_manager.get_harness_runtime()
+    executor = agent_manager.create_harness_executor(
+        resume_checkpoint_id=checkpoint_id,
+        resume_thread_id=thread_id,
+        resume_source=resume_source,
+    )
+    return runtime, executor
+
+
 @router.post("/chat")
 async def chat(payload: ChatRequest):
     session_manager = agent_manager.session_manager
@@ -82,6 +97,9 @@ async def chat(payload: ChatRequest):
                 executor=executor,
                 history=history,
                 suppress_failures=True,
+                thread_id=payload.session_id,
+                run_status="fresh",
+                orchestration_engine="langgraph",
             ):
                 for event_type, data in accumulator.consume(harness_event):
                     yield _sse(event_type, data)

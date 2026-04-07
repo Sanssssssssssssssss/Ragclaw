@@ -14,6 +14,8 @@ import {
 
 import {
   ApiConnectionError,
+  type CheckpointEvent,
+  type CheckpointSummary,
   compressSession,
   createSession,
   deleteSession,
@@ -22,6 +24,7 @@ import {
   getRagMode,
   getSkillRetrieval,
   getSessionHistory,
+  listSessionCheckpoints,
   getSessionTokens,
   listSessions,
   listSkills,
@@ -34,6 +37,9 @@ import {
   setRagMode,
   setSkillRetrieval,
   streamChat,
+  streamCheckpointResume,
+  type RunMeta,
+  type RunStatus,
   type ExecutionPlatform,
   type Evidence,
   type KnowledgeIndexStatus,
@@ -50,6 +56,8 @@ export type Message = {
   toolCalls: ToolCall[];
   retrievalSteps: RetrievalStep[];
   usage: MessageUsage | null;
+  runMeta: RunMeta | null;
+  checkpointEvents: CheckpointEvent[];
 };
 
 const STREAM_TOKEN_FLUSH_MS = 80;
@@ -57,6 +65,7 @@ const STREAM_TOKEN_FLUSH_MS = 80;
 type AppStore = {
   sessions: SessionSummary[];
   currentSessionId: string | null;
+  checkpoints: CheckpointSummary[];
   messages: Message[];
   streamingMessages: Message[];
   messageFeed: Message[];
@@ -79,6 +88,8 @@ type AppStore = {
   retryInitialization: () => Promise<void>;
   selectSession: (sessionId: string) => Promise<void>;
   sendMessage: (value: string) => Promise<void>;
+  resumeCheckpoint: (checkpointId: string) => Promise<void>;
+  refreshCheckpoints: () => Promise<void>;
   toggleRagMode: () => Promise<void>;
   toggleSkillRetrieval: () => Promise<void>;
   updateExecutionPlatform: (platform: ExecutionPlatform) => Promise<void>;
@@ -116,6 +127,7 @@ type SessionStore = Pick<
 type ChatStore = Pick<
   AppStore,
   | "messages"
+  | "checkpoints"
   | "streamingMessages"
   | "isInitializing"
   | "isStreaming"
@@ -123,6 +135,8 @@ type ChatStore = Pick<
   | "tokenStats"
   | "retryInitialization"
   | "sendMessage"
+  | "resumeCheckpoint"
+  | "refreshCheckpoints"
 >;
 
 type FeedStore = Pick<AppStore, "messageFeed">;
@@ -243,6 +257,55 @@ function normalizeUsage(value: unknown): MessageUsage | null {
   };
 }
 
+function normalizeRunStatus(value: unknown): RunStatus {
+  if (
+    value === "fresh" ||
+    value === "resumed" ||
+    value === "interrupted" ||
+    value === "restoring"
+  ) {
+    return value;
+  }
+  return "fresh";
+}
+
+function normalizeRunMeta(value: unknown): RunMeta | null {
+  if (!value || typeof value !== "object") {
+    return null;
+  }
+
+  const item = value as Record<string, unknown>;
+  return {
+    status: normalizeRunStatus(item.status),
+    thread_id: String(item.thread_id ?? ""),
+    checkpoint_id: String(item.checkpoint_id ?? ""),
+    resume_source: String(item.resume_source ?? ""),
+    orchestration_engine: String(item.orchestration_engine ?? "")
+  };
+}
+
+function normalizeCheckpointEvent(value: unknown): CheckpointEvent | null {
+  if (!value || typeof value !== "object") {
+    return null;
+  }
+
+  const item = value as Record<string, unknown>;
+  const type = item.type;
+  if (type !== "created" && type !== "resumed" && type !== "interrupted") {
+    return null;
+  }
+
+  return {
+    type,
+    checkpoint_id: String(item.checkpoint_id ?? ""),
+    thread_id: String(item.thread_id ?? ""),
+    resume_source: String(item.resume_source ?? ""),
+    state_label: String(item.state_label ?? ""),
+    created_at: String(item.created_at ?? ""),
+    orchestration_engine: String(item.orchestration_engine ?? "")
+  };
+}
+
 /**
  * Returns one frontend message list from backend history input and converts API history into UI-friendly message objects.
  */
@@ -255,7 +318,11 @@ function toUiMessages(history: Awaited<ReturnType<typeof getSessionHistory>>["me
     retrievalSteps: (message.retrieval_steps ?? [])
       .map((step) => normalizeRetrievalStep(step))
       .filter((step): step is RetrievalStep => step !== null),
-    usage: normalizeUsage(message.usage)
+    usage: normalizeUsage(message.usage),
+    runMeta: normalizeRunMeta(message.run_meta),
+    checkpointEvents: (message.checkpoint_events ?? [])
+      .map((item) => normalizeCheckpointEvent(item))
+      .filter((item): item is CheckpointEvent => item !== null)
   }));
 }
 
@@ -314,6 +381,7 @@ function buildMessageFeed(messages: Message[]) {
 export function AppProvider({ children }: { children: ReactNode }) {
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
   const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
+  const [checkpoints, setCheckpoints] = useState<CheckpointSummary[]>([]);
   const [messages, setMessages] = useState<Message[]>([]);
   const [streamingMessagesState, setStreamingMessagesState] = useState<Message[]>([]);
   const [messageFeed, setMessageFeed] = useState<Message[]>([]);
@@ -364,6 +432,16 @@ export function AppProvider({ children }: { children: ReactNode }) {
     setSessions(await listSessions());
   }, []);
 
+  const refreshCheckpoints = useCallback(async function refreshCheckpoints(sessionId?: string | null) {
+    const resolvedSessionId = sessionId ?? currentSessionId;
+    if (!resolvedSessionId) {
+      setCheckpoints([]);
+      return;
+    }
+    const payload = await listSessionCheckpoints(resolvedSessionId);
+    setCheckpoints(payload.checkpoints);
+  }, [currentSessionId]);
+
   /**
    * Returns no value from no inputs and refreshes editable skill metadata for the inspector.
    */
@@ -382,12 +460,17 @@ export function AppProvider({ children }: { children: ReactNode }) {
    * Returns no value from a session id input and refreshes both message history and aggregate token stats.
    */
   const refreshSessionDetails = useCallback(async function refreshSessionDetails(sessionId: string) {
-    const [history, tokens] = await Promise.all([getSessionHistory(sessionId), getSessionTokens(sessionId)]);
+    const [history, tokens, checkpointPayload] = await Promise.all([
+      getSessionHistory(sessionId),
+      getSessionTokens(sessionId),
+      listSessionCheckpoints(sessionId)
+    ]);
     const nextMessages = toUiMessages(history.messages);
     setMessages(nextMessages);
     setStreamingMessages([]);
     setMessageFeed(buildMessageFeed(nextMessages));
     setTokenStats(tokens);
+    setCheckpoints(checkpointPayload.checkpoints);
   }, [setStreamingMessages]);
 
   /**
@@ -426,6 +509,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       setMessages([]);
       setStreamingMessages([]);
       setMessageFeed([]);
+      setCheckpoints([]);
       setTokenStats(null);
     });
   }, [refreshSessions, runUserAction, setStreamingMessages]);
@@ -472,7 +556,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
       content: value.trim(),
       toolCalls: [],
       retrievalSteps: [],
-      usage: null
+      usage: null,
+      runMeta: null,
+      checkpointEvents: []
     };
     const assistantMessage: Message = {
       id: makeId(),
@@ -480,10 +566,19 @@ export function AppProvider({ children }: { children: ReactNode }) {
       content: "",
       toolCalls: [],
       retrievalSteps: [],
-      usage: null
+      usage: null,
+      runMeta: {
+        status: "fresh",
+        thread_id: currentSessionId ?? "",
+        checkpoint_id: "",
+        resume_source: "",
+        orchestration_engine: "langgraph"
+      },
+      checkpointEvents: []
     };
 
     let activeAssistantIndex = -1;
+    let activeRunMeta: RunMeta | null = assistantMessage.runMeta;
 
     setMessages((prev) => [...prev, userMessage]);
     setStreamingMessages(() => {
@@ -594,6 +689,88 @@ export function AppProvider({ children }: { children: ReactNode }) {
               return;
             }
 
+            if (event === "run_status") {
+              const nextMeta = normalizeRunMeta(data);
+              if (!nextMeta) {
+                return;
+              }
+              activeRunMeta = nextMeta;
+              patchAssistant((message) => ({
+                ...message,
+                runMeta: nextMeta
+              }));
+              return;
+            }
+
+            if (
+              event === "checkpoint_created" ||
+              event === "checkpoint_resumed" ||
+              event === "checkpoint_interrupted"
+            ) {
+              const checkpointEvent = normalizeCheckpointEvent({
+                ...data,
+                type:
+                  event === "checkpoint_created"
+                    ? "created"
+                    : event === "checkpoint_resumed"
+                      ? "resumed"
+                      : "interrupted"
+              });
+              if (!checkpointEvent) {
+                return;
+              }
+              patchAssistant((message) => ({
+                ...message,
+                checkpointEvents: [...message.checkpointEvents, checkpointEvent],
+                runMeta:
+                  event === "checkpoint_interrupted"
+                    ? {
+                        ...(message.runMeta ?? {
+                          status: "fresh" as RunStatus,
+                          thread_id: "",
+                          checkpoint_id: "",
+                          resume_source: "",
+                          orchestration_engine: "langgraph"
+                        }),
+                        status: "interrupted",
+                        checkpoint_id: checkpointEvent.checkpoint_id,
+                        thread_id: checkpointEvent.thread_id || message.runMeta?.thread_id || "",
+                        resume_source: checkpointEvent.resume_source || message.runMeta?.resume_source || "",
+                        orchestration_engine:
+                          checkpointEvent.orchestration_engine || message.runMeta?.orchestration_engine || "langgraph"
+                      }
+                    : {
+                        ...(message.runMeta ?? {
+                          status: "fresh" as RunStatus,
+                          thread_id: "",
+                          checkpoint_id: "",
+                          resume_source: "",
+                          orchestration_engine: "langgraph"
+                        }),
+                        checkpoint_id: checkpointEvent.checkpoint_id,
+                        thread_id: checkpointEvent.thread_id || message.runMeta?.thread_id || "",
+                        resume_source: checkpointEvent.resume_source || message.runMeta?.resume_source || "",
+                        orchestration_engine:
+                          checkpointEvent.orchestration_engine || message.runMeta?.orchestration_engine || "langgraph"
+                      }
+              }));
+              activeRunMeta = {
+                ...(activeRunMeta ?? {
+                  status: "fresh",
+                  thread_id: "",
+                  checkpoint_id: "",
+                  resume_source: "",
+                  orchestration_engine: "langgraph"
+                }),
+                status: event === "checkpoint_interrupted" ? "interrupted" : activeRunMeta?.status ?? "fresh",
+                checkpoint_id: checkpointEvent.checkpoint_id,
+                thread_id: checkpointEvent.thread_id || activeRunMeta?.thread_id || "",
+                resume_source: checkpointEvent.resume_source || activeRunMeta?.resume_source || "",
+                orchestration_engine: checkpointEvent.orchestration_engine || activeRunMeta?.orchestration_engine || "langgraph"
+              };
+              return;
+            }
+
             if (event === "new_response") {
               flushTokenBuffer();
               const nextAssistant: Message = {
@@ -602,7 +779,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
                 content: "",
                 toolCalls: [],
                 retrievalSteps: [],
-                usage: null
+                usage: null,
+                runMeta: activeRunMeta,
+                checkpointEvents: []
               };
               activeAssistantId = nextAssistant.id;
               setStreamingMessages((previous) => {
@@ -628,6 +807,25 @@ export function AppProvider({ children }: { children: ReactNode }) {
                 patchAssistant((message) => ({
                   ...message,
                   usage
+                }));
+              }
+              const runMeta = normalizeRunMeta(data.run_meta);
+              if (runMeta) {
+                activeRunMeta = runMeta;
+                patchAssistant((message) => ({
+                  ...message,
+                  runMeta
+                }));
+              }
+              const checkpointEvents = Array.isArray(data.checkpoint_events)
+                ? data.checkpoint_events
+                    .map((item) => normalizeCheckpointEvent(item))
+                    .filter((item): item is CheckpointEvent => item !== null)
+                : [];
+              if (checkpointEvents.length) {
+                patchAssistant((message) => ({
+                  ...message,
+                  checkpointEvents
                 }));
               }
               return;
@@ -683,12 +881,307 @@ export function AppProvider({ children }: { children: ReactNode }) {
       try {
         await refreshSessions();
         await refreshSessionTokens(sessionId);
+        await refreshCheckpoints(sessionId);
         setConnectionError(null);
       } catch (error) {
         setConnectionError(toErrorMessage(error));
       }
     }
-  }, [currentSessionId, ensureSession, isStreaming, refreshSessionTokens, refreshSessions, setStreamingMessages]);
+  }, [currentSessionId, ensureSession, isStreaming, refreshCheckpoints, refreshSessionTokens, refreshSessions, setStreamingMessages]);
+
+  const resumeCheckpoint = useCallback(async function resumeCheckpoint(checkpointId: string) {
+    if (!currentSessionId || !checkpointId || isStreaming) {
+      return;
+    }
+
+    const assistantMessage: Message = {
+      id: makeId(),
+      role: "assistant",
+      content: "",
+      toolCalls: [],
+      retrievalSteps: [],
+      usage: null,
+      runMeta: {
+        status: "restoring",
+        thread_id: currentSessionId,
+        checkpoint_id: checkpointId,
+        resume_source: "checkpoint_api",
+        orchestration_engine: "langgraph"
+      },
+      checkpointEvents: []
+    };
+
+    let activeAssistantIndex = -1;
+    let activeRunMeta: RunMeta | null = assistantMessage.runMeta;
+    setStreamingMessages(() => {
+      activeAssistantIndex = 0;
+      return [assistantMessage];
+    });
+    setIsStreaming(true);
+    setConnectionError(null);
+
+    let activeAssistantId = assistantMessage.id;
+    let pendingTokenBuffer = "";
+    let tokenFlushHandle: number | null = null;
+
+    const patchAssistant = (updater: (message: Message) => Message) => {
+      setStreamingMessages((previous) =>
+        updateMessageAtPosition(previous, activeAssistantIndex, activeAssistantId, updater)
+      );
+    };
+
+    const flushTokenBuffer = () => {
+      if (!pendingTokenBuffer) {
+        tokenFlushHandle = null;
+        return;
+      }
+
+      const nextChunk = pendingTokenBuffer;
+      pendingTokenBuffer = "";
+      tokenFlushHandle = null;
+
+      startTransition(() => {
+        patchAssistant((message) => ({
+          ...message,
+          content: `${message.content}${nextChunk}`
+        }));
+      });
+    };
+
+    const scheduleTokenFlush = () => {
+      if (tokenFlushHandle !== null) {
+        return;
+      }
+
+      tokenFlushHandle = window.setTimeout(() => {
+        flushTokenBuffer();
+      }, STREAM_TOKEN_FLUSH_MS);
+    };
+
+    try {
+      await streamCheckpointResume(
+        { session_id: currentSessionId, checkpoint_id: checkpointId },
+        {
+          onEvent(event, data) {
+            if (event === "retrieval") {
+              const step = normalizeRetrievalStep(data);
+              if (!step) {
+                return;
+              }
+              patchAssistant((message) => ({
+                ...message,
+                retrievalSteps: [...message.retrievalSteps, step]
+              }));
+              return;
+            }
+
+            if (event === "token") {
+              pendingTokenBuffer += String(data.content ?? "");
+              scheduleTokenFlush();
+              return;
+            }
+
+            if (event === "tool_start") {
+              flushTokenBuffer();
+              patchAssistant((message) => ({
+                ...message,
+                toolCalls: [
+                  ...message.toolCalls,
+                  {
+                    tool: String(data.tool ?? "tool"),
+                    input: String(data.input ?? ""),
+                    output: ""
+                  }
+                ]
+              }));
+              return;
+            }
+
+            if (event === "tool_end") {
+              flushTokenBuffer();
+              patchAssistant((message) => ({
+                ...message,
+                toolCalls: message.toolCalls.map((toolCall, index, list) =>
+                  index === list.length - 1
+                    ? { ...toolCall, output: String(data.output ?? "") }
+                    : toolCall
+                )
+              }));
+              return;
+            }
+
+            if (event === "run_status") {
+              const nextMeta = normalizeRunMeta(data);
+              if (!nextMeta) {
+                return;
+              }
+              activeRunMeta = nextMeta;
+              patchAssistant((message) => ({
+                ...message,
+                runMeta: nextMeta
+              }));
+              return;
+            }
+
+            if (
+              event === "checkpoint_created" ||
+              event === "checkpoint_resumed" ||
+              event === "checkpoint_interrupted"
+            ) {
+              const checkpointEvent = normalizeCheckpointEvent({
+                ...data,
+                type:
+                  event === "checkpoint_created"
+                    ? "created"
+                    : event === "checkpoint_resumed"
+                      ? "resumed"
+                      : "interrupted"
+              });
+              if (!checkpointEvent) {
+                return;
+              }
+              patchAssistant((message) => ({
+                ...message,
+                checkpointEvents: [...message.checkpointEvents, checkpointEvent],
+                runMeta:
+                  event === "checkpoint_interrupted"
+                    ? {
+                        ...(message.runMeta ?? assistantMessage.runMeta!),
+                        status: "interrupted",
+                        checkpoint_id: checkpointEvent.checkpoint_id,
+                        thread_id: checkpointEvent.thread_id || message.runMeta?.thread_id || currentSessionId,
+                        resume_source: checkpointEvent.resume_source || message.runMeta?.resume_source || "checkpoint_api",
+                        orchestration_engine:
+                          checkpointEvent.orchestration_engine || message.runMeta?.orchestration_engine || "langgraph"
+                      }
+                    : {
+                        ...(message.runMeta ?? assistantMessage.runMeta!),
+                        checkpoint_id: checkpointEvent.checkpoint_id,
+                        thread_id: checkpointEvent.thread_id || message.runMeta?.thread_id || currentSessionId,
+                        resume_source: checkpointEvent.resume_source || message.runMeta?.resume_source || "checkpoint_api",
+                        orchestration_engine:
+                          checkpointEvent.orchestration_engine || message.runMeta?.orchestration_engine || "langgraph"
+                      }
+              }));
+              activeRunMeta = {
+                ...(activeRunMeta ?? assistantMessage.runMeta!),
+                status: event === "checkpoint_interrupted" ? "interrupted" : activeRunMeta?.status ?? "restoring",
+                checkpoint_id: checkpointEvent.checkpoint_id,
+                thread_id: checkpointEvent.thread_id || activeRunMeta?.thread_id || currentSessionId,
+                resume_source: checkpointEvent.resume_source || activeRunMeta?.resume_source || "checkpoint_api",
+                orchestration_engine:
+                  checkpointEvent.orchestration_engine || activeRunMeta?.orchestration_engine || "langgraph"
+              };
+              return;
+            }
+
+            if (event === "new_response") {
+              flushTokenBuffer();
+              const nextAssistant: Message = {
+                id: makeId(),
+                role: "assistant",
+                content: "",
+                toolCalls: [],
+                retrievalSteps: [],
+                usage: null,
+                runMeta: activeRunMeta,
+                checkpointEvents: []
+              };
+              activeAssistantId = nextAssistant.id;
+              setStreamingMessages((previous) => {
+                activeAssistantIndex = previous.length;
+                return [...previous, nextAssistant];
+              });
+              return;
+            }
+
+            if (event === "done") {
+              flushTokenBuffer();
+              const finalContent = String(data.content ?? "");
+              patchAssistant((message) =>
+                message.content
+                  ? message
+                  : {
+                      ...message,
+                      content: finalContent
+                    }
+              );
+              const usage = normalizeUsage(data.usage);
+              if (usage) {
+                patchAssistant((message) => ({
+                  ...message,
+                  usage
+                }));
+              }
+              const runMeta = normalizeRunMeta(data.run_meta);
+              if (runMeta) {
+                activeRunMeta = runMeta;
+                patchAssistant((message) => ({
+                  ...message,
+                  runMeta
+                }));
+              }
+              const checkpointEvents = Array.isArray(data.checkpoint_events)
+                ? data.checkpoint_events
+                    .map((item) => normalizeCheckpointEvent(item))
+                    .filter((item): item is CheckpointEvent => item !== null)
+                : [];
+              if (checkpointEvents.length) {
+                patchAssistant((message) => ({
+                  ...message,
+                  checkpointEvents
+                }));
+              }
+              return;
+            }
+
+            if (event === "error") {
+              flushTokenBuffer();
+              patchAssistant((message) => ({
+                ...message,
+                content: message.content || `Request failed: ${String(data.error ?? "unknown error")}`
+              }));
+            }
+          }
+        }
+      );
+      setConnectionError(null);
+    } catch (error) {
+      if (tokenFlushHandle !== null) {
+        window.clearTimeout(tokenFlushHandle);
+        tokenFlushHandle = null;
+      }
+      flushTokenBuffer();
+      const errorMessage = toErrorMessage(error);
+      setConnectionError(errorMessage);
+      patchAssistant((message) => ({
+        ...message,
+        content: message.content || `Request failed: ${errorMessage}`
+      }));
+    } finally {
+      setIsStreaming(false);
+
+      if (tokenFlushHandle !== null) {
+        window.clearTimeout(tokenFlushHandle);
+        tokenFlushHandle = null;
+      }
+      flushTokenBuffer();
+
+      if (streamingMessagesRef.current.length) {
+        const finalizedMessages = streamingMessagesRef.current;
+        setMessages((previous) => [...previous, ...finalizedMessages]);
+        setStreamingMessages([]);
+      }
+
+      try {
+        await refreshSessions();
+        await refreshSessionDetails(currentSessionId);
+        setConnectionError(null);
+      } catch (error) {
+        setConnectionError(toErrorMessage(error));
+      }
+    }
+  }, [currentSessionId, isStreaming, refreshSessionDetails, refreshSessions, setStreamingMessages]);
 
   /**
    * Returns no value from no inputs and flips the memory-retrieval mode while preserving rollback on failure.
@@ -769,6 +1262,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
           await refreshSessionDetails(nextSessions[0].id);
         } else {
           setCurrentSessionId(null);
+          setCheckpoints([]);
           setMessages([]);
           setStreamingMessages([]);
           setMessageFeed([]);
@@ -870,6 +1364,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         const created = await createSession();
         setCurrentSessionId(created.id);
         setSessions([created]);
+        setCheckpoints([]);
       }
 
       const file = await loadFile("memory/MEMORY.md");
@@ -881,6 +1376,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       setConnectionError(toErrorMessage(error));
       setSessions([]);
       setCurrentSessionId(null);
+      setCheckpoints([]);
       setMessages([]);
       setStreamingMessages([]);
       setMessageFeed([]);
@@ -961,23 +1457,29 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const chatValue = useMemo<ChatStore>(
     () => ({
       messages,
+      checkpoints,
       streamingMessages: streamingMessagesState,
       isInitializing,
       isStreaming,
       connectionError,
       tokenStats,
       retryInitialization,
-      sendMessage
+      sendMessage,
+      resumeCheckpoint,
+      refreshCheckpoints
     }),
     [
       messages,
+      checkpoints,
       streamingMessagesState,
       isInitializing,
       isStreaming,
       connectionError,
       tokenStats,
       retryInitialization,
-      sendMessage
+      sendMessage,
+      resumeCheckpoint,
+      refreshCheckpoints
     ]
   );
 

@@ -219,6 +219,16 @@
         }
       ],
       "tags": ["smoke", "mcp", "web"]
+    },
+    {
+      "case_id": "live_resume_direct_answer",
+      "scenario": "resume",
+      "message": "Resume this direct-answer run from a checkpoint and finish it.",
+      "expect_route": "direct_answer",
+      "expect_final_contains": ["resumed live answer"],
+      "model_answer": "resumed live answer",
+      "expect_resume": true,
+      "tags": ["smoke", "resume"]
     }
   ]
 }

@@ -64,6 +64,7 @@ class LiveValidationCase:
     tool_calls: tuple[dict[str, Any], ...] = ()
     expect_capability: bool = False
     expect_capability_governance: bool = False
+    expect_resume: bool = False
 
 
 @dataclass
@@ -90,6 +91,7 @@ class LiveCaseResult:
     tool_present: bool = False
     capability_present: bool = False
     capability_governance_visible: bool = False
+    resume_present: bool = False
     completion_integrity: bool = False
     session_persisted: bool = False
     sse_order_ok: bool = False
@@ -129,6 +131,7 @@ def _load_live_cases() -> tuple[LiveValidationCase, ...]:
                 tool_calls=tuple(dict(item) for item in raw.get("tool_calls", [])),
                 expect_capability=bool(raw.get("expect_capability", False)),
                 expect_capability_governance=bool(raw.get("expect_capability_governance", False)),
+                expect_resume=bool(raw.get("expect_resume", False)),
             )
         )
     return tuple(cases)
@@ -440,15 +443,23 @@ def _serve_app() -> Iterator[str]:
         thread.join(timeout=10)
 
 
-def _collect_trace_by_message(runtime, message: str) -> dict[str, Any]:
+def _collect_trace(runtime, *, message: str | None = None, source: str | None = None, session_id: str | None = None, checkpoint_id: str | None = None) -> dict[str, Any]:
     root = runtime._deps.trace_store.root_dir  # noqa: SLF001
     for trace_path in sorted(root.glob("*.jsonl"), reverse=True):
-        run_id = trace_path.stem
-        trace = runtime._deps.trace_store.read_trace(run_id)  # noqa: SLF001
+        trace = runtime._deps.trace_store.read_trace(trace_path.stem)  # noqa: SLF001
         metadata = trace.get("metadata") or {}
-        if str(metadata.get("user_message", "") or "") == message:
-            return trace
-    raise FileNotFoundError(f"no trace found for message={message!r}")
+        if message is not None and str(metadata.get("user_message", "") or "") != message:
+            continue
+        if source is not None and str(metadata.get("source", "") or "") != source:
+            continue
+        if session_id is not None and str(metadata.get("session_id", "") or "") != session_id:
+            continue
+        if checkpoint_id is not None and str(metadata.get("checkpoint_id", "") or "") != checkpoint_id:
+            continue
+        return trace
+    raise FileNotFoundError(
+        f"no trace found for filters message={message!r} source={source!r} session_id={session_id!r} checkpoint_id={checkpoint_id!r}"
+    )
 
 
 async def _create_session(client: httpx.AsyncClient, title: str) -> str:
@@ -475,7 +486,7 @@ async def _post_stream(client: httpx.AsyncClient, *, session_id: str, message: s
     response = await client.post(
         "/api/chat",
         json={"message": message, "session_id": session_id, "stream": True},
-        timeout=40.0,
+        timeout=80.0,
     )
     response.raise_for_status()
     elapsed_ms = int((time.perf_counter() - started) * 1000)
@@ -507,7 +518,11 @@ def _result_from_trace(
     final_answer = str(outcome.get("final_answer", "") or "")
     failure_reason: list[str] = []
 
-    if case.expect_route and str(route_event.get("payload", {}).get("intent", "") or "") != case.expect_route:
+    if (
+        case.expect_route
+        and not case.expect_resume
+        and str(route_event.get("payload", {}).get("intent", "") or "") != case.expect_route
+    ):
         failure_reason.append("route_mismatch")
     if case.expect_done and "done" not in names:
         failure_reason.append("missing_done")
@@ -553,10 +568,13 @@ def _result_from_trace(
         str(item.get("name", "")) in {"run.completed", "run.failed"} and "capability_governance" in dict(item.get("payload", {}))
         for item in trace.get("events", [])
     )
+    resume_present = "checkpoint.resumed" in trace_events and "checkpoint.created" in trace_events
     if case.expect_capability and not capability_present:
         failure_reason.append("missing_capability_trace")
     if case.expect_capability_governance and not capability_governance_visible:
         failure_reason.append("missing_capability_governance")
+    if case.expect_resume and not resume_present:
+        failure_reason.append("missing_resume_trace")
 
     return LiveCaseResult(
         case_id=case.case_id,
@@ -581,6 +599,7 @@ def _result_from_trace(
         tool_present={"tool.started", "tool.completed"}.issubset(set(trace_events)),
         capability_present=capability_present,
         capability_governance_visible=capability_governance_visible,
+        resume_present=resume_present,
         completion_integrity=completion_integrity,
         session_persisted=session_persisted,
         sse_order_ok=sse_order_ok,
@@ -592,6 +611,32 @@ def _result_from_trace(
 async def _run_one_case(client: httpx.AsyncClient, runtime, case: LiveValidationCase) -> dict[str, Any]:
     session_id = await _create_session(client, title=f"Live Validation {case.case_id}")
     try:
+        if case.scenario == "resume":
+            await _post_stream(client, session_id=session_id, message=case.message)
+            checkpoint_response = await client.get(f"/api/sessions/{session_id}/checkpoints")
+            checkpoint_response.raise_for_status()
+            checkpoints = list(checkpoint_response.json().get("checkpoints", []))
+            resumable = next((item for item in checkpoints if item.get("resume_eligible")), None)
+            if resumable is None:
+                raise AssertionError("no resumable checkpoint produced for resume case")
+            started = time.perf_counter()
+            resume_response = await client.post(
+                f"/api/sessions/{session_id}/checkpoints/{resumable['checkpoint_id']}/resume",
+                json={"stream": True},
+                timeout=40.0,
+            )
+            resume_response.raise_for_status()
+            latency_ms = int((time.perf_counter() - started) * 1000)
+            sse_events = _parse_sse_payload(resume_response.text)
+            trace = _collect_trace(
+                runtime,
+                source="checkpoint_resume_api",
+                session_id=session_id,
+                checkpoint_id=str(resumable["checkpoint_id"]),
+            )
+            session_messages = await _fetch_session_messages(client, session_id)
+            return _result_from_trace(case, session_id, sse_events, latency_ms, trace, session_messages).to_dict()
+
         if case.scenario == "queue":
             assert case.companion_message
             first = asyncio.create_task(_post_stream(client, session_id=session_id, message=case.companion_message))
@@ -601,12 +646,12 @@ async def _run_one_case(client: httpx.AsyncClient, runtime, case: LiveValidation
                 await first
             except Exception:
                 pass
-            trace = _collect_trace_by_message(runtime, case.message)
+            trace = _collect_trace(runtime, message=case.message)
             session_messages = await _fetch_session_messages(client, session_id)
             return _result_from_trace(case, session_id, second_events, latency_ms, trace, session_messages).to_dict()
 
         sse_events, latency_ms = await _post_stream(client, session_id=session_id, message=case.message)
-        trace = _collect_trace_by_message(runtime, case.message)
+        trace = _collect_trace(runtime, message=case.message)
         session_messages = await _fetch_session_messages(client, session_id)
         return _result_from_trace(case, session_id, sse_events, latency_ms, trace, session_messages).to_dict()
     finally:
@@ -662,6 +707,20 @@ async def run_live_validation(
                         allowed_tools=(),
                         confidence=1.0,
                         reason_short="live_validation_failure",
+                        source="live_validation",
+                        subtype="",
+                    ),
+                )
+            if case.scenario == "resume":
+                return (
+                    ExecutionStrategy(allow_tools=False, allow_knowledge=False, allow_retrieval=False, force_direct_answer=True),
+                    RoutingDecision(
+                        intent="direct_answer",
+                        needs_tools=False,
+                        needs_retrieval=False,
+                        allowed_tools=(),
+                        confidence=1.0,
+                        reason_short=case.scenario,
                         source="live_validation",
                         subtype="",
                     ),

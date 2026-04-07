@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from langgraph.graph import END, StateGraph
 
+from src.backend.orchestration.checkpointing import checkpoint_store
 from src.backend.orchestration.edges import branch_after_capability_selection, branch_after_memory
 from src.backend.orchestration.nodes import (
     build_bootstrap_node,
@@ -66,4 +67,4 @@ def compile_harness_orchestration_graph(orchestrator):
     graph.add_edge("capability_guard", "finalize")
     graph.add_edge("direct_answer", "finalize")
     graph.add_edge("finalize", END)
-    return graph.compile()
+    return graph.compile(checkpointer=checkpoint_store.saver)
