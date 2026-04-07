@@ -15,6 +15,13 @@ def build_capability_invoke_node(orchestrator):
     return _node
 
 
+def build_capability_approval_node(orchestrator):
+    async def _node(state):
+        return await orchestrator.capability_approval_node(state)
+
+    return _node
+
+
 def build_capability_synthesis_node(orchestrator):
     async def _node(state):
         return await orchestrator.capability_synthesis_node(state)

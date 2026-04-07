@@ -31,6 +31,7 @@ from src.backend.capabilities import build_tools_and_registry
 from src.backend.decision.execution_strategy import ExecutionStrategy
 from src.backend.decision.lightweight_router import RoutingDecision
 from src.backend.knowledge.types import Evidence, OrchestratedRetrievalResult, RetrievalStep
+from src.backend.orchestration.checkpointing import checkpoint_store
 from src.backend.runtime.agent_manager import agent_manager
 from src.backend.runtime.execution_support import HarnessExecutionSupport
 from src.backend.runtime.runtime import build_harness_runtime
@@ -462,6 +463,35 @@ def _collect_trace(runtime, *, message: str | None = None, source: str | None = 
     )
 
 
+def _merge_traces(*traces: dict[str, Any]) -> dict[str, Any]:
+    materialized = [trace for trace in traces if trace]
+    if not materialized:
+        raise ValueError("at least one trace is required")
+    merged = dict(materialized[-1])
+    merged["events"] = [
+        dict(event)
+        for trace in materialized
+        for event in list(trace.get("events", []) or [])
+    ]
+    first_metadata = dict(materialized[0].get("metadata", {}) or {})
+    last_metadata = dict(materialized[-1].get("metadata", {}) or {})
+    merged["metadata"] = {
+        **first_metadata,
+        "run_id": str(last_metadata.get("run_id", "") or first_metadata.get("run_id", "") or ""),
+        "source": str(last_metadata.get("source", "") or first_metadata.get("source", "") or ""),
+        "checkpoint_id": str(last_metadata.get("checkpoint_id", "") or first_metadata.get("checkpoint_id", "") or ""),
+        "resume_source": str(last_metadata.get("resume_source", "") or first_metadata.get("resume_source", "") or ""),
+    }
+    merged_outcome = dict(materialized[0].get("outcome", {}) or {})
+    for trace in materialized[1:]:
+        current_outcome = dict(trace.get("outcome", {}) or {})
+        for key, value in current_outcome.items():
+            if value not in ("", None, [], {}, ()):
+                merged_outcome[key] = value
+    merged["outcome"] = merged_outcome
+    return merged
+
+
 async def _create_session(client: httpx.AsyncClient, title: str) -> str:
     response = await client.post("/api/sessions", json={"title": title})
     response.raise_for_status()
@@ -611,6 +641,42 @@ def _result_from_trace(
 async def _run_one_case(client: httpx.AsyncClient, runtime, case: LiveValidationCase) -> dict[str, Any]:
     session_id = await _create_session(client, title=f"Live Validation {case.case_id}")
     try:
+        if case.scenario.startswith("hitl_"):
+            initial_events, initial_latency_ms = await _post_stream(client, session_id=session_id, message=case.message)
+            pending_response = await client.get(f"/api/sessions/{session_id}/hitl")
+            pending_response.raise_for_status()
+            pending = dict(pending_response.json().get("pending_interrupt") or {})
+            checkpoint_id = str(pending.get("checkpoint_id", "") or "")
+            if not checkpoint_id:
+                raise AssertionError("no pending HITL checkpoint produced for live HITL case")
+            decision = "reject" if "reject" in case.scenario else "approve"
+            started = time.perf_counter()
+            resume_response = await client.post(
+                f"/api/sessions/{session_id}/hitl/{checkpoint_id}/decision",
+                json={"decision": decision, "stream": True},
+                timeout=40.0,
+            )
+            resume_response.raise_for_status()
+            resume_latency_ms = int((time.perf_counter() - started) * 1000)
+            resumed_events = _parse_sse_payload(resume_response.text)
+            initial_trace = _collect_trace(runtime, message=case.message)
+            resumed_trace = _collect_trace(
+                runtime,
+                source="hitl_api",
+                session_id=session_id,
+                checkpoint_id=checkpoint_id,
+            )
+            session_messages = await _fetch_session_messages(client, session_id)
+            merged_trace = _merge_traces(initial_trace, resumed_trace)
+            return _result_from_trace(
+                case,
+                session_id,
+                initial_events + resumed_events,
+                initial_latency_ms + resume_latency_ms,
+                merged_trace,
+                session_messages,
+            ).to_dict()
+
         if case.scenario == "resume":
             await _post_stream(client, session_id=session_id, message=case.message)
             checkpoint_response = await client.get(f"/api/sessions/{session_id}/checkpoints")
@@ -630,7 +696,7 @@ async def _run_one_case(client: httpx.AsyncClient, runtime, case: LiveValidation
             sse_events = _parse_sse_payload(resume_response.text)
             trace = _collect_trace(
                 runtime,
-                source="checkpoint_resume_api",
+                source="checkpoint_api",
                 session_id=session_id,
                 checkpoint_id=str(resumable["checkpoint_id"]),
             )
@@ -755,6 +821,25 @@ async def run_live_validation(
                     ExecutionStrategy(allow_tools=True, allow_knowledge=False, allow_retrieval=False),
                     RoutingDecision(
                         intent="web_lookup",
+                        needs_tools=True,
+                        needs_retrieval=False,
+                        allowed_tools=allowed_tool,
+                        confidence=1.0,
+                        reason_short=case.scenario,
+                        source="live_validation",
+                        subtype="",
+                    ),
+                )
+            if case.scenario.startswith("hitl_"):
+                allowed_tool = tuple(
+                    str(item.get("name", "") or "")
+                    for item in case.tool_calls[:1]
+                    if str(item.get("name", "") or "").strip()
+                ) or ("python_repl",)
+                return (
+                    ExecutionStrategy(allow_tools=True, allow_knowledge=False, allow_retrieval=False),
+                    RoutingDecision(
+                        intent="workspace_file_ops",
                         needs_tools=True,
                         needs_retrieval=False,
                         allowed_tools=allowed_tool,

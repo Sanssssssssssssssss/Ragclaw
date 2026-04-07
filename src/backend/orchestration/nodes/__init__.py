@@ -5,6 +5,7 @@ from src.backend.orchestration.nodes.answer import (
 )
 from src.backend.orchestration.nodes.bootstrap import build_bootstrap_node
 from src.backend.orchestration.nodes.capability import (
+    build_capability_approval_node,
     build_capability_guard_node,
     build_capability_invoke_node,
     build_capability_selection_node,
@@ -27,6 +28,7 @@ __all__ = [
     "build_knowledge_synthesis_node",
     "build_knowledge_guard_node",
     "build_capability_selection_node",
+    "build_capability_approval_node",
     "build_capability_invoke_node",
     "build_capability_synthesis_node",
     "build_capability_guard_node",

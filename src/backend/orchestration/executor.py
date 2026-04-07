@@ -5,11 +5,13 @@ import re
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
+from langgraph.types import Command, interrupt
+
 from src.backend.capabilities.invocation import CapabilityRuntimeContext, GovernedCapabilityTool, capability_runtime_scope, invoke_capability
 from src.backend.capabilities.types import CapabilityResult
 from src.backend.decision.skill_gate import SkillDecision, skill_instruction
 from src.backend.observability.types import AnswerRecord, RetrievalRecord, RouteDecisionRecord, SkillDecisionRecord, ToolCallRecord
-from src.backend.orchestration.checkpointing import checkpoint_store
+from src.backend.orchestration.checkpointing import PendingHitlRequest, checkpoint_store
 from src.backend.orchestration.compiler import compile_harness_orchestration_graph
 from src.backend.orchestration.state import GraphState, create_initial_graph_state
 from src.backend.runtime.graders import KnowledgeAnswerGrader
@@ -74,6 +76,7 @@ class HarnessLangGraphOrchestrator:
         resume_checkpoint_id: str = "",
         resume_thread_id: str = "",
         resume_source: str = "",
+        resume_payload: dict[str, Any] | None = None,
     ) -> None:
         self._agent = agent_manager
         self._execution = execution_support
@@ -83,6 +86,7 @@ class HarnessLangGraphOrchestrator:
         self._resume_checkpoint_id = str(resume_checkpoint_id or "")
         self._resume_thread_id = str(resume_thread_id or "")
         self._resume_source = str(resume_source or "")
+        self._resume_payload = dict(resume_payload or {})
 
     async def run(self, runtime: "HarnessRuntime", handle: "RuntimeRunHandle", *, message: str, history: list[dict[str, Any]]) -> GraphState:
         context = CapabilityRuntimeContext(
@@ -90,6 +94,7 @@ class HarnessLangGraphOrchestrator:
             handle=handle,
             registry=self._agent.get_capability_registry(),
             governor=runtime.governor_for(handle.run_id),
+            approval_overrides=set(),
         )
         self._bindings = _ExecutionBindings(runtime=runtime, handle=handle, context=context)
         try:
@@ -97,8 +102,11 @@ class HarnessLangGraphOrchestrator:
                 thread_id = self._thread_id_for(handle)
                 if self._resume_checkpoint_id:
                     await self._emit_resume_events(runtime, handle, thread_id)
+                    resume_input: Any = None
+                    if self._resume_payload:
+                        resume_input = Command(resume=dict(self._resume_payload))
                     result = await self._graph.ainvoke(
-                        None,
+                        resume_input,
                         config={
                             "configurable": {
                                 "thread_id": thread_id,
@@ -117,6 +125,7 @@ class HarnessLangGraphOrchestrator:
                         ),
                         config={"configurable": {"thread_id": thread_id}},
                     )
+                await self._emit_hitl_interrupt_if_needed(runtime, handle, thread_id, result)
                 await self._emit_checkpoint_created(runtime, handle, thread_id)
                 return result
         finally:
@@ -282,8 +291,109 @@ class HarnessLangGraphOrchestrator:
             "path_kind": "capability",
         }
 
+    async def capability_approval_node(self, state: GraphState) -> dict[str, Any]:
+        bindings = self._bindings_or_raise()
+        request = self._build_hitl_request(state)
+        if request is None:
+            return {"interrupt_request": None, "approval_decision": ""}
+
+        response = interrupt(request)
+        decision = str((response or {}).get("decision", "") if isinstance(response, dict) else response or "").strip().lower()
+        if decision not in {"approve", "reject"}:
+            decision = "reject"
+        checkpoint_store.clear_pending_hitl(
+            thread_id=str(request["thread_id"] or ""),
+            checkpoint_id=self._resume_checkpoint_id or str(request.get("checkpoint_id", "") or ""),
+        )
+
+        payload = {
+            "thread_id": request["thread_id"],
+            "checkpoint_id": request.get("checkpoint_id", ""),
+            "capability_id": request["capability_id"],
+            "capability_type": request["capability_type"],
+            "display_name": request["display_name"],
+            "risk_level": request["risk_level"],
+            "reason": request["reason"],
+            "proposed_input": dict(request["proposed_input"]),
+            "resume_source": self._resume_source or "hitl_api",
+            "orchestration_engine": "langgraph",
+        }
+        await bindings.runtime.emit(
+            bindings.handle,
+            "hitl.approved" if decision == "approve" else "hitl.rejected",
+            dict(payload),
+        )
+        if decision == "approve":
+            bindings.context.approval_overrides.add(str(request["capability_id"]))
+            return {
+                "interrupt_request": request,
+                "approval_decision": "approve",
+            }
+
+        blocked_result = CapabilityResult(
+            status="blocked",
+            payload={},
+            partial=False,
+            error_type="rejected_by_user",
+            error_message=f"{request['display_name']} was rejected by the user before execution.",
+            retryable=False,
+            call_id=f"hitl-{request['capability_id']}",
+            retry_count=0,
+        )
+        bindings.context.governor.record_result(
+            self._agent.get_capability_registry().get(str(request["capability_id"])),
+            blocked_result,
+        )
+        await bindings.runtime.emit(
+            bindings.handle,
+            "capability.blocked",
+            {
+                "run_id": bindings.handle.run_id,
+                "session_id": getattr(bindings.handle.metadata, "session_id", None),
+                "capability_id": request["capability_id"],
+                "capability_type": request["capability_type"],
+                "display_name": request["display_name"],
+                "call_id": blocked_result.call_id,
+                "status": blocked_result.status,
+                "retry_count": 0,
+                "partial": False,
+                "latency_ms": 0,
+                "error_type": blocked_result.error_type,
+                "error_message": blocked_result.error_message,
+                "input": dict(request["proposed_input"]),
+                "payload": {},
+                "risk_level": request["risk_level"],
+                "approval_required": True,
+                "budget_cost": 0,
+            },
+        )
+        rejection_answer = (
+            f"I did not run {request['display_name']} because you rejected this approval request."
+        )
+        await self._emit_final_answer(rejection_answer)
+        return {
+            "interrupt_request": request,
+            "approval_decision": "reject",
+            "capability_results": [
+                {
+                    "capability_id": request["capability_id"],
+                    "call_id": blocked_result.call_id,
+                    "status": blocked_result.status,
+                    "payload": {},
+                    "error_type": blocked_result.error_type,
+                    "error_message": blocked_result.error_message,
+                }
+            ],
+            "final_answer": rejection_answer,
+            "answer_segments": [rejection_answer],
+            "answer_finalized": True,
+            "needs_answer_synthesis": False,
+        }
+
     async def capability_invoke_node(self, state: GraphState) -> dict[str, Any]:
         bindings = self._bindings_or_raise()
+        if str(state.get("approval_decision", "") or "").strip().lower() == "reject":
+            return {}
         strategy = state.get("execution_strategy")
         selected_capabilities = set(str(item or "") for item in state.get("selected_capabilities", []) or [])
         tools = []
@@ -399,6 +509,55 @@ class HarnessLangGraphOrchestrator:
             },
         )
 
+    async def _emit_hitl_interrupt_if_needed(
+        self,
+        runtime: "HarnessRuntime",
+        handle: "RuntimeRunHandle",
+        thread_id: str,
+        result: GraphState,
+    ) -> None:
+        interrupts = list(result.get("__interrupt__", []) or []) if isinstance(result, dict) else []
+        if not interrupts:
+            return
+        latest = checkpoint_store.latest_checkpoint(thread_id=thread_id)
+        if latest is None:
+            return
+        raw_payload = getattr(interrupts[0], "value", {}) or {}
+        request = PendingHitlRequest(
+            run_id=str(raw_payload.get("run_id", "") or handle.run_id),
+            thread_id=str(raw_payload.get("thread_id", "") or thread_id),
+            session_id=str(raw_payload.get("session_id")) if raw_payload.get("session_id") is not None else None,
+            capability_id=str(raw_payload.get("capability_id", "") or ""),
+            capability_type=str(raw_payload.get("capability_type", "") or ""),
+            display_name=str(raw_payload.get("display_name", "") or ""),
+            risk_level=str(raw_payload.get("risk_level", "") or ""),
+            reason=str(raw_payload.get("reason", "") or ""),
+            proposed_input=dict(raw_payload.get("proposed_input", {}) or {}),
+            checkpoint_id=str(latest.checkpoint_id or raw_payload.get("checkpoint_id", "") or ""),
+        )
+        checkpoint_store.record_pending_hitl(request)
+        await runtime.emit(
+            handle,
+            "checkpoint.interrupted",
+            {
+                "thread_id": request.thread_id,
+                "checkpoint_id": request.checkpoint_id,
+                "resume_source": self._resume_source or "hitl_api",
+                "orchestration_engine": "langgraph",
+                "state_label": "interrupted",
+                "created_at": latest.created_at,
+            },
+        )
+        await runtime.emit(
+            handle,
+            "hitl.requested",
+            {
+                **request.to_dict(),
+                "orchestration_engine": "langgraph",
+                "resume_source": self._resume_source or "hitl_api",
+            },
+        )
+
     def _path_kind_from_decision(self, decision: "RoutingDecision") -> str:
         if decision.intent == "knowledge_qa":
             return "knowledge_qa"
@@ -419,6 +578,38 @@ class HarnessLangGraphOrchestrator:
         async def _runner(_payload: dict[str, Any]) -> CapabilityResult:
             return CapabilityResult(status="success", payload={"capability_id": spec.capability_id, "guidance": skill_instruction(skill_decision.skill_name), "reason_short": skill_decision.reason_short, "confidence": skill_decision.confidence}, partial=False)
         return _runner
+
+    def _build_hitl_request(self, state: GraphState) -> dict[str, Any] | None:
+        selected_capabilities = [str(item or "") for item in state.get("selected_capabilities", []) or []]
+        if not selected_capabilities:
+            return None
+        registry = self._agent.get_capability_registry()
+        selected_specs = []
+        for capability_id in selected_capabilities:
+            try:
+                spec = registry.get(capability_id)
+            except KeyError:
+                continue
+            if spec.approval_required:
+                selected_specs.append(spec)
+        if not selected_specs:
+            return None
+        spec = selected_specs[0]
+        proposed_input = state.get("explicit_capability_payload")
+        if not isinstance(proposed_input, dict) or not proposed_input:
+            proposed_input = {"message": state["user_message"]}
+        return {
+            "run_id": state["run_id"],
+            "thread_id": state.get("thread_id", ""),
+            "session_id": state.get("session_id"),
+            "capability_id": spec.capability_id,
+            "capability_type": spec.capability_type,
+            "display_name": spec.display_name,
+            "risk_level": spec.risk_level,
+            "reason": f"{spec.display_name} requires explicit approval before execution.",
+            "proposed_input": dict(proposed_input),
+            "checkpoint_id": str(state.get("checkpoint_meta", {}).get("checkpoint_id", "") or ""),
+        }
 
     async def _stream_model_answer(self, messages: list[dict[str, str]], *, extra_instructions: list[str] | None = None, system_prompt_override: str | None = None, stream_deltas: bool = True) -> tuple[str, dict[str, int] | None]:
         bindings = self._bindings_or_raise()

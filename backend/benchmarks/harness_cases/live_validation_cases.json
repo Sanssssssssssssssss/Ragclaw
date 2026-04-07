@@ -229,6 +229,27 @@
       "model_answer": "resumed live answer",
       "expect_resume": true,
       "tags": ["smoke", "resume"]
+    },
+    {
+      "case_id": "live_hitl_python_repl_approve",
+      "scenario": "hitl_python_repl_approve",
+      "message": "Use python_repl only, calculate 2 + 2, and tell me the result.",
+      "expect_route": "workspace_file_ops",
+      "expect_tool": true,
+      "expect_capability": true,
+      "expect_capability_governance": true,
+      "expect_resume": true,
+      "expect_final_contains": ["4"],
+      "model_answer": "The result is 4.",
+      "tool_calls": [
+        {
+          "name": "python_repl",
+          "args": {
+            "code": "print(2 + 2)"
+          }
+        }
+      ],
+      "tags": ["smoke", "hitl"]
     }
   ]
 }

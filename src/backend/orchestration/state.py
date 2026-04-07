@@ -30,6 +30,7 @@ class GraphState(TypedDict, total=False):
     guard_result: GuardResult | None
     governor_snapshot: dict[str, Any]
     interrupt_request: dict[str, Any] | None
+    approval_decision: str
     error_state: dict[str, Any] | None
     checkpoint_meta: dict[str, Any]
     path_kind: GraphPathKind
@@ -71,6 +72,7 @@ def create_initial_graph_state(
         guard_result=None,
         governor_snapshot={},
         interrupt_request=None,
+        approval_decision="",
         error_state=None,
         checkpoint_meta={
             "thread_id": resolved_thread_id,

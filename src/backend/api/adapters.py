@@ -12,6 +12,7 @@ def _new_segment(
     *,
     run_meta: dict[str, Any] | None = None,
     checkpoint_events: list[dict[str, Any]] | None = None,
+    hitl_events: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     return {
         "content": "",
@@ -20,6 +21,7 @@ def _new_segment(
         "usage": None,
         "run_meta": dict(run_meta or {}),
         "checkpoint_events": [dict(item) for item in (checkpoint_events or [])],
+        "hitl_events": [dict(item) for item in (hitl_events or [])],
     }
 
 
@@ -34,6 +36,7 @@ class LegacyChatAccumulator:
     last_done_payload: dict[str, Any] = field(default_factory=dict)
     run_meta: dict[str, Any] = field(default_factory=dict)
     checkpoint_events: list[dict[str, Any]] = field(default_factory=list)
+    hitl_events: list[dict[str, Any]] = field(default_factory=list)
 
     def _commit_current_segment(self) -> None:
         if (
@@ -41,11 +44,13 @@ class LegacyChatAccumulator:
             or self.current_segment["tool_calls"]
             or self.current_segment["retrieval_steps"]
             or self.current_segment["checkpoint_events"]
+            or self.current_segment["hitl_events"]
         ):
             self.segments.append(self.current_segment)
         self.current_segment = _new_segment(
             run_meta=self.run_meta,
             checkpoint_events=self.checkpoint_events,
+            hitl_events=self.hitl_events,
         )
 
     def _ensure_segment(self, segment_index: int) -> list[tuple[str, dict[str, Any]]]:
@@ -86,6 +91,28 @@ class LegacyChatAccumulator:
         self.current_segment["checkpoint_events"] = [dict(item) for item in self.checkpoint_events]
         return checkpoint_event
 
+    def _append_hitl_event(self, event_type: str, payload: dict[str, Any]) -> dict[str, Any]:
+        hitl_event = {
+            "type": event_type,
+            "run_id": str(payload.get("run_id", "") or ""),
+            "thread_id": str(payload.get("thread_id", "") or self.run_meta.get("thread_id", "") or ""),
+            "session_id": str(payload.get("session_id", "") or ""),
+            "capability_id": str(payload.get("capability_id", "") or ""),
+            "capability_type": str(payload.get("capability_type", "") or ""),
+            "display_name": str(payload.get("display_name", "") or ""),
+            "risk_level": str(payload.get("risk_level", "") or ""),
+            "reason": str(payload.get("reason", "") or ""),
+            "proposed_input": dict(payload.get("proposed_input", {}) or {}),
+            "checkpoint_id": str(payload.get("checkpoint_id", "") or self.run_meta.get("checkpoint_id", "") or ""),
+            "resume_source": str(payload.get("resume_source", "") or self.run_meta.get("resume_source", "") or ""),
+            "orchestration_engine": str(
+                payload.get("orchestration_engine", "") or self.run_meta.get("orchestration_engine", "") or ""
+            ),
+        }
+        self.hitl_events.append(hitl_event)
+        self.current_segment["hitl_events"] = [dict(item) for item in self.hitl_events]
+        return hitl_event
+
     def consume(self, event: HarnessEvent) -> list[tuple[str, dict[str, Any]]]:
         payload = dict(event.payload)
         legacy_events: list[tuple[str, dict[str, Any]]] = []
@@ -118,6 +145,24 @@ class LegacyChatAccumulator:
             payload["run_status"] = "interrupted"
             legacy_events.append(("run_status", self._set_run_meta(payload)))
             legacy_events.append(("checkpoint_interrupted", checkpoint_event))
+            return legacy_events
+
+        if event.name == "hitl.requested":
+            hitl_event = self._append_hitl_event("requested", payload)
+            payload = dict(payload)
+            payload["run_status"] = "interrupted"
+            legacy_events.append(("run_status", self._set_run_meta(payload)))
+            legacy_events.append(("hitl_requested", hitl_event))
+            return legacy_events
+
+        if event.name == "hitl.approved":
+            hitl_event = self._append_hitl_event("approved", payload)
+            legacy_events.append(("hitl_approved", hitl_event))
+            return legacy_events
+
+        if event.name == "hitl.rejected":
+            hitl_event = self._append_hitl_event("rejected", payload)
+            legacy_events.append(("hitl_rejected", hitl_event))
             return legacy_events
 
         if event.name == "retrieval.completed":
@@ -212,6 +257,7 @@ class LegacyChatAccumulator:
                 "usage": usage or None,
                 "run_meta": dict(self.current_segment.get("run_meta") or {}),
                 "checkpoint_events": [dict(item) for item in self.current_segment.get("checkpoint_events", [])],
+                "hitl_events": [dict(item) for item in self.current_segment.get("hitl_events", [])],
             }
             legacy_events.append(("done", dict(self.last_done_payload)))
             return legacy_events
@@ -251,4 +297,5 @@ class LegacyChatAccumulator:
                 usage=segment.get("usage") or None,
                 run_meta=segment.get("run_meta") or None,
                 checkpoint_events=segment.get("checkpoint_events") or None,
+                hitl_events=segment.get("hitl_events") or None,
             )

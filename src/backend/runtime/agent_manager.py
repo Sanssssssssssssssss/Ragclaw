@@ -157,6 +157,7 @@ class AgentManager:
         resume_checkpoint_id: str = "",
         resume_thread_id: str = "",
         resume_source: str = "",
+        resume_payload: dict[str, Any] | None = None,
     ):
         from src.backend.runtime.executors import HarnessExecutors  # pylint: disable=import-outside-toplevel
 
@@ -165,6 +166,7 @@ class AgentManager:
             resume_checkpoint_id=resume_checkpoint_id,
             resume_thread_id=resume_thread_id,
             resume_source=resume_source,
+            resume_payload=resume_payload,
         )
 
     def create_execution_support(self) -> HarnessExecutionSupport:

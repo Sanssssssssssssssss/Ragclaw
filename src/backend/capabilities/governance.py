@@ -10,6 +10,7 @@ from src.backend.capabilities.types import CapabilityResult, CapabilitySpec
 
 FAILURE_TAXONOMY: tuple[str, ...] = (
     "approval_required",
+    "rejected_by_user",
     "budget_exhausted",
     "repeated_call_limit",
     "timeout",
@@ -58,8 +59,8 @@ class CapabilityGovernor:
     capability_counts: dict[str, int] = field(default_factory=dict)
     failure_counts: dict[str, int] = field(default_factory=dict)
 
-    def check(self, spec: CapabilitySpec) -> CapabilityGovernanceDecision:
-        if spec.approval_required:
+    def check(self, spec: CapabilitySpec, *, approval_granted: bool = False) -> CapabilityGovernanceDecision:
+        if spec.approval_required and not approval_granted:
             return CapabilityGovernanceDecision(
                 allowed=False,
                 error_type="approval_required",

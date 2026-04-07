@@ -16,8 +16,10 @@ const CHAT_ITEM_ESTIMATE = 240;
 export function ChatPanel() {
   const {
     messages,
+    pendingHitl,
     streamingMessages,
     sendMessage,
+    submitHitlDecision,
     isInitializing,
     isStreaming,
     connectionError,
@@ -178,6 +180,46 @@ export function ChatPanel() {
                 type="button"
               >
                 {isInitializing ? "Retrying..." : "Retry connection"}
+              </button>
+            </div>
+          </div>
+        )}
+
+        {pendingHitl && currentSessionId && (
+          <div className="mb-4 rounded-[24px] border border-[rgba(255,196,77,0.24)] bg-[rgba(255,196,77,0.08)] px-4 py-4 text-[var(--color-ink)]">
+            <p className="text-xs uppercase tracking-[0.24em] text-[#ffd27d]">
+              Approval required
+            </p>
+            <h3 className="mt-2 text-lg font-semibold text-white">
+              {pendingHitl.display_name}
+            </h3>
+            <p className="mt-2 text-sm leading-7 text-[var(--color-ink-soft)]">
+              {pendingHitl.reason}
+            </p>
+            <div className="mt-3 flex flex-wrap items-center gap-2 text-xs uppercase tracking-[0.18em] text-[var(--color-ink-muted)]">
+              <span className="rounded-full border border-[var(--color-line)] px-2 py-1">
+                risk {pendingHitl.risk_level}
+              </span>
+              <span className="mono normal-case tracking-normal text-[var(--color-ink-soft)]">
+                {JSON.stringify(pendingHitl.proposed_input)}
+              </span>
+            </div>
+            <div className="mt-4 flex flex-wrap gap-3">
+              <button
+                className="ui-button"
+                disabled={isStreaming}
+                onClick={() => void submitHitlDecision(pendingHitl.checkpoint_id, "approve")}
+                type="button"
+              >
+                {isStreaming ? "Approving..." : "Approve"}
+              </button>
+              <button
+                className="ui-button"
+                disabled={isStreaming}
+                onClick={() => void submitHitlDecision(pendingHitl.checkpoint_id, "reject")}
+                type="button"
+              >
+                {isStreaming ? "Rejecting..." : "Reject"}
               </button>
             </div>
           </div>

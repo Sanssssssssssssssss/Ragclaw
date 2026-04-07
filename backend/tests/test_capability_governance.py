@@ -54,6 +54,7 @@ class CapabilityGovernanceTests(unittest.TestCase):
         decision = governor.check(spec)
         self.assertFalse(decision.allowed)
         self.assertEqual(decision.error_type, "approval_required")
+        self.assertTrue(governor.check(spec, approval_granted=True).allowed)
 
 
 if __name__ == "__main__":

@@ -17,7 +17,7 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from src.backend.api import sessions as sessions_api
 from src.backend.observability.types import HarnessEvent
-from src.backend.orchestration.checkpointing import CheckpointSummary
+from src.backend.orchestration.checkpointing import CheckpointSummary, PendingHitlRequest
 
 
 class FakeSessionManager:
@@ -58,6 +58,7 @@ class FakeSessionManager:
         usage=None,
         run_meta=None,
         checkpoint_events=None,
+        hitl_events=None,
     ) -> dict[str, object]:
         payload = {
             "session_id": session_id,
@@ -68,6 +69,7 @@ class FakeSessionManager:
             "usage": usage,
             "run_meta": run_meta,
             "checkpoint_events": checkpoint_events,
+            "hitl_events": hitl_events,
         }
         self.saved_messages.append(payload)
         return payload
@@ -222,6 +224,137 @@ class CheckpointApiTests(unittest.TestCase):
         self.assertEqual(len(fake_manager.session_manager.saved_messages), 1)
         self.assertEqual(fake_manager.session_manager.saved_messages[0]["role"], "assistant")
         self.assertEqual(fake_manager.session_manager.saved_messages[0]["run_meta"]["status"], "resumed")
+
+    def test_get_pending_hitl_returns_interrupt_payload(self) -> None:
+        app = self._build_app()
+        fake_manager = FakeAgentManager()
+        pending = PendingHitlRequest(
+            run_id="run-1",
+            thread_id="session-1",
+            session_id="session-1",
+            capability_id="python_repl",
+            capability_type="tool",
+            display_name="Python REPL",
+            risk_level="high",
+            reason="Python REPL requires explicit approval before execution.",
+            proposed_input={"message": "calculate 2 + 2"},
+            checkpoint_id="cp-hitl",
+        )
+        with (
+            patch.object(sessions_api, "agent_manager", fake_manager),
+            patch.object(sessions_api.checkpoint_store, "pending_hitl", return_value=pending),
+        ):
+            client = TestClient(app)
+            response = client.get("/api/sessions/session-1/hitl")
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["session_id"], "session-1")
+        self.assertEqual(payload["pending_interrupt"]["capability_id"], "python_repl")
+        self.assertEqual(payload["pending_interrupt"]["checkpoint_id"], "cp-hitl")
+
+    def test_submit_hitl_decision_streams_resume_and_persists_assistant_only(self) -> None:
+        app = self._build_app()
+        fake_manager = FakeAgentManager()
+        runtime = FakeRuntime(
+            [
+                _event(
+                    "run.started",
+                    {
+                        "session_id": "session-1",
+                        "thread_id": "session-1",
+                        "checkpoint_id": "cp-hitl",
+                        "resume_source": "hitl_api",
+                        "run_status": "restoring",
+                        "orchestration_engine": "langgraph",
+                    },
+                    "evt-1",
+                ),
+                _event(
+                    "checkpoint.resumed",
+                    {
+                        "thread_id": "session-1",
+                        "checkpoint_id": "cp-hitl",
+                        "resume_source": "hitl_api",
+                        "orchestration_engine": "langgraph",
+                    },
+                    "evt-2",
+                ),
+                _event(
+                    "hitl.approved",
+                    {
+                        "run_id": "run-1",
+                        "thread_id": "session-1",
+                        "session_id": "session-1",
+                        "capability_id": "python_repl",
+                        "capability_type": "tool",
+                        "display_name": "Python REPL",
+                        "risk_level": "high",
+                        "reason": "Python REPL requires explicit approval before execution.",
+                        "proposed_input": {"message": "calculate 2 + 2"},
+                        "checkpoint_id": "cp-hitl",
+                        "resume_source": "hitl_api",
+                        "orchestration_engine": "langgraph",
+                    },
+                    "evt-3",
+                ),
+                _event(
+                    "tool.started",
+                    {"tool": "python_repl", "input": "{\"code\":\"print(2 + 2)\"}", "call_id": "call-1"},
+                    "evt-4",
+                ),
+                _event(
+                    "tool.completed",
+                    {"tool": "python_repl", "input": "{\"code\":\"print(2 + 2)\"}", "output": "4", "call_id": "call-1"},
+                    "evt-5",
+                ),
+                _event("answer.started", {"segment_index": 0, "content": "", "final": False}, "evt-6"),
+                _event("answer.delta", {"segment_index": 0, "content": "The result is 4.", "final": False}, "evt-7"),
+                _event("answer.completed", {"segment_index": 0, "content": "The result is 4.", "final": True}, "evt-8"),
+                _event(
+                    "checkpoint.created",
+                    {
+                        "thread_id": "session-1",
+                        "checkpoint_id": "cp-hitl-2",
+                        "orchestration_engine": "langgraph",
+                        "state_label": "fresh",
+                    },
+                    "evt-9",
+                ),
+                _event("run.completed", {"route_intent": "workspace_file_ops"}, "evt-10"),
+            ]
+        )
+        pending = PendingHitlRequest(
+            run_id="run-1",
+            thread_id="session-1",
+            session_id="session-1",
+            capability_id="python_repl",
+            capability_type="tool",
+            display_name="Python REPL",
+            risk_level="high",
+            reason="Python REPL requires explicit approval before execution.",
+            proposed_input={"message": "calculate 2 + 2"},
+            checkpoint_id="cp-hitl",
+        )
+
+        with (
+            patch.object(sessions_api, "agent_manager", fake_manager),
+            patch.object(sessions_api.checkpoint_store, "pending_hitl", return_value=pending),
+            patch.object(sessions_api, "_build_runtime_and_resume_executor", return_value=(runtime, object())),
+        ):
+            client = TestClient(app)
+            response = client.post(
+                "/api/sessions/session-1/hitl/cp-hitl/decision",
+                json={"decision": "approve", "stream": True},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("event: hitl_approved", response.text)
+        self.assertIn("event: done", response.text)
+        self.assertEqual(len(fake_manager.session_manager.saved_messages), 1)
+        self.assertEqual(fake_manager.session_manager.saved_messages[0]["role"], "assistant")
+        self.assertEqual(fake_manager.session_manager.saved_messages[0]["run_meta"]["status"], "resumed")
+        self.assertEqual(fake_manager.session_manager.saved_messages[0]["hitl_events"][0]["type"], "approved")
 
 
 if __name__ == "__main__":

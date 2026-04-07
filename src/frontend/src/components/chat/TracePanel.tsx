@@ -19,12 +19,16 @@ type TraceTurn = {
   usage: ReturnType<typeof useChatStore>["messages"][number]["usage"];
   runMeta: ReturnType<typeof useChatStore>["messages"][number]["runMeta"];
   checkpointEvents: ReturnType<typeof useChatStore>["messages"][number]["checkpointEvents"];
+  hitlEvents: ReturnType<typeof useChatStore>["messages"][number]["hitlEvents"];
   streaming: boolean;
 };
 
 const TraceTurnCard = memo(function TraceTurnCard({ turn }: { turn: TraceTurn }) {
   const hasTrace =
-    turn.toolCalls.length > 0 || turn.retrievalSteps.length > 0 || turn.checkpointEvents.length > 0;
+    turn.toolCalls.length > 0 ||
+    turn.retrievalSteps.length > 0 ||
+    turn.checkpointEvents.length > 0 ||
+    turn.hitlEvents.length > 0;
 
   return (
     <article className="rounded-[28px] border border-[var(--color-line)] bg-[rgba(255,255,255,0.03)] p-5">
@@ -79,6 +83,29 @@ const TraceTurnCard = memo(function TraceTurnCard({ turn }: { turn: TraceTurn })
       </div>
 
       <div className="mt-4">
+        {turn.hitlEvents.length ? (
+          <div className="mb-4 rounded-[22px] border border-[var(--color-line)] bg-[rgba(255,255,255,0.02)] px-4 py-3 text-sm text-[var(--color-ink-soft)]">
+            <p className="mb-2 text-xs uppercase tracking-[0.18em] text-[var(--color-ink-muted)]">
+              HITL trace
+            </p>
+            <div className="space-y-2">
+              {turn.hitlEvents.map((item, index) => (
+                <div key={`${item.type}-${item.checkpoint_id}-${index}`} className="flex flex-wrap items-center gap-2">
+                  <span className="rounded-full border border-[var(--color-line)] px-2 py-1 uppercase">
+                    {item.type}
+                  </span>
+                  <span>{item.display_name}</span>
+                  <span className="rounded-full border border-[var(--color-line)] px-2 py-1 uppercase">
+                    {item.risk_level}
+                  </span>
+                  {item.type === "requested" ? <span>Interrupt requested</span> : null}
+                  {item.type === "approved" ? <span>Approved and resumed</span> : null}
+                  {item.type === "rejected" ? <span>Rejected before execution</span> : null}
+                </div>
+              ))}
+            </div>
+          </div>
+        ) : null}
         {turn.checkpointEvents.length ? (
           <div className="mb-4 rounded-[22px] border border-[var(--color-line)] bg-[rgba(255,255,255,0.02)] px-4 py-3 text-sm text-[var(--color-ink-soft)]">
             <p className="mb-2 text-xs uppercase tracking-[0.18em] text-[var(--color-ink-muted)]">
@@ -144,6 +171,7 @@ export function TracePanel() {
         usage: message.usage,
         runMeta: message.runMeta,
         checkpointEvents: message.checkpointEvents,
+        hitlEvents: message.hitlEvents,
         streaming: isStreaming && streamingMessages.some((item) => item.id === message.id)
       });
     }

@@ -126,6 +126,25 @@ class HarnessBenchmarkRunnerTests(unittest.IsolatedAsyncioTestCase):
             self.assertTrue(blocked_case["capability_trace_present"])
             self.assertTrue(blocked_case["capability_governance_visible"])
 
+    async def test_integration_suite_includes_hitl_cases(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output_path = Path(temp_dir) / "integration_hitl.json"
+            payload = await run_selected_benchmark(
+                suite="integration",
+                tag="hitl",
+                extra_case_files=[str(BACKEND_DIR / "benchmarks" / "harness_cases" / "hitl_cases.json")],
+                output_path=output_path,
+                use_llm_judge=False,
+                use_live_llm_decisions=False,
+            )
+            case_ids = {item["case_id"] for item in payload["cases"]}
+            self.assertIn("hitl_python_repl_approve", case_ids)
+            self.assertIn("hitl_python_repl_reject", case_ids)
+            approve_case = next(item for item in payload["cases"] if item["case_id"] == "hitl_python_repl_approve")
+            reject_case = next(item for item in payload["cases"] if item["case_id"] == "hitl_python_repl_reject")
+            self.assertTrue(approve_case["capability_trace_present"])
+            self.assertTrue(reject_case["capability_governance_visible"])
+
     async def test_integration_suite_includes_web_mcp_cases(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             output_path = Path(temp_dir) / "integration_web_mcp.json"

@@ -35,6 +35,10 @@ class CapabilityRegistryTests(unittest.TestCase):
         self.assertGreater(terminal_spec.repeated_call_limit, 0)
         self.assertIn("properties", terminal_spec.input_schema)
 
+        python_spec = registry.get("python_repl")
+        self.assertTrue(python_spec.approval_required)
+        self.assertEqual(python_spec.risk_level, "high")
+
         skill_spec = registry.get("skill.web_search")
         self.assertEqual(skill_spec.capability_type, "skill")
         self.assertFalse(skill_spec.approval_required)

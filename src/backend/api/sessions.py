@@ -33,6 +33,11 @@ class ResumeCheckpointRequest(BaseModel):
     stream: bool = True
 
 
+class HitlDecisionRequest(BaseModel):
+    decision: str = Field(..., pattern="^(approve|reject)$")
+    stream: bool = True
+
+
 def _session_manager_or_raise():
     session_manager = agent_manager.session_manager
     if session_manager is None:
@@ -109,6 +114,80 @@ async def get_checkpoint(session_id: str, checkpoint_id: str) -> dict[str, Any]:
     return {"session_id": session_id, "thread_id": thread_id, "checkpoint": checkpoint.to_dict()}
 
 
+@router.get("/sessions/{session_id}/hitl")
+async def get_pending_hitl(session_id: str) -> dict[str, Any]:
+    _session_manager_or_raise()
+    thread_id = checkpoint_store.thread_id_for(session_id=session_id, run_id=session_id)
+    pending = checkpoint_store.pending_hitl(thread_id=thread_id)
+    return {
+        "session_id": session_id,
+        "thread_id": thread_id,
+        "pending_interrupt": pending.to_dict() if pending is not None else None,
+    }
+
+
+async def _stream_checkpoint_resume(
+    *,
+    session_id: str,
+    checkpoint_id: str,
+    history: list[dict[str, Any]],
+    session_manager,
+    resume_message: str,
+    resume_source: str,
+    resume_payload: dict[str, Any] | None,
+    run_status: str,
+    persist_user_message: bool,
+):
+    runtime, executor = _build_runtime_and_resume_executor(
+        checkpoint_id=checkpoint_id,
+        thread_id=checkpoint_store.thread_id_for(session_id=session_id, run_id=session_id),
+        resume_source=resume_source,
+        resume_payload=resume_payload,
+    )
+    accumulator = LegacyChatAccumulator()
+    persisted = False
+
+    def persist(error_message: str | None = None) -> None:
+        nonlocal persisted
+        if persisted:
+            return
+        accumulator.persist(
+            session_manager=session_manager,
+            session_id=session_id,
+            user_message=resume_message,
+            error_message=error_message,
+            persist_user_message=persist_user_message,
+        )
+        persisted = True
+
+    try:
+        async for harness_event in runtime.run_with_executor(
+            user_message=resume_message,
+            session_id=session_id,
+            source=resume_source,
+            executor=executor,
+            history=history,
+            suppress_failures=True,
+            thread_id=checkpoint_store.thread_id_for(session_id=session_id, run_id=session_id),
+            checkpoint_id=checkpoint_id,
+            resume_source=resume_source,
+            run_status=run_status,
+            orchestration_engine="langgraph",
+        ):
+            for event_type, data in accumulator.consume(harness_event):
+                yield _sse(event_type, data)
+                if event_type == "done":
+                    persist()
+                elif event_type == "error":
+                    persist(error_message=str(data.get("error", "") or "unknown error"))
+    except Exception as exc:  # pragma: no cover - defensive boundary
+        persist(error_message=str(exc) or "unknown error")
+        yield _sse("error", {"error": str(exc)})
+
+    if not persisted:
+        persist()
+
+
 @router.post("/sessions/{session_id}/checkpoints/{checkpoint_id}/resume")
 async def resume_from_checkpoint(
     session_id: str,
@@ -127,53 +206,18 @@ async def resume_from_checkpoint(
     resume_message = checkpoint.user_message or "Resume from checkpoint"
 
     async def event_generator():
-        runtime, executor = _build_runtime_and_resume_executor(
+        async for item in _stream_checkpoint_resume(
+            session_id=session_id,
             checkpoint_id=checkpoint_id,
-            thread_id=thread_id,
+            history=history,
+            session_manager=session_manager,
+            resume_message=resume_message,
             resume_source="checkpoint_api",
-        )
-        accumulator = LegacyChatAccumulator()
-        persisted = False
-
-        def persist(error_message: str | None = None) -> None:
-            nonlocal persisted
-            if persisted:
-                return
-            accumulator.persist(
-                session_manager=session_manager,
-                session_id=session_id,
-                user_message=resume_message,
-                error_message=error_message,
-                persist_user_message=False,
-            )
-            persisted = True
-
-        try:
-            async for harness_event in runtime.run_with_executor(
-                user_message=resume_message,
-                session_id=session_id,
-                source="checkpoint_resume_api",
-                executor=executor,
-                history=history,
-                suppress_failures=True,
-                thread_id=thread_id,
-                checkpoint_id=checkpoint_id,
-                resume_source="checkpoint_api",
-                run_status="resumed",
-                orchestration_engine="langgraph",
-            ):
-                for event_type, data in accumulator.consume(harness_event):
-                    yield _sse(event_type, data)
-                    if event_type == "done":
-                        persist()
-                    elif event_type == "error":
-                        persist(error_message=str(data.get("error", "") or "unknown error"))
-        except Exception as exc:  # pragma: no cover - defensive boundary
-            persist(error_message=str(exc) or "unknown error")
-            yield _sse("error", {"error": str(exc)})
-
-        if not persisted:
-            persist()
+            resume_payload=None,
+            run_status="resumed",
+            persist_user_message=False,
+        ):
+            yield item
 
     if payload.stream:
         return StreamingResponse(event_generator(), media_type="text/event-stream")
@@ -193,5 +237,57 @@ async def resume_from_checkpoint(
             "thread_id": thread_id,
             "checkpoint_id": checkpoint_id,
             "resume_source": "checkpoint_api",
+        }
+    )
+
+
+@router.post("/sessions/{session_id}/hitl/{checkpoint_id}/decision")
+async def submit_hitl_decision(
+    session_id: str,
+    checkpoint_id: str,
+    payload: HitlDecisionRequest,
+):
+    session_manager = _session_manager_or_raise()
+    thread_id = checkpoint_store.thread_id_for(session_id=session_id, run_id=session_id)
+    pending = checkpoint_store.pending_hitl(thread_id=thread_id)
+    if pending is None or pending.checkpoint_id != checkpoint_id:
+        raise HTTPException(status_code=404, detail="Pending HITL interrupt not found")
+
+    history = session_manager.load_session_for_agent(session_id)
+    resume_message = pending.reason or pending.display_name or "Resume from HITL decision"
+
+    async def event_generator():
+        async for item in _stream_checkpoint_resume(
+            session_id=session_id,
+            checkpoint_id=checkpoint_id,
+            history=history,
+            session_manager=session_manager,
+            resume_message=resume_message,
+            resume_source="hitl_api",
+            resume_payload={"decision": payload.decision},
+            run_status="restoring",
+            persist_user_message=False,
+        ):
+            yield item
+
+    if payload.stream:
+        return StreamingResponse(event_generator(), media_type="text/event-stream")
+
+    final_content = ""
+    async for raw_event in event_generator():
+        if raw_event.startswith("event: done"):
+            for line in raw_event.splitlines():
+                if line.startswith("data: "):
+                    data = json.loads(line[len("data: ") :])
+                    final_content = str(data.get("content", "") or "")
+                    break
+    return JSONResponse(
+        {
+            "content": final_content,
+            "run_status": "resumed",
+            "thread_id": thread_id,
+            "checkpoint_id": checkpoint_id,
+            "resume_source": "hitl_api",
+            "decision": payload.decision,
         }
     )

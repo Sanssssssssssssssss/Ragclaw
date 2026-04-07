@@ -20,5 +20,11 @@ def branch_after_memory(state: GraphState) -> str:
 
 def branch_after_capability_selection(state: GraphState) -> str:
     if state.get("selected_capabilities"):
-        return "capability_invoke"
+        return "capability_approval"
     return "direct_answer"
+
+
+def branch_after_capability_approval(state: GraphState) -> str:
+    if str(state.get("approval_decision", "") or "").strip().lower() == "reject":
+        return "capability_guard"
+    return "capability_invoke"

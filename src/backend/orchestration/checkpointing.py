@@ -42,9 +42,38 @@ class CheckpointSummary:
         }
 
 
+@dataclass(frozen=True)
+class PendingHitlRequest:
+    run_id: str
+    thread_id: str
+    session_id: str | None
+    capability_id: str
+    capability_type: str
+    display_name: str
+    risk_level: str
+    reason: str
+    proposed_input: dict[str, Any]
+    checkpoint_id: str
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "run_id": self.run_id,
+            "thread_id": self.thread_id,
+            "session_id": self.session_id,
+            "capability_id": self.capability_id,
+            "capability_type": self.capability_type,
+            "display_name": self.display_name,
+            "risk_level": self.risk_level,
+            "reason": self.reason,
+            "proposed_input": dict(self.proposed_input),
+            "checkpoint_id": self.checkpoint_id,
+        }
+
+
 class LangGraphCheckpointStore:
     def __init__(self) -> None:
         self._saver = InMemorySaver()
+        self._pending_hitl: dict[str, PendingHitlRequest] = {}
 
     @property
     def saver(self) -> InMemorySaver:
@@ -74,6 +103,20 @@ class LangGraphCheckpointStore:
         items = self.list_thread_checkpoints(thread_id, limit=1)
         return items[0] if items else None
 
+    def record_pending_hitl(self, request: PendingHitlRequest) -> None:
+        self._pending_hitl[request.thread_id] = request
+
+    def clear_pending_hitl(self, *, thread_id: str, checkpoint_id: str | None = None) -> None:
+        pending = self._pending_hitl.get(thread_id)
+        if pending is None:
+            return
+        if checkpoint_id and pending.checkpoint_id != checkpoint_id:
+            return
+        self._pending_hitl.pop(thread_id, None)
+
+    def pending_hitl(self, *, thread_id: str) -> PendingHitlRequest | None:
+        return self._pending_hitl.get(thread_id)
+
     def _tuple_to_summary(self, item, *, latest_id: str) -> CheckpointSummary:
         config = dict(getattr(item, "config", {}) or {})
         configurable = dict(config.get("configurable", {}) or {})
@@ -85,9 +128,11 @@ class LangGraphCheckpointStore:
         is_latest = checkpoint_id == latest_id
         source = str(metadata.get("source", "") or "")
         step = int(metadata.get("step", -1) or -1)
-        state_label = "fresh" if is_latest else "interrupted"
         final_answer = str(channel_values.get("final_answer", "") or "")
-        resume_eligible = not is_latest and step >= 0 and not final_answer.strip()
+        pending = self._pending_hitl.get(str(configurable.get("thread_id", "") or ""))
+        has_pending_hitl = pending is not None and pending.checkpoint_id == checkpoint_id
+        state_label = "interrupted" if has_pending_hitl else ("fresh" if is_latest else "interrupted")
+        resume_eligible = (has_pending_hitl or (not is_latest and step >= 0 and not final_answer.strip()))
         return CheckpointSummary(
             checkpoint_id=checkpoint_id,
             thread_id=str(configurable.get("thread_id", "") or ""),

@@ -43,6 +43,7 @@ class CapabilityRuntimeContext:
     handle: Any
     registry: CapabilityRegistry
     governor: CapabilityGovernor
+    approval_overrides: set[str]
 
     @property
     def run_id(self) -> str:
@@ -187,7 +188,10 @@ async def invoke_capability(
     )
 
     if context is not None:
-        decision = context.governor.check(spec)
+        decision = context.governor.check(
+            spec,
+            approval_granted=spec.capability_id in context.approval_overrides,
+        )
         if not decision.allowed:
             blocked = decision.to_blocked_result(call_id=call_id)
             context.governor.record_result(spec, blocked)
@@ -394,7 +398,10 @@ class GovernedCapabilityTool(BaseTool):
                 payload=dict(payload),
                 requested_at=context.now(),
             )
-            decision = context.governor.check(self._capability_spec)
+            decision = context.governor.check(
+                self._capability_spec,
+                approval_granted=self._capability_spec.capability_id in context.approval_overrides,
+            )
             if not decision.allowed:
                 blocked = decision.to_blocked_result(call_id=invocation.call_id)
                 context.governor.record_result(self._capability_spec, blocked)

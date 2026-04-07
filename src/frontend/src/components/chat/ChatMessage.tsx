@@ -94,9 +94,16 @@ export const ChatMessage = memo(function ChatMessage({
         }
       >
         {shouldRenderPlainText ? (
-          content || (streaming ? "Thinking..." : "")
+          content ||
+          (runMeta?.status === "interrupted"
+            ? "Approval requested before capability execution."
+            : streaming
+              ? "Thinking..."
+              : "")
         ) : (
-          <ReactMarkdown remarkPlugins={[remarkGfm]}>{content || "Thinking..."}</ReactMarkdown>
+          <ReactMarkdown remarkPlugins={[remarkGfm]}>
+            {content || (runMeta?.status === "interrupted" ? "Approval requested before capability execution." : "Thinking...")}
+          </ReactMarkdown>
         )}
       </div>
       {!isUser && usage && (

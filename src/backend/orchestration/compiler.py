@@ -4,8 +4,10 @@ from langgraph.graph import END, StateGraph
 
 from src.backend.orchestration.checkpointing import checkpoint_store
 from src.backend.orchestration.edges import branch_after_capability_selection, branch_after_memory
+from src.backend.orchestration.edges import branch_after_capability_approval
 from src.backend.orchestration.nodes import (
     build_bootstrap_node,
+    build_capability_approval_node,
     build_capability_guard_node,
     build_capability_invoke_node,
     build_capability_selection_node,
@@ -33,6 +35,7 @@ def compile_harness_orchestration_graph(orchestrator):
     graph.add_node("knowledge_synthesis", build_knowledge_synthesis_node(orchestrator))
     graph.add_node("knowledge_guard", build_knowledge_guard_node(orchestrator))
     graph.add_node("capability_selection", build_capability_selection_node(orchestrator))
+    graph.add_node("capability_approval", build_capability_approval_node(orchestrator))
     graph.add_node("capability_invoke", build_capability_invoke_node(orchestrator))
     graph.add_node("capability_synthesis", build_capability_synthesis_node(orchestrator))
     graph.add_node("capability_guard", build_capability_guard_node(orchestrator))
@@ -58,8 +61,16 @@ def compile_harness_orchestration_graph(orchestrator):
         "capability_selection",
         branch_after_capability_selection,
         {
-            "capability_invoke": "capability_invoke",
+            "capability_approval": "capability_approval",
             "direct_answer": "direct_answer",
+        },
+    )
+    graph.add_conditional_edges(
+        "capability_approval",
+        branch_after_capability_approval,
+        {
+            "capability_guard": "capability_guard",
+            "capability_invoke": "capability_invoke",
         },
     )
     graph.add_edge("capability_invoke", "capability_synthesis")

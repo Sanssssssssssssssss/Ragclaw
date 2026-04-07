@@ -24,6 +24,35 @@ export type CheckpointEvent = {
   orchestration_engine: string;
 };
 
+export type HitlEvent = {
+  type: "requested" | "approved" | "rejected";
+  run_id: string;
+  thread_id: string;
+  session_id: string;
+  capability_id: string;
+  capability_type: string;
+  display_name: string;
+  risk_level: string;
+  reason: string;
+  proposed_input: Record<string, unknown>;
+  checkpoint_id: string;
+  resume_source: string;
+  orchestration_engine: string;
+};
+
+export type PendingHitlInterrupt = {
+  run_id: string;
+  thread_id: string;
+  session_id: string | null;
+  capability_id: string;
+  capability_type: string;
+  display_name: string;
+  risk_level: string;
+  reason: string;
+  proposed_input: Record<string, unknown>;
+  checkpoint_id: string;
+};
+
 export type ExecutionPlatform = "windows" | "linux";
 
 export type MessageUsage = {
@@ -107,6 +136,7 @@ export type SessionHistory = {
     usage?: MessageUsage;
     run_meta?: RunMeta;
     checkpoint_events?: CheckpointEvent[];
+    hitl_events?: HitlEvent[];
   }>;
 };
 
@@ -246,6 +276,12 @@ export async function listSessionCheckpoints(sessionId: string) {
 export async function getSessionCheckpoint(sessionId: string, checkpointId: string) {
   return request<{ session_id: string; thread_id: string; checkpoint: CheckpointSummary }>(
     `/sessions/${sessionId}/checkpoints/${checkpointId}`
+  );
+}
+
+export async function getPendingHitl(sessionId: string) {
+  return request<{ session_id: string; thread_id: string; pending_interrupt: PendingHitlInterrupt | null }>(
+    `/sessions/${sessionId}/hitl`
   );
 }
 
@@ -465,6 +501,82 @@ export async function streamCheckpointResume(
 
   if (!response.ok || !response.body) {
     throw new Error(`Checkpoint resume failed: ${response.status}`);
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+
+  const flushBlock = (block: string) => {
+    const lines = block.split("\n");
+    let event = "message";
+    const dataLines: string[] = [];
+
+    for (const line of lines) {
+      if (line.startsWith("event:")) {
+        event = line.slice(6).trim();
+      }
+      if (line.startsWith("data:")) {
+        dataLines.push(line.slice(5).trim());
+      }
+    }
+
+    if (!dataLines.length) {
+      return;
+    }
+
+    const data = JSON.parse(dataLines.join("\n")) as Record<string, unknown>;
+    handlers.onEvent(event, data);
+  };
+
+  while (true) {
+    const { value, done } = await reader.read();
+    buffer += decoder.decode(value ?? new Uint8Array(), { stream: !done });
+
+    let boundary = buffer.indexOf("\n\n");
+    while (boundary >= 0) {
+      flushBlock(buffer.slice(0, boundary));
+      buffer = buffer.slice(boundary + 2);
+      boundary = buffer.indexOf("\n\n");
+    }
+
+    if (done) {
+      if (buffer.trim()) {
+        flushBlock(buffer);
+      }
+      break;
+    }
+  }
+}
+
+export async function streamHitlDecision(
+  payload: {
+    session_id: string;
+    checkpoint_id: string;
+    decision: "approve" | "reject";
+  },
+  handlers: StreamHandlers
+) {
+  const apiBase = getApiBase();
+  let response: Response;
+
+  try {
+    response = await fetch(
+      `${apiBase}/sessions/${encodeURIComponent(payload.session_id)}/hitl/${encodeURIComponent(payload.checkpoint_id)}/decision`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({ decision: payload.decision, stream: true })
+      }
+    );
+  } catch (error) {
+    throw buildConnectionError(apiBase, error);
+  }
+
+  if (!response.ok || !response.body) {
+    throw new Error(`HITL decision failed: ${response.status}`);
   }
 
   const reader = response.body.getReader();

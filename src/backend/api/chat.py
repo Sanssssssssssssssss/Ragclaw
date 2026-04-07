@@ -49,12 +49,14 @@ def _build_runtime_and_resume_executor(
     checkpoint_id: str,
     thread_id: str,
     resume_source: str,
+    resume_payload: dict[str, Any] | None = None,
 ):
     runtime = agent_manager.get_harness_runtime()
     executor = agent_manager.create_harness_executor(
         resume_checkpoint_id=checkpoint_id,
         resume_thread_id=thread_id,
         resume_source=resume_source,
+        resume_payload=resume_payload,
     )
     return runtime, executor
 

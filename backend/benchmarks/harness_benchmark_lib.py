@@ -21,6 +21,7 @@ from src.backend.decision.skill_gate import SkillDecision
 from src.backend.knowledge.query_rewrite import build_query_plan
 from src.backend.knowledge.types import Evidence, OrchestratedRetrievalResult, RetrievalStep
 from src.backend.observability.trace_store import RunTraceStore
+from src.backend.orchestration.checkpointing import checkpoint_store
 from src.backend.runtime.agent_manager import AgentManager
 from src.backend.runtime.execution_support import HarnessExecutionSupport
 from src.backend.runtime.executors import HarnessExecutors
@@ -228,6 +229,38 @@ def summarize_results(results: list[dict[str, Any]]) -> dict[str, Any]:
 
 def _trace_event_names(trace: dict[str, Any]) -> list[str]:
     return [str(item.get("name", "")) for item in trace.get("events", [])]
+
+
+def _merge_traces(*traces: dict[str, Any]) -> dict[str, Any]:
+    materialized = [trace for trace in traces if trace]
+    if not materialized:
+        raise ValueError("at least one trace is required")
+    base = dict(materialized[-1])
+    base["events"] = [
+        dict(event)
+        for trace in materialized
+        for event in list(trace.get("events", []) or [])
+    ]
+    first_metadata = dict(materialized[0].get("metadata", {}) or {})
+    last_metadata = dict(materialized[-1].get("metadata", {}) or {})
+    merged_metadata = dict(first_metadata)
+    merged_metadata.update(
+        {
+            "run_id": str(last_metadata.get("run_id", "") or first_metadata.get("run_id", "") or ""),
+            "source": str(last_metadata.get("source", "") or first_metadata.get("source", "") or ""),
+            "checkpoint_id": str(last_metadata.get("checkpoint_id", "") or first_metadata.get("checkpoint_id", "") or ""),
+            "resume_source": str(last_metadata.get("resume_source", "") or first_metadata.get("resume_source", "") or ""),
+        }
+    )
+    base["metadata"] = merged_metadata
+    merged_outcome = dict(materialized[0].get("outcome", {}) or {})
+    for trace in materialized[1:]:
+        current_outcome = dict(trace.get("outcome", {}) or {})
+        for key, value in current_outcome.items():
+            if value not in ("", None, [], {}, ()):
+                merged_outcome[key] = value
+    base["outcome"] = merged_outcome
+    return base
 
 
 class _NoRouterAllowed:
@@ -674,8 +707,8 @@ def _lifecycle_case_result(case: BenchmarkCase, trace: dict[str, Any], elapsed_m
         "route_trace_present": route_present,
         "retrieval_trace_present": retrieval_present if expect.get("retrieval") else None,
         "tool_trace_present": tool_present if expect.get("tool") else None,
-        "capability_trace_present": capability_present if (expect.get("tool") or expect.get("skill_name")) else None,
-        "capability_governance_visible": capability_governance_visible if (expect.get("tool") or expect.get("skill_name")) else None,
+        "capability_trace_present": capability_present if (capability_present or expect.get("tool") or expect.get("skill_name") or case.scenario.startswith("hitl_")) else None,
+        "capability_governance_visible": capability_governance_visible if (capability_governance_visible or expect.get("tool") or expect.get("skill_name") or case.scenario.startswith("hitl_")) else None,
         "guard_present": guard_present if "guard" in expect else None,
         "completion_integrity": completion_integrity,
         "queue_integrity": queue_integrity if expect.get("queue") else None,
@@ -857,6 +890,25 @@ async def _run_integration_lifecycle_cases(
                             subtype="search_workspace_file",
                         ),
                     )
+                if spec.scenario.startswith("hitl_"):
+                    allowed_tool = tuple(
+                        str(item.get("name", "") or "")
+                        for item in spec.tool_calls[:1]
+                        if str(item.get("name", "") or "").strip()
+                    ) or ("python_repl",)
+                    return (
+                        ExecutionStrategy(allow_tools=True, allow_knowledge=False, allow_retrieval=False),
+                        RoutingDecision(
+                            intent="workspace_file_ops",
+                            needs_tools=True,
+                            needs_retrieval=False,
+                            allowed_tools=allowed_tool,
+                            confidence=1.0,
+                            reason_short=spec.scenario,
+                            source="benchmark",
+                            subtype="",
+                        ),
+                    )
                 if spec.scenario.startswith("mcp_filesystem_"):
                     allowed_tool = tuple(
                         str(item.get("name", "") or "")
@@ -940,6 +992,60 @@ async def _run_integration_lifecycle_cases(
                 return await _run_case_through_runtime(runtime=runtime, executor=executor, case=case)
 
         for case in cases:
+            if case.scenario.startswith("hitl_"):
+                run_id, elapsed_ms = await _run_one(case)
+                initial_trace = runtime._deps.trace_store.read_trace(run_id)  # noqa: SLF001
+                thread_candidates = [
+                    str(case.session_id or ""),
+                    str((initial_trace.get("metadata") or {}).get("thread_id", "") or ""),
+                    str((initial_trace.get("outcome") or {}).get("thread_id", "") or ""),
+                    str(run_id),
+                ]
+                pending = None
+                pending_thread_id = ""
+                for candidate in thread_candidates:
+                    if not candidate:
+                        continue
+                    pending = checkpoint_store.pending_hitl(thread_id=candidate)
+                    if pending is not None:
+                        pending_thread_id = candidate
+                        break
+                checkpoint_id = ""
+                if pending is not None:
+                    checkpoint_id = pending.checkpoint_id
+                else:
+                    initial_event_names = _trace_event_names(initial_trace)
+                    if "hitl.requested" not in initial_event_names:
+                        raise AssertionError(f"no pending HITL interrupt produced for case {case.case_id}")
+                    for candidate in thread_candidates:
+                        if not candidate:
+                            continue
+                        latest_checkpoint = checkpoint_store.latest_checkpoint(thread_id=candidate)
+                        if latest_checkpoint is not None and latest_checkpoint.resume_eligible:
+                            pending_thread_id = candidate
+                            checkpoint_id = latest_checkpoint.checkpoint_id
+                            break
+                    if not checkpoint_id:
+                        raise AssertionError(f"no resumable HITL checkpoint produced for case {case.case_id}")
+                decision = "reject" if "reject" in case.scenario else "approve"
+                resume_executor = HarnessExecutors(
+                    manager,
+                    resume_checkpoint_id=checkpoint_id,
+                    resume_thread_id=pending_thread_id or case.session_id or run_id,
+                    resume_source="benchmark_hitl",
+                    resume_payload={"decision": decision},
+                )
+                resumed_run_id, resumed_elapsed_ms = await _run_case_through_runtime(
+                    runtime=runtime,
+                    executor=resume_executor,
+                    case=case,
+                    suppress_failures=True,
+                )
+                resumed_trace = runtime._deps.trace_store.read_trace(resumed_run_id)  # noqa: SLF001
+                merged_trace = _merge_traces(initial_trace, resumed_trace)
+                results.append(_lifecycle_case_result(case, merged_trace, elapsed_ms + resumed_elapsed_ms))
+                checkpoint_store.clear_pending_hitl(thread_id=pending_thread_id or case.session_id or run_id)
+                continue
             if case.expect.get("queue"):
                 holder = queue_holders[case.case_id]
                 holder_task = asyncio.create_task(_run_one(holder))

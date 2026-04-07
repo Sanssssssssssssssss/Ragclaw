@@ -58,6 +58,7 @@ class HarnessAdapterTests(unittest.TestCase):
         self.assertEqual(done_payload["usage"], {"input_tokens": 3, "output_tokens": 2})
         self.assertEqual(done_payload["run_meta"], {})
         self.assertEqual(done_payload["checkpoint_events"], [])
+        self.assertEqual(done_payload["hitl_events"], [])
         self.assertEqual(accumulator.current_segment["content"], "hello world")
 
     def test_segment_index_jump_emits_new_response_once(self) -> None:
@@ -122,6 +123,33 @@ class HarnessAdapterTests(unittest.TestCase):
         self.assertIn("checkpoint_resumed", output_names)
         self.assertEqual(accumulator.run_meta["status"], "resumed")
         self.assertEqual(accumulator.checkpoint_events[-1]["checkpoint_id"], "cp-1")
+
+    def test_hitl_events_are_mapped_to_legacy_markers(self) -> None:
+        accumulator = LegacyChatAccumulator()
+        outputs = accumulator.consume(
+            _event(
+                "hitl.requested",
+                {
+                    "run_id": "run-1",
+                    "thread_id": "session-1",
+                    "session_id": "session-1",
+                    "capability_id": "python_repl",
+                    "capability_type": "tool",
+                    "display_name": "Python REPL",
+                    "risk_level": "high",
+                    "reason": "requires approval",
+                    "proposed_input": {"message": "calculate 2+2"},
+                    "checkpoint_id": "cp-hitl",
+                    "resume_source": "hitl_api",
+                    "orchestration_engine": "langgraph",
+                },
+                "evt-hitl",
+            )
+        )
+        self.assertIn("run_status", [name for name, _payload in outputs])
+        self.assertIn("hitl_requested", [name for name, _payload in outputs])
+        self.assertEqual(accumulator.run_meta["status"], "interrupted")
+        self.assertEqual(accumulator.hitl_events[-1]["capability_id"], "python_repl")
 
 
 if __name__ == "__main__":

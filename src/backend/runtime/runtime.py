@@ -213,6 +213,10 @@ class HarnessRuntime:
             state.run_status = "resumed"
         elif name == "checkpoint.interrupted":
             state.checkpoint_id = str(payload.get("checkpoint_id", "") or state.checkpoint_id)
+            state.run_status = "interrupted"
+        elif name == "hitl.requested":
+            state.checkpoint_id = str(payload.get("checkpoint_id", "") or state.checkpoint_id)
+            state.run_status = "interrupted"
 
     def complete_run(self, handle: RuntimeRunHandle) -> tuple[HarnessEvent, RunOutcome]:
         state = self._state_for(handle)

@@ -16,11 +16,14 @@ import {
   ApiConnectionError,
   type CheckpointEvent,
   type CheckpointSummary,
+  type HitlEvent,
+  type PendingHitlInterrupt,
   compressSession,
   createSession,
   deleteSession,
   getExecutionPlatform,
   getKnowledgeIndexStatus,
+  getPendingHitl,
   getRagMode,
   getSkillRetrieval,
   getSessionHistory,
@@ -38,6 +41,7 @@ import {
   setSkillRetrieval,
   streamChat,
   streamCheckpointResume,
+  streamHitlDecision,
   type RunMeta,
   type RunStatus,
   type ExecutionPlatform,
@@ -58,6 +62,7 @@ export type Message = {
   usage: MessageUsage | null;
   runMeta: RunMeta | null;
   checkpointEvents: CheckpointEvent[];
+  hitlEvents: HitlEvent[];
 };
 
 const STREAM_TOKEN_FLUSH_MS = 80;
@@ -66,6 +71,7 @@ type AppStore = {
   sessions: SessionSummary[];
   currentSessionId: string | null;
   checkpoints: CheckpointSummary[];
+  pendingHitl: PendingHitlInterrupt | null;
   messages: Message[];
   streamingMessages: Message[];
   messageFeed: Message[];
@@ -89,6 +95,7 @@ type AppStore = {
   selectSession: (sessionId: string) => Promise<void>;
   sendMessage: (value: string) => Promise<void>;
   resumeCheckpoint: (checkpointId: string) => Promise<void>;
+  submitHitlDecision: (checkpointId: string, decision: "approve" | "reject") => Promise<void>;
   refreshCheckpoints: () => Promise<void>;
   toggleRagMode: () => Promise<void>;
   toggleSkillRetrieval: () => Promise<void>;
@@ -128,6 +135,7 @@ type ChatStore = Pick<
   AppStore,
   | "messages"
   | "checkpoints"
+  | "pendingHitl"
   | "streamingMessages"
   | "isInitializing"
   | "isStreaming"
@@ -136,6 +144,7 @@ type ChatStore = Pick<
   | "retryInitialization"
   | "sendMessage"
   | "resumeCheckpoint"
+  | "submitHitlDecision"
   | "refreshCheckpoints"
 >;
 
@@ -306,6 +315,60 @@ function normalizeCheckpointEvent(value: unknown): CheckpointEvent | null {
   };
 }
 
+function normalizeHitlEvent(value: unknown): HitlEvent | null {
+  if (!value || typeof value !== "object") {
+    return null;
+  }
+
+  const item = value as Record<string, unknown>;
+  const type = item.type;
+  if (type !== "requested" && type !== "approved" && type !== "rejected") {
+    return null;
+  }
+
+  return {
+    type,
+    run_id: String(item.run_id ?? ""),
+    thread_id: String(item.thread_id ?? ""),
+    session_id: String(item.session_id ?? ""),
+    capability_id: String(item.capability_id ?? ""),
+    capability_type: String(item.capability_type ?? ""),
+    display_name: String(item.display_name ?? ""),
+    risk_level: String(item.risk_level ?? ""),
+    reason: String(item.reason ?? ""),
+    proposed_input:
+      item.proposed_input && typeof item.proposed_input === "object"
+        ? (item.proposed_input as Record<string, unknown>)
+        : {},
+    checkpoint_id: String(item.checkpoint_id ?? ""),
+    resume_source: String(item.resume_source ?? ""),
+    orchestration_engine: String(item.orchestration_engine ?? "")
+  };
+}
+
+function normalizePendingHitl(value: unknown): PendingHitlInterrupt | null {
+  if (!value || typeof value !== "object") {
+    return null;
+  }
+
+  const item = value as Record<string, unknown>;
+  return {
+    run_id: String(item.run_id ?? ""),
+    thread_id: String(item.thread_id ?? ""),
+    session_id: item.session_id == null ? null : String(item.session_id),
+    capability_id: String(item.capability_id ?? ""),
+    capability_type: String(item.capability_type ?? ""),
+    display_name: String(item.display_name ?? ""),
+    risk_level: String(item.risk_level ?? ""),
+    reason: String(item.reason ?? ""),
+    proposed_input:
+      item.proposed_input && typeof item.proposed_input === "object"
+        ? (item.proposed_input as Record<string, unknown>)
+        : {},
+    checkpoint_id: String(item.checkpoint_id ?? "")
+  };
+}
+
 /**
  * Returns one frontend message list from backend history input and converts API history into UI-friendly message objects.
  */
@@ -322,7 +385,10 @@ function toUiMessages(history: Awaited<ReturnType<typeof getSessionHistory>>["me
     runMeta: normalizeRunMeta(message.run_meta),
     checkpointEvents: (message.checkpoint_events ?? [])
       .map((item) => normalizeCheckpointEvent(item))
-      .filter((item): item is CheckpointEvent => item !== null)
+      .filter((item): item is CheckpointEvent => item !== null),
+    hitlEvents: (message.hitl_events ?? [])
+      .map((item) => normalizeHitlEvent(item))
+      .filter((item): item is HitlEvent => item !== null)
   }));
 }
 
@@ -382,6 +448,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
   const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
   const [checkpoints, setCheckpoints] = useState<CheckpointSummary[]>([]);
+  const [pendingHitl, setPendingHitl] = useState<PendingHitlInterrupt | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
   const [streamingMessagesState, setStreamingMessagesState] = useState<Message[]>([]);
   const [messageFeed, setMessageFeed] = useState<Message[]>([]);
@@ -436,10 +503,15 @@ export function AppProvider({ children }: { children: ReactNode }) {
     const resolvedSessionId = sessionId ?? currentSessionId;
     if (!resolvedSessionId) {
       setCheckpoints([]);
+      setPendingHitl(null);
       return;
     }
-    const payload = await listSessionCheckpoints(resolvedSessionId);
+    const [payload, pendingPayload] = await Promise.all([
+      listSessionCheckpoints(resolvedSessionId),
+      getPendingHitl(resolvedSessionId)
+    ]);
     setCheckpoints(payload.checkpoints);
+    setPendingHitl(normalizePendingHitl(pendingPayload.pending_interrupt));
   }, [currentSessionId]);
 
   /**
@@ -460,10 +532,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
    * Returns no value from a session id input and refreshes both message history and aggregate token stats.
    */
   const refreshSessionDetails = useCallback(async function refreshSessionDetails(sessionId: string) {
-    const [history, tokens, checkpointPayload] = await Promise.all([
+    const [history, tokens, checkpointPayload, pendingPayload] = await Promise.all([
       getSessionHistory(sessionId),
       getSessionTokens(sessionId),
-      listSessionCheckpoints(sessionId)
+      listSessionCheckpoints(sessionId),
+      getPendingHitl(sessionId)
     ]);
     const nextMessages = toUiMessages(history.messages);
     setMessages(nextMessages);
@@ -471,6 +544,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     setMessageFeed(buildMessageFeed(nextMessages));
     setTokenStats(tokens);
     setCheckpoints(checkpointPayload.checkpoints);
+    setPendingHitl(normalizePendingHitl(pendingPayload.pending_interrupt));
   }, [setStreamingMessages]);
 
   /**
@@ -510,6 +584,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       setStreamingMessages([]);
       setMessageFeed([]);
       setCheckpoints([]);
+      setPendingHitl(null);
       setTokenStats(null);
     });
   }, [refreshSessions, runUserAction, setStreamingMessages]);
@@ -558,7 +633,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
       retrievalSteps: [],
       usage: null,
       runMeta: null,
-      checkpointEvents: []
+      checkpointEvents: [],
+      hitlEvents: []
     };
     const assistantMessage: Message = {
       id: makeId(),
@@ -574,7 +650,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
         resume_source: "",
         orchestration_engine: "langgraph"
       },
-      checkpointEvents: []
+      checkpointEvents: [],
+      hitlEvents: []
     };
 
     let activeAssistantIndex = -1;
@@ -702,10 +779,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
               return;
             }
 
-            if (
-              event === "checkpoint_created" ||
-              event === "checkpoint_resumed" ||
-              event === "checkpoint_interrupted"
+              if (
+                event === "checkpoint_created" ||
+                event === "checkpoint_resumed" ||
+                event === "checkpoint_interrupted"
             ) {
               const checkpointEvent = normalizeCheckpointEvent({
                 ...data,
@@ -767,9 +844,45 @@ export function AppProvider({ children }: { children: ReactNode }) {
                 thread_id: checkpointEvent.thread_id || activeRunMeta?.thread_id || "",
                 resume_source: checkpointEvent.resume_source || activeRunMeta?.resume_source || "",
                 orchestration_engine: checkpointEvent.orchestration_engine || activeRunMeta?.orchestration_engine || "langgraph"
-              };
-              return;
-            }
+                };
+                return;
+              }
+
+              if (
+                event === "hitl_requested" ||
+                event === "hitl_approved" ||
+                event === "hitl_rejected"
+              ) {
+                const hitlEvent = normalizeHitlEvent({
+                  ...data,
+                  type:
+                    event === "hitl_requested"
+                      ? "requested"
+                      : event === "hitl_approved"
+                        ? "approved"
+                        : "rejected"
+                });
+                if (!hitlEvent) {
+                  return;
+                }
+                patchAssistant((message) => ({
+                  ...message,
+                  hitlEvents: [...message.hitlEvents, hitlEvent],
+                  runMeta:
+                    event === "hitl_requested"
+                      ? {
+                          ...(message.runMeta ?? assistantMessage.runMeta!),
+                          status: "interrupted",
+                          checkpoint_id: hitlEvent.checkpoint_id,
+                          thread_id: hitlEvent.thread_id || message.runMeta?.thread_id || currentSessionId || "",
+                          resume_source: hitlEvent.resume_source || message.runMeta?.resume_source || "hitl_api",
+                          orchestration_engine:
+                            hitlEvent.orchestration_engine || message.runMeta?.orchestration_engine || "langgraph"
+                        }
+                      : message.runMeta
+                }));
+                return;
+              }
 
             if (event === "new_response") {
               flushTokenBuffer();
@@ -781,7 +894,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
                 retrievalSteps: [],
                 usage: null,
                 runMeta: activeRunMeta,
-                checkpointEvents: []
+                checkpointEvents: [],
+                hitlEvents: []
               };
               activeAssistantId = nextAssistant.id;
               setStreamingMessages((previous) => {
@@ -825,11 +939,22 @@ export function AppProvider({ children }: { children: ReactNode }) {
               if (checkpointEvents.length) {
                 patchAssistant((message) => ({
                   ...message,
-                  checkpointEvents
-                }));
+                    checkpointEvents
+                  }));
+                }
+                const hitlEvents = Array.isArray(data.hitl_events)
+                  ? data.hitl_events
+                      .map((item) => normalizeHitlEvent(item))
+                      .filter((item): item is HitlEvent => item !== null)
+                  : [];
+                if (hitlEvents.length) {
+                  patchAssistant((message) => ({
+                    ...message,
+                    hitlEvents
+                  }));
+                }
+                return;
               }
-              return;
-            }
 
             if (event === "title") {
               void refreshSessions();
@@ -908,7 +1033,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
         resume_source: "checkpoint_api",
         orchestration_engine: "langgraph"
       },
-      checkpointEvents: []
+      checkpointEvents: [],
+      hitlEvents: []
     };
 
     let activeAssistantIndex = -1;
@@ -1023,10 +1149,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
               return;
             }
 
-            if (
-              event === "checkpoint_created" ||
-              event === "checkpoint_resumed" ||
-              event === "checkpoint_interrupted"
+              if (
+                event === "checkpoint_created" ||
+                event === "checkpoint_resumed" ||
+                event === "checkpoint_interrupted"
             ) {
               const checkpointEvent = normalizeCheckpointEvent({
                 ...data,
@@ -1071,9 +1197,45 @@ export function AppProvider({ children }: { children: ReactNode }) {
                 resume_source: checkpointEvent.resume_source || activeRunMeta?.resume_source || "checkpoint_api",
                 orchestration_engine:
                   checkpointEvent.orchestration_engine || activeRunMeta?.orchestration_engine || "langgraph"
-              };
-              return;
-            }
+                };
+                return;
+              }
+
+              if (
+                event === "hitl_requested" ||
+                event === "hitl_approved" ||
+                event === "hitl_rejected"
+              ) {
+                const hitlEvent = normalizeHitlEvent({
+                  ...data,
+                  type:
+                    event === "hitl_requested"
+                      ? "requested"
+                      : event === "hitl_approved"
+                        ? "approved"
+                        : "rejected"
+                });
+                if (!hitlEvent) {
+                  return;
+                }
+                patchAssistant((message) => ({
+                  ...message,
+                  hitlEvents: [...message.hitlEvents, hitlEvent],
+                  runMeta:
+                    event === "hitl_requested"
+                      ? {
+                          ...(message.runMeta ?? assistantMessage.runMeta!),
+                          status: "interrupted",
+                          checkpoint_id: hitlEvent.checkpoint_id,
+                          thread_id: hitlEvent.thread_id || message.runMeta?.thread_id || currentSessionId || "",
+                          resume_source: hitlEvent.resume_source || message.runMeta?.resume_source || "hitl_api",
+                          orchestration_engine:
+                            hitlEvent.orchestration_engine || message.runMeta?.orchestration_engine || "langgraph"
+                        }
+                      : message.runMeta
+                }));
+                return;
+              }
 
             if (event === "new_response") {
               flushTokenBuffer();
@@ -1085,7 +1247,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
                 retrievalSteps: [],
                 usage: null,
                 runMeta: activeRunMeta,
-                checkpointEvents: []
+                checkpointEvents: [],
+                hitlEvents: []
               };
               activeAssistantId = nextAssistant.id;
               setStreamingMessages((previous) => {
@@ -1129,11 +1292,22 @@ export function AppProvider({ children }: { children: ReactNode }) {
               if (checkpointEvents.length) {
                 patchAssistant((message) => ({
                   ...message,
-                  checkpointEvents
-                }));
+                    checkpointEvents
+                  }));
+                }
+                const hitlEvents = Array.isArray(data.hitl_events)
+                  ? data.hitl_events
+                      .map((item) => normalizeHitlEvent(item))
+                      .filter((item): item is HitlEvent => item !== null)
+                  : [];
+                if (hitlEvents.length) {
+                  patchAssistant((message) => ({
+                    ...message,
+                    hitlEvents
+                  }));
+                }
+                return;
               }
-              return;
-            }
 
             if (event === "error") {
               flushTokenBuffer();
@@ -1167,6 +1341,232 @@ export function AppProvider({ children }: { children: ReactNode }) {
       }
       flushTokenBuffer();
 
+      if (streamingMessagesRef.current.length) {
+        const finalizedMessages = streamingMessagesRef.current;
+        setMessages((previous) => [...previous, ...finalizedMessages]);
+        setStreamingMessages([]);
+      }
+
+      try {
+        await refreshSessions();
+        await refreshSessionDetails(currentSessionId);
+        setConnectionError(null);
+      } catch (error) {
+        setConnectionError(toErrorMessage(error));
+      }
+    }
+  }, [currentSessionId, isStreaming, refreshSessionDetails, refreshSessions, setStreamingMessages]);
+
+  const submitHitlDecision = useCallback(async function submitHitlDecision(
+    checkpointId: string,
+    decision: "approve" | "reject"
+  ) {
+    if (!currentSessionId || !checkpointId || isStreaming) {
+      return;
+    }
+
+    const assistantMessage: Message = {
+      id: makeId(),
+      role: "assistant",
+      content: "",
+      toolCalls: [],
+      retrievalSteps: [],
+      usage: null,
+      runMeta: {
+        status: "restoring",
+        thread_id: currentSessionId,
+        checkpoint_id: checkpointId,
+        resume_source: "hitl_api",
+        orchestration_engine: "langgraph"
+      },
+      checkpointEvents: [],
+      hitlEvents: []
+    };
+
+    let activeAssistantIndex = -1;
+    let activeRunMeta: RunMeta | null = assistantMessage.runMeta;
+    setStreamingMessages(() => {
+      activeAssistantIndex = 0;
+      return [assistantMessage];
+    });
+    setIsStreaming(true);
+    setConnectionError(null);
+
+    let activeAssistantId = assistantMessage.id;
+
+    const patchAssistant = (updater: (message: Message) => Message) => {
+      setStreamingMessages((previous) =>
+        updateMessageAtPosition(previous, activeAssistantIndex, activeAssistantId, updater)
+      );
+    };
+
+    try {
+      await streamHitlDecision(
+        {
+          session_id: currentSessionId,
+          checkpoint_id: checkpointId,
+          decision
+        },
+        {
+          onEvent(event, data) {
+            if (event === "run_status") {
+              const nextMeta = normalizeRunMeta(data);
+              if (!nextMeta) {
+                return;
+              }
+              activeRunMeta = nextMeta;
+              patchAssistant((message) => ({
+                ...message,
+                runMeta: nextMeta
+              }));
+              return;
+            }
+
+            if (
+              event === "checkpoint_created" ||
+              event === "checkpoint_resumed" ||
+              event === "checkpoint_interrupted"
+            ) {
+              const checkpointEvent = normalizeCheckpointEvent({
+                ...data,
+                type:
+                  event === "checkpoint_created"
+                    ? "created"
+                    : event === "checkpoint_resumed"
+                      ? "resumed"
+                      : "interrupted"
+              });
+              if (!checkpointEvent) {
+                return;
+              }
+              patchAssistant((message) => ({
+                ...message,
+                checkpointEvents: [...message.checkpointEvents, checkpointEvent]
+              }));
+              return;
+            }
+
+            if (
+              event === "hitl_requested" ||
+              event === "hitl_approved" ||
+              event === "hitl_rejected"
+            ) {
+              const hitlEvent = normalizeHitlEvent({
+                ...data,
+                type:
+                  event === "hitl_requested"
+                    ? "requested"
+                    : event === "hitl_approved"
+                      ? "approved"
+                      : "rejected"
+              });
+              if (!hitlEvent) {
+                return;
+              }
+              patchAssistant((message) => ({
+                ...message,
+                hitlEvents: [...message.hitlEvents, hitlEvent]
+              }));
+              return;
+            }
+
+            if (event === "new_response") {
+              const nextAssistant: Message = {
+                id: makeId(),
+                role: "assistant",
+                content: "",
+                toolCalls: [],
+                retrievalSteps: [],
+                usage: null,
+                runMeta: activeRunMeta,
+                checkpointEvents: [],
+                hitlEvents: []
+              };
+              activeAssistantId = nextAssistant.id;
+              setStreamingMessages((previous) => {
+                activeAssistantIndex = previous.length;
+                return [...previous, nextAssistant];
+              });
+              return;
+            }
+
+            if (event === "token") {
+              patchAssistant((message) => ({
+                ...message,
+                content: `${message.content}${String(data.content ?? "")}`
+              }));
+              return;
+            }
+
+            if (event === "done") {
+              const finalContent = String(data.content ?? "");
+              patchAssistant((message) =>
+                message.content
+                  ? message
+                  : {
+                      ...message,
+                      content: finalContent
+                    }
+              );
+              const usage = normalizeUsage(data.usage);
+              if (usage) {
+                patchAssistant((message) => ({
+                  ...message,
+                  usage
+                }));
+              }
+              const runMeta = normalizeRunMeta(data.run_meta);
+              if (runMeta) {
+                activeRunMeta = runMeta;
+                patchAssistant((message) => ({
+                  ...message,
+                  runMeta
+                }));
+              }
+              const checkpointEvents = Array.isArray(data.checkpoint_events)
+                ? data.checkpoint_events
+                    .map((item) => normalizeCheckpointEvent(item))
+                    .filter((item): item is CheckpointEvent => item !== null)
+                : [];
+              if (checkpointEvents.length) {
+                patchAssistant((message) => ({
+                  ...message,
+                  checkpointEvents
+                }));
+              }
+              const hitlEvents = Array.isArray(data.hitl_events)
+                ? data.hitl_events
+                    .map((item) => normalizeHitlEvent(item))
+                    .filter((item): item is HitlEvent => item !== null)
+                : [];
+              if (hitlEvents.length) {
+                patchAssistant((message) => ({
+                  ...message,
+                  hitlEvents
+                }));
+              }
+              return;
+            }
+
+            if (event === "error") {
+              patchAssistant((message) => ({
+                ...message,
+                content: message.content || `Request failed: ${String(data.error ?? "unknown error")}`
+              }));
+            }
+          }
+        }
+      );
+      setConnectionError(null);
+    } catch (error) {
+      const errorMessage = toErrorMessage(error);
+      setConnectionError(errorMessage);
+      patchAssistant((message) => ({
+        ...message,
+        content: message.content || `Request failed: ${errorMessage}`
+      }));
+    } finally {
+      setIsStreaming(false);
       if (streamingMessagesRef.current.length) {
         const finalizedMessages = streamingMessagesRef.current;
         setMessages((previous) => [...previous, ...finalizedMessages]);
@@ -1263,6 +1663,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         } else {
           setCurrentSessionId(null);
           setCheckpoints([]);
+          setPendingHitl(null);
           setMessages([]);
           setStreamingMessages([]);
           setMessageFeed([]);
@@ -1365,6 +1766,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         setCurrentSessionId(created.id);
         setSessions([created]);
         setCheckpoints([]);
+        setPendingHitl(null);
       }
 
       const file = await loadFile("memory/MEMORY.md");
@@ -1377,6 +1779,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       setSessions([]);
       setCurrentSessionId(null);
       setCheckpoints([]);
+      setPendingHitl(null);
       setMessages([]);
       setStreamingMessages([]);
       setMessageFeed([]);
@@ -1458,6 +1861,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     () => ({
       messages,
       checkpoints,
+      pendingHitl,
       streamingMessages: streamingMessagesState,
       isInitializing,
       isStreaming,
@@ -1466,11 +1870,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
       retryInitialization,
       sendMessage,
       resumeCheckpoint,
+      submitHitlDecision,
       refreshCheckpoints
     }),
     [
       messages,
       checkpoints,
+      pendingHitl,
       streamingMessagesState,
       isInitializing,
       isStreaming,
@@ -1479,6 +1885,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       retryInitialization,
       sendMessage,
       resumeCheckpoint,
+      submitHitlDecision,
       refreshCheckpoints
     ]
   );
