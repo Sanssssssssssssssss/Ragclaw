@@ -9,6 +9,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from src.backend.api.chat import router as chat_router
+from src.backend.api.capabilities import router as capabilities_router
 from src.backend.api.compress import router as compress_router
 from src.backend.api.config_api import router as config_router
 from src.backend.api.files import router as files_router
@@ -81,6 +82,7 @@ app.add_middleware(
 )
 
 app.include_router(chat_router, prefix="/api", tags=["chat"])
+app.include_router(capabilities_router, prefix="/api", tags=["capabilities"])
 app.include_router(sessions_router, prefix="/api", tags=["sessions"])
 app.include_router(files_router, prefix="/api", tags=["files"])
 app.include_router(tokens_router, prefix="/api", tags=["tokens"])

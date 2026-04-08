@@ -6,7 +6,7 @@ from typing import Any
 
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import JSONResponse, StreamingResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError
 
 from src.backend.api.adapters import LegacyChatAccumulator
 from src.backend.api.chat import _build_runtime_and_resume_executor, _sse
@@ -39,10 +39,11 @@ class ResumeCheckpointRequest(BaseModel):
 
 
 class HitlDecisionRequest(BaseModel):
-    decision: str = Field(..., pattern="^(approve|reject)$")
+    decision: str = Field(..., pattern="^(approve|reject|edit)$")
     stream: bool = True
     actor_id: str | None = Field(default=None, max_length=200)
     actor_type: str | None = Field(default=None, max_length=100)
+    edited_input: dict[str, Any] | None = None
 
 
 def _session_manager_or_raise():
@@ -50,6 +51,33 @@ def _session_manager_or_raise():
     if session_manager is None:
         raise HTTPException(status_code=503, detail="Agent manager is not initialized")
     return session_manager
+
+
+def _resolve_capability_tool(capability_id: str):
+    for tool in list(getattr(agent_manager, "tools", []) or []):
+        if str(getattr(tool, "name", "") or "") == str(capability_id or ""):
+            return tool
+    return None
+
+
+def _validated_hitl_edit_payload(capability_id: str, edited_input: dict[str, Any] | None) -> dict[str, Any]:
+    if edited_input is None:
+        raise HTTPException(status_code=400, detail="edited_input is required for edit decisions")
+    if not isinstance(edited_input, dict):
+        raise HTTPException(status_code=400, detail="edited_input must be an object")
+    tool = _resolve_capability_tool(capability_id)
+    if tool is None:
+        return dict(edited_input)
+    args_schema = getattr(tool, "args_schema", None)
+    if args_schema is None or not hasattr(args_schema, "model_validate"):
+        return dict(edited_input)
+    try:
+        model = args_schema.model_validate(edited_input)
+    except ValidationError as exc:
+        raise HTTPException(status_code=400, detail={"message": "edited_input failed schema validation", "errors": exc.errors()}) from exc
+    if hasattr(model, "model_dump"):
+        return dict(model.model_dump())
+    return dict(edited_input)
 
 
 @router.get("/sessions")
@@ -126,10 +154,20 @@ async def get_pending_hitl(session_id: str) -> dict[str, Any]:
     _session_manager_or_raise()
     thread_id = checkpoint_store.thread_id_for(session_id=session_id, run_id=session_id)
     pending = checkpoint_store.pending_hitl(thread_id=thread_id)
+    requests = []
+    for request in checkpoint_store.list_hitl_requests(thread_id=thread_id):
+        decision = checkpoint_store.get_hitl_decision(request_id=request.request_id)
+        requests.append(
+            {
+                "request": request.to_dict(),
+                "decision": decision.to_dict() if decision is not None else None,
+            }
+        )
     return {
         "session_id": session_id,
         "thread_id": thread_id,
         "pending_interrupt": pending.to_dict() if pending is not None else None,
+        "requests": requests,
     }
 
 
@@ -274,6 +312,10 @@ async def submit_hitl_decision(
     thread_id = checkpoint_store.thread_id_for(session_id=session_id, run_id=session_id)
     actor_id = str(payload.actor_id or "").strip() or f"session:{session_id}"
     actor_type = str(payload.actor_type or "").strip() or "session_user"
+    request = checkpoint_store.get_hitl_request(thread_id=thread_id, checkpoint_id=checkpoint_id) if payload.decision == "edit" else None
+    if payload.decision == "edit" and request is None:
+        raise HTTPException(status_code=404, detail="Pending HITL interrupt not found")
+    edited_input = _validated_hitl_edit_payload(request.capability_id, payload.edited_input) if request is not None else None
     request, decision_record, created = checkpoint_store.record_hitl_decision(
         thread_id=thread_id,
         checkpoint_id=checkpoint_id,
@@ -282,6 +324,7 @@ async def submit_hitl_decision(
         actor_type=actor_type,
         decided_at=_utc_now_iso(),
         resume_source="hitl_api",
+        edited_input_snapshot=edited_input,
     )
     if request is None or decision_record is None:
         raise HTTPException(status_code=404, detail="Pending HITL interrupt not found")
@@ -314,6 +357,7 @@ async def submit_hitl_decision(
                 "actor_type": decision_record.actor_type,
                 "decided_at": decision_record.decided_at,
                 "resume_source": decision_record.resume_source,
+                "edited_input": edited_input,
             },
             run_status="restoring",
             persist_user_message=False,

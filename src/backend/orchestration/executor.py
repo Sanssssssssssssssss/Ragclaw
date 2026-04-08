@@ -302,10 +302,15 @@ class HarnessLangGraphOrchestrator:
         response = interrupt(request)
         response_payload = dict(response) if isinstance(response, dict) else {"decision": response}
         decision = str(response_payload.get("decision", "") or "").strip().lower()
-        if decision not in {"approve", "reject"}:
+        if decision not in {"approve", "reject", "edit"}:
             decision = "reject"
         thread_id = str(request["thread_id"] or "")
         checkpoint_id = self._resume_checkpoint_id or str(request.get("checkpoint_id", "") or "")
+        edited_input = (
+            dict(response_payload.get("edited_input", {}) or {})
+            if decision == "edit"
+            else None
+        )
         audited_request = checkpoint_store.get_hitl_request(
             thread_id=thread_id,
             checkpoint_id=checkpoint_id,
@@ -322,6 +327,7 @@ class HarnessLangGraphOrchestrator:
                 actor_type=str(response_payload.get("actor_type", "") or "session_user"),
                 decided_at=str(response_payload.get("decided_at", "") or bindings.runtime.now()),
                 resume_source=str(response_payload.get("resume_source", "") or self._resume_source or "langgraph_resume"),
+                edited_input_snapshot=edited_input,
             )
 
         payload = {
@@ -353,6 +359,12 @@ class HarnessLangGraphOrchestrator:
                 if audited_decision is not None
                 else dict(request["proposed_input"])
             )
+        elif decision == "edit":
+            payload["edited_input_snapshot"] = (
+                dict(getattr(audited_decision, "edited_input_snapshot", {}) or {})
+                if audited_decision is not None
+                else dict(edited_input or request["proposed_input"])
+            )
         else:
             payload["rejected_input_snapshot"] = (
                 dict(getattr(audited_decision, "rejected_input_snapshot", {}) or {})
@@ -361,7 +373,7 @@ class HarnessLangGraphOrchestrator:
             )
         await bindings.runtime.emit(
             bindings.handle,
-            "hitl.approved" if decision == "approve" else "hitl.rejected",
+            "hitl.approved" if decision == "approve" else "hitl.edited" if decision == "edit" else "hitl.rejected",
             dict(payload),
         )
         if decision == "approve":
@@ -369,6 +381,15 @@ class HarnessLangGraphOrchestrator:
             return {
                 "interrupt_request": request,
                 "approval_decision": "approve",
+                "recovery_action": "",
+            }
+        if decision == "edit":
+            bindings.context.approval_overrides.add(str(request["capability_id"]))
+            return {
+                "interrupt_request": request,
+                "approval_decision": "edit",
+                "explicit_capability_id": str(request["capability_id"]),
+                "explicit_capability_payload": dict(payload.get("edited_input_snapshot", {}) or request["proposed_input"]),
                 "recovery_action": "",
             }
 
@@ -641,7 +662,13 @@ class HarnessLangGraphOrchestrator:
                 recorded_tools=recorded_tools,
                 strategy=state.get("execution_strategy"),
             )
-        elif final_answer or recorded_tools:
+        elif not final_answer and recorded_tools:
+            final_answer = "\n\n".join(
+                str(item.get("output", "") or "").strip()
+                for item in recorded_tools
+                if str(item.get("output", "") or "").strip()
+            )
+        if final_answer:
             await bindings.runtime.emit(bindings.handle, "answer.completed", AnswerRecord(content=final_answer, segment_index=bindings.runtime.current_segment_index(bindings.handle), final=True).to_dict())
         return {"final_answer": final_answer, "answer_finalized": True}
 
@@ -788,7 +815,7 @@ class HarnessLangGraphOrchestrator:
         spec = selected_specs[0]
         proposed_input = state.get("explicit_capability_payload")
         if not isinstance(proposed_input, dict) or not proposed_input:
-            proposed_input = {"message": state["user_message"]}
+            proposed_input = self._approval_proposed_input(spec.capability_id, state["user_message"])
         return {
             "run_id": state["run_id"],
             "thread_id": state.get("thread_id", ""),
@@ -801,6 +828,19 @@ class HarnessLangGraphOrchestrator:
             "proposed_input": dict(proposed_input),
             "checkpoint_id": str(state.get("checkpoint_meta", {}).get("checkpoint_id", "") or ""),
         }
+
+    def _approval_proposed_input(self, capability_id: str, user_message: str) -> dict[str, Any]:
+        normalized = str(user_message or "").strip()
+        if capability_id == "python_repl":
+            print_match = re.search(r"(print\s*\([^)]+\))", normalized, re.IGNORECASE)
+            if print_match:
+                return {"code": print_match.group(1)}
+            calc_match = re.search(r"\bcalculate\s+(.+?)(?:,|and tell|then tell|$)", normalized, re.IGNORECASE)
+            if calc_match:
+                expression = calc_match.group(1).strip().rstrip(".")
+                return {"code": f"print({expression})"}
+            return {"code": normalized}
+        return {"message": normalized}
 
     async def _stream_model_answer(self, messages: list[dict[str, str]], *, extra_instructions: list[str] | None = None, system_prompt_override: str | None = None, stream_deltas: bool = True) -> tuple[str, dict[str, int] | None]:
         bindings = self._bindings_or_raise()

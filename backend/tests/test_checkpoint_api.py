@@ -439,6 +439,55 @@ class CheckpointApiTests(unittest.TestCase):
         self.assertEqual(fake_manager.session_manager.saved_messages[0]["run_meta"]["status"], "resumed")
         self.assertEqual(fake_manager.session_manager.saved_messages[0]["hitl_events"][0]["type"], "approved")
 
+    def test_submit_hitl_edit_decision_passes_edited_input(self) -> None:
+        app = self._build_app()
+        fake_manager = FakeAgentManager()
+        runtime = FakeRuntime([])
+        pending = PendingHitlRequest(
+            request_id="req-edit",
+            run_id="run-1",
+            thread_id="session-1",
+            session_id="session-1",
+            checkpoint_id="cp-hitl-edit",
+            capability_id="python_repl",
+            capability_type="tool",
+            display_name="Python REPL",
+            risk_level="high",
+            reason="Python REPL requires explicit approval before execution.",
+            proposed_input={"code": "print(2 + 2)"},
+            requested_at="2026-04-07T12:00:00Z",
+        )
+        decision_record = type(
+            "DecisionObj",
+            (),
+            {
+                "decision_id": "decision-edit",
+                "request_id": "req-edit",
+                "decision": "edit",
+                "actor_id": "session:session-1",
+                "actor_type": "session_user",
+                "decided_at": "2026-04-07T12:01:00Z",
+                "resume_source": "hitl_api",
+            },
+        )()
+        with (
+            patch.object(sessions_api, "agent_manager", fake_manager),
+            patch.object(sessions_api.checkpoint_store, "get_hitl_request", return_value=pending),
+            patch.object(
+                sessions_api.checkpoint_store,
+                "record_hitl_decision",
+                return_value=(pending, decision_record, True),
+            ) as record_mock,
+            patch.object(sessions_api, "_build_runtime_and_resume_executor", return_value=(runtime, object())),
+        ):
+            client = TestClient(app)
+            response = client.post(
+                "/api/sessions/session-1/hitl/cp-hitl-edit/decision",
+                json={"decision": "edit", "edited_input": {"code": "print(3 + 4)"}, "stream": False},
+            )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(record_mock.call_args.kwargs["edited_input_snapshot"], {"code": "print(3 + 4)"})
+
     def test_duplicate_hitl_decision_is_safely_rejected(self) -> None:
         app = self._build_app()
         fake_manager = FakeAgentManager()

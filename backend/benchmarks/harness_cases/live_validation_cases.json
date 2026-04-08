@@ -252,6 +252,51 @@
       "tags": ["smoke", "hitl"]
     },
     {
+      "case_id": "live_hitl_python_repl_edit",
+      "scenario": "hitl_python_repl_edit",
+      "message": "Use python_repl only. Run print(2 + 2). Then let me edit the payload and continue.",
+      "expect_route": "workspace_file_ops",
+      "expect_tool": true,
+      "expect_capability": true,
+      "expect_capability_governance": true,
+      "expect_resume": true,
+      "expect_final_contains": ["7"],
+      "setup": {
+        "hitl_edited_input": {
+          "code": "print(3 + 4)"
+        }
+      },
+      "tool_calls": [
+        {
+          "name": "python_repl",
+          "args": {
+            "code": "print(2 + 2)"
+          }
+        }
+      ],
+      "tags": ["smoke", "hitl", "edit"]
+    },
+    {
+      "case_id": "live_hitl_python_repl_reject",
+      "scenario": "hitl_python_repl_reject",
+      "message": "Use python_repl only, calculate 2 + 2, but reject the approval and tell me what happened.",
+      "expect_route": "workspace_file_ops",
+      "expect_tool": false,
+      "expect_capability": true,
+      "expect_capability_governance": true,
+      "expect_resume": true,
+      "expect_final_contains": ["rejected this approval request"],
+      "tool_calls": [
+        {
+          "name": "python_repl",
+          "args": {
+            "code": "print(2 + 2)"
+          }
+        }
+      ],
+      "tags": ["smoke", "hitl", "reject"]
+    },
+    {
       "case_id": "live_recovery_timeout_retry",
       "scenario": "mcp_web_recovery_timeout",
       "message": "Use Web MCP only, fetch {{web_base_url}}/live/recovery/retry, and answer with the page text.",

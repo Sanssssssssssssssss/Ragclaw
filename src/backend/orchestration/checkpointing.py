@@ -110,6 +110,7 @@ class HitlDecisionRecord:
     decided_at: str
     resume_source: str
     approved_input_snapshot: dict[str, Any] | None = None
+    edited_input_snapshot: dict[str, Any] | None = None
     rejected_input_snapshot: dict[str, Any] | None = None
 
     def to_dict(self) -> dict[str, Any]:
@@ -122,6 +123,7 @@ class HitlDecisionRecord:
             "decided_at": self.decided_at,
             "resume_source": self.resume_source,
             "approved_input_snapshot": dict(self.approved_input_snapshot) if self.approved_input_snapshot is not None else None,
+            "edited_input_snapshot": dict(self.edited_input_snapshot) if self.edited_input_snapshot is not None else None,
             "rejected_input_snapshot": dict(self.rejected_input_snapshot) if self.rejected_input_snapshot is not None else None,
         }
 
@@ -329,6 +331,20 @@ class LangGraphCheckpointStore:
             ).fetchone()
             return self._request_from_row(row)
 
+    def list_hitl_requests(self, *, thread_id: str, limit: int = 25) -> list[PendingHitlRequest]:
+        with self._lock:
+            rows = self._conn_or_raise().execute(
+                """
+                SELECT *
+                FROM hitl_requests
+                WHERE thread_id = ?
+                ORDER BY requested_at DESC
+                LIMIT ?
+                """,
+                (thread_id, max(1, int(limit))),
+            ).fetchall()
+            return [item for item in (self._request_from_row(row) for row in rows) if item is not None]
+
     def get_hitl_request(self, *, thread_id: str, checkpoint_id: str) -> PendingHitlRequest | None:
         with self._lock:
             row = self._conn_or_raise().execute(
@@ -381,10 +397,11 @@ class LangGraphCheckpointStore:
         actor_type: str,
         decided_at: str,
         resume_source: str,
+        edited_input_snapshot: dict[str, Any] | None = None,
     ) -> tuple[PendingHitlRequest | None, HitlDecisionRecord | None, bool]:
         normalized_decision = str(decision or "").strip().lower()
-        if normalized_decision not in {"approve", "reject"}:
-            raise ValueError("decision must be approve or reject")
+        if normalized_decision not in {"approve", "reject", "edit"}:
+            raise ValueError("decision must be approve, reject, or edit")
         with self._lock:
             request = self.get_hitl_request(thread_id=thread_id, checkpoint_id=checkpoint_id)
             if request is None:
@@ -393,6 +410,7 @@ class LangGraphCheckpointStore:
             if existing is not None:
                 return request, existing, False
             snapshot = dict(request.proposed_input)
+            edited_snapshot = dict(edited_input_snapshot or {}) if normalized_decision == "edit" else None
             record = HitlDecisionRecord(
                 decision_id=f"hitl-decision-{uuid4().hex}",
                 request_id=request.request_id,
@@ -402,6 +420,7 @@ class LangGraphCheckpointStore:
                 decided_at=decided_at,
                 resume_source=str(resume_source or "").strip(),
                 approved_input_snapshot=snapshot if normalized_decision == "approve" else None,
+                edited_input_snapshot=edited_snapshot,
                 rejected_input_snapshot=snapshot if normalized_decision == "reject" else None,
             )
             conn = self._conn_or_raise()
@@ -416,8 +435,9 @@ class LangGraphCheckpointStore:
                     decided_at,
                     resume_source,
                     approved_input_snapshot_json,
+                    edited_input_snapshot_json,
                     rejected_input_snapshot_json
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     record.decision_id,
@@ -429,6 +449,9 @@ class LangGraphCheckpointStore:
                     record.resume_source,
                     json.dumps(record.approved_input_snapshot, ensure_ascii=False)
                     if record.approved_input_snapshot is not None
+                    else None,
+                    json.dumps(record.edited_input_snapshot, ensure_ascii=False)
+                    if record.edited_input_snapshot is not None
                     else None,
                     json.dumps(record.rejected_input_snapshot, ensure_ascii=False)
                     if record.rejected_input_snapshot is not None
@@ -518,11 +541,18 @@ class LangGraphCheckpointStore:
                 decided_at TEXT NOT NULL,
                 resume_source TEXT NOT NULL,
                 approved_input_snapshot_json TEXT,
+                edited_input_snapshot_json TEXT,
                 rejected_input_snapshot_json TEXT,
                 FOREIGN KEY (request_id) REFERENCES hitl_requests(request_id)
             );
             """
         )
+        columns = {
+            str(row["name"])
+            for row in conn.execute("PRAGMA table_info(hitl_decisions)").fetchall()
+        }
+        if "edited_input_snapshot_json" not in columns:
+            conn.execute("ALTER TABLE hitl_decisions ADD COLUMN edited_input_snapshot_json TEXT")
         conn.commit()
 
     def _extract_route_intent(self, channel_values: dict[str, Any]) -> str:
@@ -554,6 +584,7 @@ class LangGraphCheckpointStore:
         if row is None:
             return None
         approved_snapshot = row["approved_input_snapshot_json"]
+        edited_snapshot = row["edited_input_snapshot_json"] if "edited_input_snapshot_json" in row.keys() else None
         rejected_snapshot = row["rejected_input_snapshot_json"]
         return HitlDecisionRecord(
             decision_id=str(row["decision_id"]),
@@ -564,6 +595,7 @@ class LangGraphCheckpointStore:
             decided_at=str(row["decided_at"]),
             resume_source=str(row["resume_source"]),
             approved_input_snapshot=dict(json.loads(str(approved_snapshot))) if approved_snapshot else None,
+            edited_input_snapshot=dict(json.loads(str(edited_snapshot))) if edited_snapshot else None,
             rejected_input_snapshot=dict(json.loads(str(rejected_snapshot))) if rejected_snapshot else None,
         )
 

@@ -111,6 +111,7 @@ class LegacyChatAccumulator:
             "reason": str(payload.get("reason", "") or ""),
             "proposed_input": dict(payload.get("proposed_input", {}) or {}),
             "approved_input_snapshot": dict(payload.get("approved_input_snapshot", {}) or {}) if payload.get("approved_input_snapshot") is not None else None,
+            "edited_input_snapshot": dict(payload.get("edited_input_snapshot", {}) or {}) if payload.get("edited_input_snapshot") is not None else None,
             "rejected_input_snapshot": dict(payload.get("rejected_input_snapshot", {}) or {}) if payload.get("rejected_input_snapshot") is not None else None,
             "checkpoint_id": str(payload.get("checkpoint_id", "") or self.run_meta.get("checkpoint_id", "") or ""),
             "resume_source": str(payload.get("resume_source", "") or self.run_meta.get("resume_source", "") or ""),
@@ -172,6 +173,11 @@ class LegacyChatAccumulator:
         if event.name == "hitl.rejected":
             hitl_event = self._append_hitl_event("rejected", payload)
             legacy_events.append(("hitl_rejected", hitl_event))
+            return legacy_events
+
+        if event.name == "hitl.edited":
+            hitl_event = self._append_hitl_event("edited", payload)
+            legacy_events.append(("hitl_edited", hitl_event))
             return legacy_events
 
         if event.name == "retrieval.completed":

@@ -651,7 +651,7 @@ def _result_from_trace(
         failure_reason.append("sse_order_invalid")
 
     capability_present = (
-        "capability.started" in trace_events
+        any(name in trace_events for name in ("capability.started", "capability.blocked"))
         and any(name in trace_events for name in ("capability.completed", "capability.failed", "capability.blocked"))
     )
     recovery_present = "recovery.started" in trace_events
@@ -723,11 +723,12 @@ async def _run_one_case(client: httpx.AsyncClient, runtime, case: LiveValidation
             checkpoint_id = str(pending.get("checkpoint_id", "") or "")
             if not checkpoint_id:
                 raise AssertionError("no pending HITL checkpoint produced for live HITL case")
-            decision = "reject" if "reject" in case.scenario else "approve"
+            decision = "edit" if "edit" in case.scenario else "reject" if "reject" in case.scenario else "approve"
+            edited_input = dict(case.setup.get("hitl_edited_input", {}) or {}) if decision == "edit" else None
             started = time.perf_counter()
             resume_response = await client.post(
                 f"/api/sessions/{session_id}/hitl/{checkpoint_id}/decision",
-                json={"decision": decision, "stream": True},
+                json={"decision": decision, "edited_input": edited_input, "stream": True},
                 timeout=40.0,
             )
             resume_response.raise_for_status()

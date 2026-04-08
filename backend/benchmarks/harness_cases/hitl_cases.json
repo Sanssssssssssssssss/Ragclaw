@@ -53,6 +53,38 @@
         "queue": false,
         "answer_fragment": "rejected this approval request"
       }
+    },
+    {
+      "case_id": "hitl_python_repl_edit",
+      "suite": "integration",
+      "runner": "integration_lifecycle",
+      "scenario": "hitl_python_repl_edit",
+      "message": "Use python_repl only. Run print(2 + 2). Then let me edit the payload and continue.",
+      "session_id": "integration-hitl-edit",
+      "tags": ["smoke", "hitl", "integration"],
+      "difficulty": "smoke",
+      "setup": {
+        "hitl_edited_input": {
+          "code": "print(3 + 4)"
+        }
+      },
+      "tool_calls": [
+        {
+          "name": "python_repl",
+          "args": {
+            "code": "print(2 + 2)"
+          }
+        }
+      ],
+      "expect": {
+        "route_intent": "workspace_file_ops",
+        "skill_name": "",
+        "retrieval": false,
+        "tool": true,
+        "failure": false,
+        "queue": false,
+        "answer_fragment": "7"
+      }
     }
   ]
 }

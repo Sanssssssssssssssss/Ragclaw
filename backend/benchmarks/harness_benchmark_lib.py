@@ -1116,13 +1116,14 @@ async def _run_integration_lifecycle_cases(
                                 break
                         if not checkpoint_id:
                             raise AssertionError(f"no resumable HITL checkpoint produced for case {case.case_id}")
-                    decision = "reject" if "reject" in case.scenario else "approve"
+                    decision = "edit" if "edit" in case.scenario else "reject" if "reject" in case.scenario else "approve"
+                    edited_input = dict(case.setup.get("hitl_edited_input", {}) or {}) if decision == "edit" else None
                     resume_executor = HarnessExecutors(
                         manager,
                         resume_checkpoint_id=checkpoint_id,
                         resume_thread_id=pending_thread_id or case.session_id or run_id,
                         resume_source="benchmark_hitl",
-                        resume_payload={"decision": decision},
+                        resume_payload={"decision": decision, "edited_input": edited_input} if edited_input is not None else {"decision": decision},
                     )
                     resumed_run_id, resumed_elapsed_ms = await _run_case_through_runtime(
                         runtime=runtime,

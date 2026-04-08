@@ -4,7 +4,7 @@ export type ToolCall = {
   output: string;
 };
 
-export type RunStatus = "fresh" | "resumed" | "interrupted" | "restoring";
+export type RunStatus = "fresh" | "resumed" | "interrupted" | "restoring" | "edited" | "awaiting_approval";
 
 export type RunMeta = {
   status: RunStatus;
@@ -25,7 +25,14 @@ export type CheckpointEvent = {
 };
 
 export type HitlEvent = {
-  type: "requested" | "approved" | "rejected";
+  type: "requested" | "approved" | "rejected" | "edited";
+  request_id: string;
+  requested_at: string;
+  decision_id: string;
+  decision: string;
+  actor_id: string;
+  actor_type: string;
+  decided_at: string;
   run_id: string;
   thread_id: string;
   session_id: string;
@@ -35,12 +42,16 @@ export type HitlEvent = {
   risk_level: string;
   reason: string;
   proposed_input: Record<string, unknown>;
+  approved_input_snapshot?: Record<string, unknown> | null;
+  edited_input_snapshot?: Record<string, unknown> | null;
+  rejected_input_snapshot?: Record<string, unknown> | null;
   checkpoint_id: string;
   resume_source: string;
   orchestration_engine: string;
 };
 
 export type PendingHitlInterrupt = {
+  request_id: string;
   run_id: string;
   thread_id: string;
   session_id: string | null;
@@ -50,7 +61,38 @@ export type PendingHitlInterrupt = {
   risk_level: string;
   reason: string;
   proposed_input: Record<string, unknown>;
+  requested_at: string;
+  status: string;
   checkpoint_id: string;
+};
+
+export type HitlAuditEntry = {
+  request: PendingHitlInterrupt;
+  decision: {
+    decision_id: string;
+    request_id: string;
+    decision: string;
+    actor_id: string;
+    actor_type: string;
+    decided_at: string;
+    resume_source: string;
+    approved_input_snapshot?: Record<string, unknown> | null;
+    edited_input_snapshot?: Record<string, unknown> | null;
+    rejected_input_snapshot?: Record<string, unknown> | null;
+  } | null;
+};
+
+export type McpCapabilitySummary = {
+  capability_id: string;
+  capability_type: string;
+  display_name: string;
+  description: string;
+  risk_level: string;
+  approval_required: boolean;
+  timeout_seconds: number;
+  repeated_call_limit: number;
+  enabled: boolean;
+  tags: string[];
 };
 
 export type ExecutionPlatform = "windows" | "linux";
@@ -280,8 +322,23 @@ export async function getSessionCheckpoint(sessionId: string, checkpointId: stri
 }
 
 export async function getPendingHitl(sessionId: string) {
-  return request<{ session_id: string; thread_id: string; pending_interrupt: PendingHitlInterrupt | null }>(
+  return request<{
+    session_id: string;
+    thread_id: string;
+    pending_interrupt: PendingHitlInterrupt | null;
+    requests: HitlAuditEntry[];
+  }>(
     `/sessions/${sessionId}/hitl`
+  );
+}
+
+export async function listMcpCapabilities() {
+  return request<{ capabilities: McpCapabilitySummary[] }>("/capabilities/mcp");
+}
+
+export async function getMcpCapability(capabilityId: string) {
+  return request<{ capability: McpCapabilitySummary }>(
+    `/capabilities/mcp/${encodeURIComponent(capabilityId)}`
   );
 }
 
@@ -553,7 +610,8 @@ export async function streamHitlDecision(
   payload: {
     session_id: string;
     checkpoint_id: string;
-    decision: "approve" | "reject";
+    decision: "approve" | "reject" | "edit";
+    edited_input?: Record<string, unknown>;
   },
   handlers: StreamHandlers
 ) {
@@ -568,7 +626,7 @@ export async function streamHitlDecision(
         headers: {
           "Content-Type": "application/json"
         },
-        body: JSON.stringify({ decision: payload.decision, stream: true })
+        body: JSON.stringify({ decision: payload.decision, edited_input: payload.edited_input, stream: true })
       }
     );
   } catch (error) {
