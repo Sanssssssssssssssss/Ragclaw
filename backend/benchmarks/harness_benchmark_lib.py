@@ -788,49 +788,54 @@ async def _run_contract_lifecycle_cases(cases: list[BenchmarkCase]) -> list[dict
     case_specs = {case.message: case for case in cases}
     with tempfile.TemporaryDirectory() as temp_dir:
         root = Path(temp_dir)
-        runtime = HarnessRuntime(
-            RuntimeDependencies(
-                trace_store=RunTraceStore(root / "runs"),
-                queue=SessionSerialQueue(lambda: datetime.now(timezone.utc).isoformat()),
-            )
-        )
-        manager = ContractBenchmarkAgentManager(case_specs)
-        executor = HarnessExecutors(manager)
-        results: list[dict[str, Any]] = []
-
-        queue_holders: dict[str, BenchmarkCase] = {}
-        for case in cases:
-            if case.expect.get("queue"):
-                holder = BenchmarkCase(
-                    case_id=f"{case.case_id}_holder",
-                    suite=case.suite,
-                    runner=case.runner,
-                    scenario="direct_answer",
-                    message=f"{case.case_id}_holder message",
-                    session_id=case.session_id,
-                    tags=("queue", "holder"),
-                    difficulty=case.difficulty,
-                    expect={"answer_fragment": f"{case.case_id}_holder answer"},
+        previous_checkpoint_db = checkpoint_store.db_path
+        checkpoint_store.configure_for_base_dir(root)
+        try:
+            runtime = HarnessRuntime(
+                RuntimeDependencies(
+                    trace_store=RunTraceStore(root / "runs"),
+                    queue=SessionSerialQueue(lambda: datetime.now(timezone.utc).isoformat()),
                 )
-                queue_holders[case.case_id] = holder
-                case_specs[holder.message] = holder
+            )
+            manager = ContractBenchmarkAgentManager(case_specs)
+            executor = HarnessExecutors(manager)
+            results: list[dict[str, Any]] = []
 
-        async def _run_one(case: BenchmarkCase) -> tuple[str, int]:
-            with patch("src.backend.runtime.executors.knowledge_orchestrator.astream", side_effect=lambda message: _fake_contract_knowledge_astream(message, case_specs)):
-                return await _run_case_through_runtime(runtime=runtime, executor=executor, case=case)
+            queue_holders: dict[str, BenchmarkCase] = {}
+            for case in cases:
+                if case.expect.get("queue"):
+                    holder = BenchmarkCase(
+                        case_id=f"{case.case_id}_holder",
+                        suite=case.suite,
+                        runner=case.runner,
+                        scenario="direct_answer",
+                        message=f"{case.case_id}_holder message",
+                        session_id=case.session_id,
+                        tags=("queue", "holder"),
+                        difficulty=case.difficulty,
+                        expect={"answer_fragment": f"{case.case_id}_holder answer"},
+                    )
+                    queue_holders[case.case_id] = holder
+                    case_specs[holder.message] = holder
 
-        for case in cases:
-            if case.expect.get("queue"):
-                holder = queue_holders[case.case_id]
-                holder_task = asyncio.create_task(_run_one(holder))
-                await asyncio.sleep(0.02)
-                run_id, elapsed_ms = await _run_one(case)
-                await holder_task
-            else:
-                run_id, elapsed_ms = await _run_one(case)
-            trace = runtime._deps.trace_store.read_trace(run_id)  # noqa: SLF001
-            results.append(_lifecycle_case_result(case, trace, elapsed_ms))
-        return results
+            async def _run_one(case: BenchmarkCase) -> tuple[str, int]:
+                with patch("src.backend.runtime.executors.knowledge_orchestrator.astream", side_effect=lambda message: _fake_contract_knowledge_astream(message, case_specs)):
+                    return await _run_case_through_runtime(runtime=runtime, executor=executor, case=case)
+
+            for case in cases:
+                if case.expect.get("queue"):
+                    holder = queue_holders[case.case_id]
+                    holder_task = asyncio.create_task(_run_one(holder))
+                    await asyncio.sleep(0.02)
+                    run_id, elapsed_ms = await _run_one(case)
+                    await holder_task
+                else:
+                    run_id, elapsed_ms = await _run_one(case)
+                trace = runtime._deps.trace_store.read_trace(run_id)  # noqa: SLF001
+                results.append(_lifecycle_case_result(case, trace, elapsed_ms))
+            return results
+        finally:
+            checkpoint_store.configure(previous_checkpoint_db)
 
 
 async def _run_integration_lifecycle_cases(
@@ -841,34 +846,122 @@ async def _run_integration_lifecycle_cases(
     support: IntegrationBenchmarkSupport | None = None
     with tempfile.TemporaryDirectory() as temp_dir, ExitStack() as stack:
         root = Path(temp_dir)
-        for case in cases:
-            _materialize_case_setup(root, case.setup)
-        http_routes = _collect_http_routes(cases)
-        if http_routes:
-            base_url = stack.enter_context(serve_local_http_routes(http_routes))
-            cases = [_with_web_base_url(case, base_url) for case in cases]
-        case_specs = {case.message: case for case in cases}
-        runtime = HarnessRuntime(
-            RuntimeDependencies(
-                trace_store=RunTraceStore(root / "runs"),
-                queue=SessionSerialQueue(lambda: datetime.now(timezone.utc).isoformat()),
+        previous_checkpoint_db = checkpoint_store.db_path
+        checkpoint_store.configure_for_base_dir(root)
+        try:
+            for case in cases:
+                _materialize_case_setup(root, case.setup)
+            http_routes = _collect_http_routes(cases)
+            if http_routes:
+                base_url = stack.enter_context(serve_local_http_routes(http_routes))
+                cases = [_with_web_base_url(case, base_url) for case in cases]
+            case_specs = {case.message: case for case in cases}
+            runtime = HarnessRuntime(
+                RuntimeDependencies(
+                    trace_store=RunTraceStore(root / "runs"),
+                    queue=SessionSerialQueue(lambda: datetime.now(timezone.utc).isoformat()),
+                )
             )
-        )
-        manager = AgentManager()
-        manager.base_dir = root
-        manager.tools, manager._capability_registry = build_tools_and_registry(root)  # noqa: SLF001
-        support = IntegrationBenchmarkSupport(manager, case_specs)
-        manager.create_execution_support = lambda: support  # type: ignore[method-assign]
-        if not use_live_llm_decisions:
-            async def _resolve_case_routing(message: str, history: list[dict[str, Any]]):
-                spec = support.spec_for_message(message)
-                if spec.scenario in {"knowledge_qa", "guarded_knowledge"}:
+            manager = AgentManager()
+            manager.base_dir = root
+            manager.tools, manager._capability_registry = build_tools_and_registry(root)  # noqa: SLF001
+            support = IntegrationBenchmarkSupport(manager, case_specs)
+            manager.create_execution_support = lambda: support  # type: ignore[method-assign]
+            if not use_live_llm_decisions:
+                async def _resolve_case_routing(message: str, history: list[dict[str, Any]]):
+                    spec = support.spec_for_message(message)
+                    if spec.scenario in {"knowledge_qa", "guarded_knowledge"}:
+                        return (
+                            ExecutionStrategy(allow_tools=False, allow_knowledge=True, allow_retrieval=True),
+                            RoutingDecision(
+                                intent="knowledge_qa",
+                                needs_tools=False,
+                                needs_retrieval=True,
+                                allowed_tools=(),
+                                confidence=1.0,
+                                reason_short=spec.scenario,
+                                source="benchmark",
+                                subtype="",
+                            ),
+                        )
+                    if spec.scenario == "tool_path":
+                        return (
+                            ExecutionStrategy(allow_tools=True, allow_knowledge=False, allow_retrieval=False),
+                            RoutingDecision(
+                                intent="workspace_file_ops",
+                                needs_tools=True,
+                                needs_retrieval=False,
+                                allowed_tools=("terminal",),
+                                confidence=1.0,
+                                reason_short=spec.scenario,
+                                source="benchmark",
+                                subtype="search_workspace_file",
+                            ),
+                        )
+                    if spec.scenario.startswith("hitl_"):
+                        allowed_tool = tuple(
+                            str(item.get("name", "") or "")
+                            for item in spec.tool_calls[:1]
+                            if str(item.get("name", "") or "").strip()
+                        ) or ("python_repl",)
+                        return (
+                            ExecutionStrategy(allow_tools=True, allow_knowledge=False, allow_retrieval=False),
+                            RoutingDecision(
+                                intent="workspace_file_ops",
+                                needs_tools=True,
+                                needs_retrieval=False,
+                                allowed_tools=allowed_tool,
+                                confidence=1.0,
+                                reason_short=spec.scenario,
+                                source="benchmark",
+                                subtype="",
+                            ),
+                        )
+                    if spec.scenario.startswith("mcp_filesystem_"):
+                        allowed_tool = tuple(
+                            str(item.get("name", "") or "")
+                            for item in spec.tool_calls[:1]
+                            if str(item.get("name", "") or "").strip()
+                        ) or ("mcp_filesystem_read_file",)
+                        subtype = "read_existing_file" if allowed_tool[0] == "mcp_filesystem_read_file" else "search_workspace_file"
+                        return (
+                            ExecutionStrategy(allow_tools=True, allow_knowledge=False, allow_retrieval=False),
+                            RoutingDecision(
+                                intent="workspace_file_ops",
+                                needs_tools=True,
+                                needs_retrieval=False,
+                                allowed_tools=allowed_tool,
+                                confidence=1.0,
+                                reason_short=spec.scenario,
+                                source="benchmark",
+                                subtype=subtype,
+                            ),
+                        )
+                    if spec.scenario.startswith("mcp_web_"):
+                        allowed_tool = tuple(
+                            str(item.get("name", "") or "")
+                            for item in spec.tool_calls[:1]
+                            if str(item.get("name", "") or "").strip()
+                        ) or ("mcp_web_fetch_url",)
+                        return (
+                            ExecutionStrategy(allow_tools=True, allow_knowledge=False, allow_retrieval=False),
+                            RoutingDecision(
+                                intent="web_lookup",
+                                needs_tools=True,
+                                needs_retrieval=False,
+                                allowed_tools=allowed_tool,
+                                confidence=1.0,
+                                reason_short=spec.scenario,
+                                source="benchmark",
+                                subtype="",
+                            ),
+                        )
                     return (
-                        ExecutionStrategy(allow_tools=False, allow_knowledge=True, allow_retrieval=True),
+                        ExecutionStrategy(allow_tools=False, allow_knowledge=False, allow_retrieval=False, force_direct_answer=True),
                         RoutingDecision(
-                            intent="knowledge_qa",
+                            intent="direct_answer",
                             needs_tools=False,
-                            needs_retrieval=True,
+                            needs_retrieval=False,
                             allowed_tools=(),
                             confidence=1.0,
                             reason_short=spec.scenario,
@@ -876,187 +969,104 @@ async def _run_integration_lifecycle_cases(
                             subtype="",
                         ),
                     )
-                if spec.scenario == "tool_path":
-                    return (
-                        ExecutionStrategy(allow_tools=True, allow_knowledge=False, allow_retrieval=False),
-                        RoutingDecision(
-                            intent="workspace_file_ops",
-                            needs_tools=True,
-                            needs_retrieval=False,
-                            allowed_tools=("terminal",),
-                            confidence=1.0,
-                            reason_short=spec.scenario,
-                            source="benchmark",
-                            subtype="search_workspace_file",
-                        ),
-                    )
-                if spec.scenario.startswith("hitl_"):
-                    allowed_tool = tuple(
-                        str(item.get("name", "") or "")
-                        for item in spec.tool_calls[:1]
-                        if str(item.get("name", "") or "").strip()
-                    ) or ("python_repl",)
-                    return (
-                        ExecutionStrategy(allow_tools=True, allow_knowledge=False, allow_retrieval=False),
-                        RoutingDecision(
-                            intent="workspace_file_ops",
-                            needs_tools=True,
-                            needs_retrieval=False,
-                            allowed_tools=allowed_tool,
-                            confidence=1.0,
-                            reason_short=spec.scenario,
-                            source="benchmark",
-                            subtype="",
-                        ),
-                    )
-                if spec.scenario.startswith("mcp_filesystem_"):
-                    allowed_tool = tuple(
-                        str(item.get("name", "") or "")
-                        for item in spec.tool_calls[:1]
-                        if str(item.get("name", "") or "").strip()
-                    ) or ("mcp_filesystem_read_file",)
-                    subtype = "read_existing_file" if allowed_tool[0] == "mcp_filesystem_read_file" else "search_workspace_file"
-                    return (
-                        ExecutionStrategy(allow_tools=True, allow_knowledge=False, allow_retrieval=False),
-                        RoutingDecision(
-                            intent="workspace_file_ops",
-                            needs_tools=True,
-                            needs_retrieval=False,
-                            allowed_tools=allowed_tool,
-                            confidence=1.0,
-                            reason_short=spec.scenario,
-                            source="benchmark",
-                            subtype=subtype,
-                        ),
-                    )
-                if spec.scenario.startswith("mcp_web_"):
-                    allowed_tool = tuple(
-                        str(item.get("name", "") or "")
-                        for item in spec.tool_calls[:1]
-                        if str(item.get("name", "") or "").strip()
-                    ) or ("mcp_web_fetch_url",)
-                    return (
-                        ExecutionStrategy(allow_tools=True, allow_knowledge=False, allow_retrieval=False),
-                        RoutingDecision(
-                            intent="web_lookup",
-                            needs_tools=True,
-                            needs_retrieval=False,
-                            allowed_tools=allowed_tool,
-                            confidence=1.0,
-                            reason_short=spec.scenario,
-                            source="benchmark",
-                            subtype="",
-                        ),
-                    )
-                return (
-                    ExecutionStrategy(allow_tools=False, allow_knowledge=False, allow_retrieval=False, force_direct_answer=True),
-                    RoutingDecision(
-                        intent="direct_answer",
-                        needs_tools=False,
-                        needs_retrieval=False,
-                        allowed_tools=(),
-                        confidence=1.0,
-                        reason_short=spec.scenario,
-                        source="benchmark",
-                        subtype="",
-                    ),
-                )
 
-            manager.resolve_routing = _resolve_case_routing  # type: ignore[method-assign]
-        executor = HarnessExecutors(manager)
-        results: list[dict[str, Any]] = []
+                manager.resolve_routing = _resolve_case_routing  # type: ignore[method-assign]
+            executor = HarnessExecutors(manager)
+            results: list[dict[str, Any]] = []
 
-        queue_holders: dict[str, BenchmarkCase] = {}
-        for case in cases:
-            if case.expect.get("queue"):
-                holder = BenchmarkCase(
-                    case_id="integration_queue_holder",
-                    suite=case.suite,
-                    runner=case.runner,
-                    scenario="direct_answer",
-                    message=f"{case.case_id} queue holder message",
-                    session_id=case.session_id,
-                    tags=("queue", "holder"),
-                    difficulty=case.difficulty,
-                    expect={"route_intent": "direct_answer", "answer_fragment": "Queue holder answer."},
-                )
-                queue_holders[case.case_id] = holder
-                case_specs[holder.message] = holder
+            queue_holders: dict[str, BenchmarkCase] = {}
+            for case in cases:
+                if case.expect.get("queue"):
+                    holder = BenchmarkCase(
+                        case_id="integration_queue_holder",
+                        suite=case.suite,
+                        runner=case.runner,
+                        scenario="direct_answer",
+                        message=f"{case.case_id} queue holder message",
+                        session_id=case.session_id,
+                        tags=("queue", "holder"),
+                        difficulty=case.difficulty,
+                        expect={"route_intent": "direct_answer", "answer_fragment": "Queue holder answer."},
+                    )
+                    queue_holders[case.case_id] = holder
+                    case_specs[holder.message] = holder
 
-        async def _run_one(case: BenchmarkCase) -> tuple[str, int]:
-            support.set_active_case(case)
-            with patch("src.backend.runtime.executors.memory_indexer.retrieve", return_value=[]), patch(
-                "src.backend.runtime.executors.knowledge_orchestrator.astream",
-                side_effect=support.knowledge_astream,
-            ):
-                return await _run_case_through_runtime(runtime=runtime, executor=executor, case=case)
+            async def _run_one(case: BenchmarkCase) -> tuple[str, int]:
+                support.set_active_case(case)
+                with patch("src.backend.runtime.executors.memory_indexer.retrieve", return_value=[]), patch(
+                    "src.backend.runtime.executors.knowledge_orchestrator.astream",
+                    side_effect=support.knowledge_astream,
+                ):
+                    return await _run_case_through_runtime(runtime=runtime, executor=executor, case=case)
 
-        for case in cases:
-            if case.scenario.startswith("hitl_"):
-                run_id, elapsed_ms = await _run_one(case)
-                initial_trace = runtime._deps.trace_store.read_trace(run_id)  # noqa: SLF001
-                thread_candidates = [
-                    str(case.session_id or ""),
-                    str((initial_trace.get("metadata") or {}).get("thread_id", "") or ""),
-                    str((initial_trace.get("outcome") or {}).get("thread_id", "") or ""),
-                    str(run_id),
-                ]
-                pending = None
-                pending_thread_id = ""
-                for candidate in thread_candidates:
-                    if not candidate:
-                        continue
-                    pending = checkpoint_store.pending_hitl(thread_id=candidate)
-                    if pending is not None:
-                        pending_thread_id = candidate
-                        break
-                checkpoint_id = ""
-                if pending is not None:
-                    checkpoint_id = pending.checkpoint_id
-                else:
-                    initial_event_names = _trace_event_names(initial_trace)
-                    if "hitl.requested" not in initial_event_names:
-                        raise AssertionError(f"no pending HITL interrupt produced for case {case.case_id}")
+            for case in cases:
+                if case.scenario.startswith("hitl_"):
+                    run_id, elapsed_ms = await _run_one(case)
+                    initial_trace = runtime._deps.trace_store.read_trace(run_id)  # noqa: SLF001
+                    thread_candidates = [
+                        str(case.session_id or ""),
+                        str((initial_trace.get("metadata") or {}).get("thread_id", "") or ""),
+                        str((initial_trace.get("outcome") or {}).get("thread_id", "") or ""),
+                        str(run_id),
+                    ]
+                    pending = None
+                    pending_thread_id = ""
                     for candidate in thread_candidates:
                         if not candidate:
                             continue
-                        latest_checkpoint = checkpoint_store.latest_checkpoint(thread_id=candidate)
-                        if latest_checkpoint is not None and latest_checkpoint.resume_eligible:
+                        pending = checkpoint_store.pending_hitl(thread_id=candidate)
+                        if pending is not None:
                             pending_thread_id = candidate
-                            checkpoint_id = latest_checkpoint.checkpoint_id
                             break
-                    if not checkpoint_id:
-                        raise AssertionError(f"no resumable HITL checkpoint produced for case {case.case_id}")
-                decision = "reject" if "reject" in case.scenario else "approve"
-                resume_executor = HarnessExecutors(
-                    manager,
-                    resume_checkpoint_id=checkpoint_id,
-                    resume_thread_id=pending_thread_id or case.session_id or run_id,
-                    resume_source="benchmark_hitl",
-                    resume_payload={"decision": decision},
-                )
-                resumed_run_id, resumed_elapsed_ms = await _run_case_through_runtime(
-                    runtime=runtime,
-                    executor=resume_executor,
-                    case=case,
-                    suppress_failures=True,
-                )
-                resumed_trace = runtime._deps.trace_store.read_trace(resumed_run_id)  # noqa: SLF001
-                merged_trace = _merge_traces(initial_trace, resumed_trace)
-                results.append(_lifecycle_case_result(case, merged_trace, elapsed_ms + resumed_elapsed_ms))
-                checkpoint_store.clear_pending_hitl(thread_id=pending_thread_id or case.session_id or run_id)
-                continue
-            if case.expect.get("queue"):
-                holder = queue_holders[case.case_id]
-                holder_task = asyncio.create_task(_run_one(holder))
-                await asyncio.sleep(0.02)
-                run_id, elapsed_ms = await _run_one(case)
-                await holder_task
-            else:
-                run_id, elapsed_ms = await _run_one(case)
-            trace = runtime._deps.trace_store.read_trace(run_id)  # noqa: SLF001
-            results.append(_lifecycle_case_result(case, trace, elapsed_ms))
-        return results
+                    checkpoint_id = ""
+                    if pending is not None:
+                        checkpoint_id = pending.checkpoint_id
+                    else:
+                        initial_event_names = _trace_event_names(initial_trace)
+                        if "hitl.requested" not in initial_event_names:
+                            raise AssertionError(f"no pending HITL interrupt produced for case {case.case_id}")
+                        for candidate in thread_candidates:
+                            if not candidate:
+                                continue
+                            latest_checkpoint = checkpoint_store.latest_checkpoint(thread_id=candidate)
+                            if latest_checkpoint is not None and latest_checkpoint.resume_eligible:
+                                pending_thread_id = candidate
+                                checkpoint_id = latest_checkpoint.checkpoint_id
+                                break
+                        if not checkpoint_id:
+                            raise AssertionError(f"no resumable HITL checkpoint produced for case {case.case_id}")
+                    decision = "reject" if "reject" in case.scenario else "approve"
+                    resume_executor = HarnessExecutors(
+                        manager,
+                        resume_checkpoint_id=checkpoint_id,
+                        resume_thread_id=pending_thread_id or case.session_id or run_id,
+                        resume_source="benchmark_hitl",
+                        resume_payload={"decision": decision},
+                    )
+                    resumed_run_id, resumed_elapsed_ms = await _run_case_through_runtime(
+                        runtime=runtime,
+                        executor=resume_executor,
+                        case=case,
+                        suppress_failures=True,
+                    )
+                    resumed_trace = runtime._deps.trace_store.read_trace(resumed_run_id)  # noqa: SLF001
+                    merged_trace = _merge_traces(initial_trace, resumed_trace)
+                    results.append(_lifecycle_case_result(case, merged_trace, elapsed_ms + resumed_elapsed_ms))
+                    checkpoint_store.clear_pending_hitl(thread_id=pending_thread_id or case.session_id or run_id)
+                    continue
+                if case.expect.get("queue"):
+                    holder = queue_holders[case.case_id]
+                    holder_task = asyncio.create_task(_run_one(holder))
+                    await asyncio.sleep(0.02)
+                    run_id, elapsed_ms = await _run_one(case)
+                    await holder_task
+                else:
+                    run_id, elapsed_ms = await _run_one(case)
+                trace = runtime._deps.trace_store.read_trace(run_id)  # noqa: SLF001
+                results.append(_lifecycle_case_result(case, trace, elapsed_ms))
+            return results
+        finally:
+            checkpoint_store.configure(previous_checkpoint_db)
 
 
 async def _run_route_skill_cases(

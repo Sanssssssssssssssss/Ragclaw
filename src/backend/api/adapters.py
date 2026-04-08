@@ -94,6 +94,13 @@ class LegacyChatAccumulator:
     def _append_hitl_event(self, event_type: str, payload: dict[str, Any]) -> dict[str, Any]:
         hitl_event = {
             "type": event_type,
+            "request_id": str(payload.get("request_id", "") or ""),
+            "requested_at": str(payload.get("requested_at", "") or ""),
+            "decision_id": str(payload.get("decision_id", "") or ""),
+            "decision": str(payload.get("decision", "") or ""),
+            "actor_id": str(payload.get("actor_id", "") or ""),
+            "actor_type": str(payload.get("actor_type", "") or ""),
+            "decided_at": str(payload.get("decided_at", "") or ""),
             "run_id": str(payload.get("run_id", "") or ""),
             "thread_id": str(payload.get("thread_id", "") or self.run_meta.get("thread_id", "") or ""),
             "session_id": str(payload.get("session_id", "") or ""),
@@ -103,6 +110,8 @@ class LegacyChatAccumulator:
             "risk_level": str(payload.get("risk_level", "") or ""),
             "reason": str(payload.get("reason", "") or ""),
             "proposed_input": dict(payload.get("proposed_input", {}) or {}),
+            "approved_input_snapshot": dict(payload.get("approved_input_snapshot", {}) or {}) if payload.get("approved_input_snapshot") is not None else None,
+            "rejected_input_snapshot": dict(payload.get("rejected_input_snapshot", {}) or {}) if payload.get("rejected_input_snapshot") is not None else None,
             "checkpoint_id": str(payload.get("checkpoint_id", "") or self.run_meta.get("checkpoint_id", "") or ""),
             "resume_source": str(payload.get("resume_source", "") or self.run_meta.get("resume_source", "") or ""),
             "orchestration_engine": str(

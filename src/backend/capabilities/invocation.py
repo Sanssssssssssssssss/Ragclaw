@@ -7,7 +7,7 @@ import json
 import time
 from contextlib import asynccontextmanager
 from contextvars import ContextVar
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable, Protocol
 from uuid import uuid4
 
@@ -43,7 +43,7 @@ class CapabilityRuntimeContext:
     handle: Any
     registry: CapabilityRegistry
     governor: CapabilityGovernor
-    approval_overrides: set[str]
+    approval_overrides: set[str] = field(default_factory=set)
 
     @property
     def run_id(self) -> str:

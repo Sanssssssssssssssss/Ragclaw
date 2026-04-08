@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime, timezone
 from typing import Any
 
 from fastapi import APIRouter, HTTPException
@@ -15,6 +16,10 @@ from src.backend.runtime.agent_manager import agent_manager
 from src.backend.runtime.config import runtime_config
 
 router = APIRouter()
+
+
+def _utc_now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
 
 
 class CreateSessionRequest(BaseModel):
@@ -36,6 +41,8 @@ class ResumeCheckpointRequest(BaseModel):
 class HitlDecisionRequest(BaseModel):
     decision: str = Field(..., pattern="^(approve|reject)$")
     stream: bool = True
+    actor_id: str | None = Field(default=None, max_length=200)
+    actor_type: str | None = Field(default=None, max_length=100)
 
 
 def _session_manager_or_raise():
@@ -123,6 +130,22 @@ async def get_pending_hitl(session_id: str) -> dict[str, Any]:
         "session_id": session_id,
         "thread_id": thread_id,
         "pending_interrupt": pending.to_dict() if pending is not None else None,
+    }
+
+
+@router.get("/sessions/{session_id}/hitl/{checkpoint_id}")
+async def get_hitl_audit(session_id: str, checkpoint_id: str) -> dict[str, Any]:
+    _session_manager_or_raise()
+    thread_id = checkpoint_store.thread_id_for(session_id=session_id, run_id=session_id)
+    request = checkpoint_store.get_hitl_request(thread_id=thread_id, checkpoint_id=checkpoint_id)
+    if request is None:
+        raise HTTPException(status_code=404, detail="HITL request not found")
+    decision = checkpoint_store.get_hitl_decision(thread_id=thread_id, checkpoint_id=checkpoint_id)
+    return {
+        "session_id": session_id,
+        "thread_id": thread_id,
+        "request": request.to_dict(),
+        "decision": decision.to_dict() if decision is not None else None,
     }
 
 
@@ -249,12 +272,31 @@ async def submit_hitl_decision(
 ):
     session_manager = _session_manager_or_raise()
     thread_id = checkpoint_store.thread_id_for(session_id=session_id, run_id=session_id)
-    pending = checkpoint_store.pending_hitl(thread_id=thread_id)
-    if pending is None or pending.checkpoint_id != checkpoint_id:
+    actor_id = str(payload.actor_id or "").strip() or f"session:{session_id}"
+    actor_type = str(payload.actor_type or "").strip() or "session_user"
+    request, decision_record, created = checkpoint_store.record_hitl_decision(
+        thread_id=thread_id,
+        checkpoint_id=checkpoint_id,
+        decision=payload.decision,
+        actor_id=actor_id,
+        actor_type=actor_type,
+        decided_at=_utc_now_iso(),
+        resume_source="hitl_api",
+    )
+    if request is None or decision_record is None:
         raise HTTPException(status_code=404, detail="Pending HITL interrupt not found")
+    if not created:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "message": "HITL decision already recorded",
+                "request": request.to_dict(),
+                "decision": decision_record.to_dict(),
+            },
+        )
 
     history = session_manager.load_session_for_agent(session_id)
-    resume_message = pending.reason or pending.display_name or "Resume from HITL decision"
+    resume_message = request.reason or request.display_name or "Resume from HITL decision"
 
     async def event_generator():
         async for item in _stream_checkpoint_resume(
@@ -264,7 +306,15 @@ async def submit_hitl_decision(
             session_manager=session_manager,
             resume_message=resume_message,
             resume_source="hitl_api",
-            resume_payload={"decision": payload.decision},
+            resume_payload={
+                "decision": payload.decision,
+                "request_id": request.request_id,
+                "decision_id": decision_record.decision_id,
+                "actor_id": decision_record.actor_id,
+                "actor_type": decision_record.actor_type,
+                "decided_at": decision_record.decided_at,
+                "resume_source": decision_record.resume_source,
+            },
             run_status="restoring",
             persist_user_message=False,
         ):
@@ -289,5 +339,7 @@ async def submit_hitl_decision(
             "checkpoint_id": checkpoint_id,
             "resume_source": "hitl_api",
             "decision": payload.decision,
+            "request_id": request.request_id,
+            "decision_id": decision_record.decision_id,
         }
     )

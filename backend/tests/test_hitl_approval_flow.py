@@ -130,6 +130,7 @@ class HitlApprovalFlowTests(unittest.IsolatedAsyncioTestCase):
         self.temp_dir = tempfile.TemporaryDirectory()
         self.addAsyncCleanup(self._cleanup)
         self.root = Path(self.temp_dir.name)
+        checkpoint_store.configure_for_base_dir(self.root)
         self.manager = _HitlAgentManager(self.root)
         self.runtime = HarnessRuntime(
             RuntimeDependencies(
@@ -143,6 +144,7 @@ class HitlApprovalFlowTests(unittest.IsolatedAsyncioTestCase):
 
     async def _cleanup(self) -> None:
         checkpoint_store.clear_pending_hitl(thread_id=self.session_id)
+        checkpoint_store.configure_for_base_dir(BACKEND_DIR)
         self.temp_dir.cleanup()
 
     async def test_approval_required_capability_triggers_interrupt(self) -> None:

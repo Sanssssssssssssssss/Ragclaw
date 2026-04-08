@@ -384,6 +384,9 @@ class HarnessRuntime:
 
 
 def build_harness_runtime(base_dir: Path) -> HarnessRuntime:
+    from src.backend.orchestration.checkpointing import checkpoint_store  # pylint: disable=import-outside-toplevel
+
+    checkpoint_store.configure_for_base_dir(base_dir)
     runs_dir = Path(base_dir) / "storage" / "runs"
     return HarnessRuntime(
         RuntimeDependencies(

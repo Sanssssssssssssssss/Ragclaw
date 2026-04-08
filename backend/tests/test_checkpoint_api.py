@@ -229,16 +229,18 @@ class CheckpointApiTests(unittest.TestCase):
         app = self._build_app()
         fake_manager = FakeAgentManager()
         pending = PendingHitlRequest(
+            request_id="req-1",
             run_id="run-1",
             thread_id="session-1",
             session_id="session-1",
+            checkpoint_id="cp-hitl",
             capability_id="python_repl",
             capability_type="tool",
             display_name="Python REPL",
             risk_level="high",
             reason="Python REPL requires explicit approval before execution.",
             proposed_input={"message": "calculate 2 + 2"},
-            checkpoint_id="cp-hitl",
+            requested_at="2026-04-07T12:00:00Z",
         )
         with (
             patch.object(sessions_api, "agent_manager", fake_manager),
@@ -252,6 +254,50 @@ class CheckpointApiTests(unittest.TestCase):
         self.assertEqual(payload["session_id"], "session-1")
         self.assertEqual(payload["pending_interrupt"]["capability_id"], "python_repl")
         self.assertEqual(payload["pending_interrupt"]["checkpoint_id"], "cp-hitl")
+        self.assertEqual(payload["pending_interrupt"]["request_id"], "req-1")
+
+    def test_get_hitl_audit_returns_request_and_decision(self) -> None:
+        app = self._build_app()
+        fake_manager = FakeAgentManager()
+        pending = PendingHitlRequest(
+            request_id="req-1",
+            run_id="run-1",
+            thread_id="session-1",
+            session_id="session-1",
+            checkpoint_id="cp-hitl",
+            capability_id="python_repl",
+            capability_type="tool",
+            display_name="Python REPL",
+            risk_level="high",
+            reason="Python REPL requires explicit approval before execution.",
+            proposed_input={"message": "calculate 2 + 2"},
+            requested_at="2026-04-07T12:00:00Z",
+            status="approve",
+        )
+        decision = {
+            "decision_id": "decision-1",
+            "request_id": "req-1",
+            "decision": "approve",
+            "actor_id": "session:session-1",
+            "actor_type": "session_user",
+            "decided_at": "2026-04-07T12:01:00Z",
+            "resume_source": "hitl_api",
+            "approved_input_snapshot": {"message": "calculate 2 + 2"},
+            "rejected_input_snapshot": None,
+        }
+        with (
+            patch.object(sessions_api, "agent_manager", fake_manager),
+            patch.object(sessions_api.checkpoint_store, "get_hitl_request", return_value=pending),
+            patch.object(sessions_api.checkpoint_store, "get_hitl_decision") as get_decision_mock,
+        ):
+            get_decision_mock.return_value = type("DecisionObj", (), {"to_dict": lambda self: decision})()
+            client = TestClient(app)
+            response = client.get("/api/sessions/session-1/hitl/cp-hitl")
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["request"]["request_id"], "req-1")
+        self.assertEqual(payload["decision"]["decision_id"], "decision-1")
 
     def test_submit_hitl_decision_streams_resume_and_persists_assistant_only(self) -> None:
         app = self._build_app()
@@ -292,6 +338,13 @@ class CheckpointApiTests(unittest.TestCase):
                         "risk_level": "high",
                         "reason": "Python REPL requires explicit approval before execution.",
                         "proposed_input": {"message": "calculate 2 + 2"},
+                        "request_id": "req-1",
+                        "decision_id": "decision-1",
+                        "actor_id": "session:session-1",
+                        "actor_type": "session_user",
+                        "decided_at": "2026-04-07T12:01:00Z",
+                        "requested_at": "2026-04-07T12:00:00Z",
+                        "approved_input_snapshot": {"message": "calculate 2 + 2"},
                         "checkpoint_id": "cp-hitl",
                         "resume_source": "hitl_api",
                         "orchestration_engine": "langgraph",
@@ -325,21 +378,51 @@ class CheckpointApiTests(unittest.TestCase):
             ]
         )
         pending = PendingHitlRequest(
+            request_id="req-1",
             run_id="run-1",
             thread_id="session-1",
             session_id="session-1",
+            checkpoint_id="cp-hitl",
             capability_id="python_repl",
             capability_type="tool",
             display_name="Python REPL",
             risk_level="high",
             reason="Python REPL requires explicit approval before execution.",
             proposed_input={"message": "calculate 2 + 2"},
-            checkpoint_id="cp-hitl",
+            requested_at="2026-04-07T12:00:00Z",
         )
+        decision_record = type(
+            "DecisionObj",
+            (),
+            {
+                "decision_id": "decision-1",
+                "request_id": "req-1",
+                "decision": "approve",
+                "actor_id": "session:session-1",
+                "actor_type": "session_user",
+                "decided_at": "2026-04-07T12:01:00Z",
+                "resume_source": "hitl_api",
+                "to_dict": lambda self: {
+                    "decision_id": "decision-1",
+                    "request_id": "req-1",
+                    "decision": "approve",
+                    "actor_id": "session:session-1",
+                    "actor_type": "session_user",
+                    "decided_at": "2026-04-07T12:01:00Z",
+                    "resume_source": "hitl_api",
+                    "approved_input_snapshot": {"message": "calculate 2 + 2"},
+                    "rejected_input_snapshot": None,
+                },
+            },
+        )()
 
         with (
             patch.object(sessions_api, "agent_manager", fake_manager),
-            patch.object(sessions_api.checkpoint_store, "pending_hitl", return_value=pending),
+            patch.object(
+                sessions_api.checkpoint_store,
+                "record_hitl_decision",
+                return_value=(pending, decision_record, True),
+            ),
             patch.object(sessions_api, "_build_runtime_and_resume_executor", return_value=(runtime, object())),
         ):
             client = TestClient(app)
@@ -355,6 +438,116 @@ class CheckpointApiTests(unittest.TestCase):
         self.assertEqual(fake_manager.session_manager.saved_messages[0]["role"], "assistant")
         self.assertEqual(fake_manager.session_manager.saved_messages[0]["run_meta"]["status"], "resumed")
         self.assertEqual(fake_manager.session_manager.saved_messages[0]["hitl_events"][0]["type"], "approved")
+
+    def test_duplicate_hitl_decision_is_safely_rejected(self) -> None:
+        app = self._build_app()
+        fake_manager = FakeAgentManager()
+        pending = PendingHitlRequest(
+            request_id="req-1",
+            run_id="run-1",
+            thread_id="session-1",
+            session_id="session-1",
+            checkpoint_id="cp-hitl",
+            capability_id="python_repl",
+            capability_type="tool",
+            display_name="Python REPL",
+            risk_level="high",
+            reason="Python REPL requires explicit approval before execution.",
+            proposed_input={"message": "calculate 2 + 2"},
+            requested_at="2026-04-07T12:00:00Z",
+            status="approve",
+        )
+        decision_record = type(
+            "DecisionObj",
+            (),
+            {
+                "to_dict": lambda self: {
+                    "decision_id": "decision-1",
+                    "request_id": "req-1",
+                    "decision": "approve",
+                    "actor_id": "session:session-1",
+                    "actor_type": "session_user",
+                    "decided_at": "2026-04-07T12:01:00Z",
+                    "resume_source": "hitl_api",
+                    "approved_input_snapshot": {"message": "calculate 2 + 2"},
+                    "rejected_input_snapshot": None,
+                }
+            },
+        )()
+        with (
+            patch.object(sessions_api, "agent_manager", fake_manager),
+            patch.object(
+                sessions_api.checkpoint_store,
+                "record_hitl_decision",
+                return_value=(pending, decision_record, False),
+            ) as record_mock,
+            patch.object(sessions_api, "_build_runtime_and_resume_executor") as build_runtime_mock,
+        ):
+            client = TestClient(app)
+            response = client.post(
+                "/api/sessions/session-1/hitl/cp-hitl/decision",
+                json={"decision": "approve", "stream": False},
+            )
+
+        self.assertEqual(response.status_code, 409)
+        self.assertIn("decision", response.json()["detail"])
+        record_mock.assert_called_once()
+        build_runtime_mock.assert_not_called()
+
+    def test_duplicate_hitl_reject_is_safely_rejected(self) -> None:
+        app = self._build_app()
+        fake_manager = FakeAgentManager()
+        pending = PendingHitlRequest(
+            request_id="req-1",
+            run_id="run-1",
+            thread_id="session-1",
+            session_id="session-1",
+            checkpoint_id="cp-hitl",
+            capability_id="python_repl",
+            capability_type="tool",
+            display_name="Python REPL",
+            risk_level="high",
+            reason="Python REPL requires explicit approval before execution.",
+            proposed_input={"message": "calculate 2 + 2"},
+            requested_at="2026-04-07T12:00:00Z",
+            status="reject",
+        )
+        decision_record = type(
+            "DecisionObj",
+            (),
+            {
+                "to_dict": lambda self: {
+                    "decision_id": "decision-2",
+                    "request_id": "req-1",
+                    "decision": "reject",
+                    "actor_id": "session:session-1",
+                    "actor_type": "session_user",
+                    "decided_at": "2026-04-07T12:01:00Z",
+                    "resume_source": "hitl_api",
+                    "approved_input_snapshot": None,
+                    "rejected_input_snapshot": {"message": "calculate 2 + 2"},
+                }
+            },
+        )()
+        with (
+            patch.object(sessions_api, "agent_manager", fake_manager),
+            patch.object(
+                sessions_api.checkpoint_store,
+                "record_hitl_decision",
+                return_value=(pending, decision_record, False),
+            ) as record_mock,
+            patch.object(sessions_api, "_build_runtime_and_resume_executor") as build_runtime_mock,
+        ):
+            client = TestClient(app)
+            response = client.post(
+                "/api/sessions/session-1/hitl/cp-hitl/decision",
+                json={"decision": "reject", "stream": False},
+            )
+
+        self.assertEqual(response.status_code, 409)
+        self.assertEqual(response.json()["detail"]["decision"]["decision"], "reject")
+        record_mock.assert_called_once()
+        build_runtime_mock.assert_not_called()
 
 
 if __name__ == "__main__":

@@ -298,26 +298,65 @@ class HarnessLangGraphOrchestrator:
             return {"interrupt_request": None, "approval_decision": ""}
 
         response = interrupt(request)
-        decision = str((response or {}).get("decision", "") if isinstance(response, dict) else response or "").strip().lower()
+        response_payload = dict(response) if isinstance(response, dict) else {"decision": response}
+        decision = str(response_payload.get("decision", "") or "").strip().lower()
         if decision not in {"approve", "reject"}:
             decision = "reject"
-        checkpoint_store.clear_pending_hitl(
-            thread_id=str(request["thread_id"] or ""),
-            checkpoint_id=self._resume_checkpoint_id or str(request.get("checkpoint_id", "") or ""),
+        thread_id = str(request["thread_id"] or "")
+        checkpoint_id = self._resume_checkpoint_id or str(request.get("checkpoint_id", "") or "")
+        audited_request = checkpoint_store.get_hitl_request(
+            thread_id=thread_id,
+            checkpoint_id=checkpoint_id,
         )
+        audited_decision = checkpoint_store.get_hitl_decision(
+            request_id=audited_request.request_id,
+        ) if audited_request is not None else None
+        if audited_request is not None and audited_decision is None:
+            audited_request, audited_decision, _ = checkpoint_store.record_hitl_decision(
+                thread_id=thread_id,
+                checkpoint_id=checkpoint_id,
+                decision=decision,
+                actor_id=str(response_payload.get("actor_id", "") or f"session:{request.get('session_id') or thread_id}"),
+                actor_type=str(response_payload.get("actor_type", "") or "session_user"),
+                decided_at=str(response_payload.get("decided_at", "") or bindings.runtime.now()),
+                resume_source=str(response_payload.get("resume_source", "") or self._resume_source or "langgraph_resume"),
+            )
 
         payload = {
-            "thread_id": request["thread_id"],
-            "checkpoint_id": request.get("checkpoint_id", ""),
+            "request_id": str(getattr(audited_request, "request_id", "") or response_payload.get("request_id", "") or ""),
+            "requested_at": str(getattr(audited_request, "requested_at", "") or ""),
+            "decision_id": str(getattr(audited_decision, "decision_id", "") or response_payload.get("decision_id", "") or ""),
+            "decision": decision,
+            "actor_id": str(getattr(audited_decision, "actor_id", "") or response_payload.get("actor_id", "") or ""),
+            "actor_type": str(getattr(audited_decision, "actor_type", "") or response_payload.get("actor_type", "") or ""),
+            "decided_at": str(getattr(audited_decision, "decided_at", "") or response_payload.get("decided_at", "") or ""),
+            "run_id": str(getattr(audited_request, "run_id", "") or request.get("run_id", "") or bindings.handle.run_id),
+            "session_id": getattr(audited_request, "session_id", None) if audited_request is not None else request.get("session_id"),
+            "thread_id": thread_id,
+            "checkpoint_id": str(getattr(audited_request, "checkpoint_id", "") or checkpoint_id),
             "capability_id": request["capability_id"],
             "capability_type": request["capability_type"],
             "display_name": request["display_name"],
             "risk_level": request["risk_level"],
             "reason": request["reason"],
             "proposed_input": dict(request["proposed_input"]),
-            "resume_source": self._resume_source or "hitl_api",
+            "resume_source": str(
+                getattr(audited_decision, "resume_source", "") or response_payload.get("resume_source", "") or self._resume_source or "hitl_api"
+            ),
             "orchestration_engine": "langgraph",
         }
+        if decision == "approve":
+            payload["approved_input_snapshot"] = (
+                dict(getattr(audited_decision, "approved_input_snapshot", {}) or {})
+                if audited_decision is not None
+                else dict(request["proposed_input"])
+            )
+        else:
+            payload["rejected_input_snapshot"] = (
+                dict(getattr(audited_decision, "rejected_input_snapshot", {}) or {})
+                if audited_decision is not None
+                else dict(request["proposed_input"])
+            )
         await bindings.runtime.emit(
             bindings.handle,
             "hitl.approved" if decision == "approve" else "hitl.rejected",
@@ -365,6 +404,8 @@ class HarnessLangGraphOrchestrator:
                 "risk_level": request["risk_level"],
                 "approval_required": True,
                 "budget_cost": 0,
+                "request_id": payload["request_id"],
+                "decision_id": payload["decision_id"],
             },
         )
         rejection_answer = (
@@ -466,19 +507,6 @@ class HarnessLangGraphOrchestrator:
         summary = checkpoint_store.get_checkpoint(thread_id=thread_id, checkpoint_id=self._resume_checkpoint_id)
         if summary is None:
             raise RuntimeError(f"checkpoint not found: {self._resume_checkpoint_id}")
-        if summary.state_label == "interrupted":
-            await runtime.emit(
-                handle,
-                "checkpoint.interrupted",
-                {
-                    "thread_id": thread_id,
-                    "checkpoint_id": summary.checkpoint_id,
-                    "resume_source": self._resume_source or "checkpoint",
-                    "orchestration_engine": "langgraph",
-                    "state_label": summary.state_label,
-                    "created_at": summary.created_at,
-                },
-            )
         await runtime.emit(
             handle,
             "checkpoint.resumed",
@@ -523,19 +551,24 @@ class HarnessLangGraphOrchestrator:
         if latest is None:
             return
         raw_payload = getattr(interrupts[0], "value", {}) or {}
-        request = PendingHitlRequest(
-            run_id=str(raw_payload.get("run_id", "") or handle.run_id),
-            thread_id=str(raw_payload.get("thread_id", "") or thread_id),
-            session_id=str(raw_payload.get("session_id")) if raw_payload.get("session_id") is not None else None,
-            capability_id=str(raw_payload.get("capability_id", "") or ""),
-            capability_type=str(raw_payload.get("capability_type", "") or ""),
-            display_name=str(raw_payload.get("display_name", "") or ""),
-            risk_level=str(raw_payload.get("risk_level", "") or ""),
-            reason=str(raw_payload.get("reason", "") or ""),
-            proposed_input=dict(raw_payload.get("proposed_input", {}) or {}),
-            checkpoint_id=str(latest.checkpoint_id or raw_payload.get("checkpoint_id", "") or ""),
+        request, created = checkpoint_store.record_pending_hitl(
+            PendingHitlRequest(
+                request_id="",
+                run_id=str(raw_payload.get("run_id", "") or handle.run_id),
+                thread_id=str(raw_payload.get("thread_id", "") or thread_id),
+                session_id=str(raw_payload.get("session_id")) if raw_payload.get("session_id") is not None else None,
+                checkpoint_id=str(latest.checkpoint_id or raw_payload.get("checkpoint_id", "") or ""),
+                capability_id=str(raw_payload.get("capability_id", "") or ""),
+                capability_type=str(raw_payload.get("capability_type", "") or ""),
+                display_name=str(raw_payload.get("display_name", "") or ""),
+                risk_level=str(raw_payload.get("risk_level", "") or ""),
+                reason=str(raw_payload.get("reason", "") or ""),
+                proposed_input=dict(raw_payload.get("proposed_input", {}) or {}),
+                requested_at=runtime.now(),
+            )
         )
-        checkpoint_store.record_pending_hitl(request)
+        if not created:
+            return
         await runtime.emit(
             handle,
             "checkpoint.interrupted",

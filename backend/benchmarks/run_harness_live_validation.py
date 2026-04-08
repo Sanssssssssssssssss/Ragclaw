@@ -745,131 +745,136 @@ async def run_live_validation(
 
     started_at = datetime.now(timezone.utc).isoformat()
     with tempfile.TemporaryDirectory(prefix="harness-live-runs-") as temp_runs_dir, tempfile.TemporaryDirectory(prefix="harness-live-mcp-") as temp_tools_dir, ExitStack() as stack:
-        runtime = build_harness_runtime(Path(temp_runs_dir))
-        from src.backend.api import app as backend_app
-        mcp_root = Path(temp_tools_dir)
-        for case in cases:
-            _materialize_case_setup(mcp_root, case.setup)
-        http_routes = _collect_http_routes(cases)
-        if http_routes:
-            base_url = stack.enter_context(serve_local_http_routes(http_routes))
-            cases = [_with_web_base_url(case, base_url) for case in cases]
-        support = _LiveValidationSupport(cases)
-        mcp_tools, mcp_registry = build_tools_and_registry(mcp_root)
+        previous_checkpoint_db = checkpoint_store.db_path
+        checkpoint_store.configure_for_base_dir(Path(temp_tools_dir))
+        try:
+            runtime = build_harness_runtime(Path(temp_runs_dir))
+            from src.backend.api import app as backend_app
+            mcp_root = Path(temp_tools_dir)
+            for case in cases:
+                _materialize_case_setup(mcp_root, case.setup)
+            http_routes = _collect_http_routes(cases)
+            if http_routes:
+                base_url = stack.enter_context(serve_local_http_routes(http_routes))
+                cases = [_with_web_base_url(case, base_url) for case in cases]
+            support = _LiveValidationSupport(cases)
+            mcp_tools, mcp_registry = build_tools_and_registry(mcp_root)
 
-        original_resolve_routing = agent_manager.resolve_routing
-        original_initialize = agent_manager.initialize
+            original_resolve_routing = agent_manager.resolve_routing
+            original_initialize = agent_manager.initialize
 
-        async def _resolve_with_tracking(message: str, history: list[dict[str, Any]]):
-            case = support.case_for_message(message)
-            support.set_active_message(message)
-            if case.scenario == "failure":
-                return (
-                    ExecutionStrategy(allow_tools=False, allow_knowledge=False, allow_retrieval=False, force_direct_answer=True),
-                    RoutingDecision(
-                        intent="direct_answer",
-                        needs_tools=False,
-                        needs_retrieval=False,
-                        allowed_tools=(),
-                        confidence=1.0,
-                        reason_short="live_validation_failure",
-                        source="live_validation",
-                        subtype="",
-                    ),
-                )
-            if case.scenario == "resume":
-                return (
-                    ExecutionStrategy(allow_tools=False, allow_knowledge=False, allow_retrieval=False, force_direct_answer=True),
-                    RoutingDecision(
-                        intent="direct_answer",
-                        needs_tools=False,
-                        needs_retrieval=False,
-                        allowed_tools=(),
-                        confidence=1.0,
-                        reason_short=case.scenario,
-                        source="live_validation",
-                        subtype="",
-                    ),
-                )
-            if case.scenario.startswith("mcp_filesystem_"):
-                allowed_tool = tuple(
-                    str(item.get("name", "") or "")
-                    for item in case.tool_calls[:1]
-                    if str(item.get("name", "") or "").strip()
-                ) or ("mcp_filesystem_read_file",)
-                subtype = "read_existing_file" if allowed_tool[0] == "mcp_filesystem_read_file" else "search_workspace_file"
-                return (
-                    ExecutionStrategy(allow_tools=True, allow_knowledge=False, allow_retrieval=False),
-                    RoutingDecision(
-                        intent="workspace_file_ops",
-                        needs_tools=True,
-                        needs_retrieval=False,
-                        allowed_tools=allowed_tool,
-                        confidence=1.0,
-                        reason_short=case.scenario,
-                        source="live_validation",
-                        subtype=subtype,
-                    ),
-                )
-            if case.scenario.startswith("mcp_web_"):
-                allowed_tool = tuple(
-                    str(item.get("name", "") or "")
-                    for item in case.tool_calls[:1]
-                    if str(item.get("name", "") or "").strip()
-                ) or ("mcp_web_fetch_url",)
-                return (
-                    ExecutionStrategy(allow_tools=True, allow_knowledge=False, allow_retrieval=False),
-                    RoutingDecision(
-                        intent="web_lookup",
-                        needs_tools=True,
-                        needs_retrieval=False,
-                        allowed_tools=allowed_tool,
-                        confidence=1.0,
-                        reason_short=case.scenario,
-                        source="live_validation",
-                        subtype="",
-                    ),
-                )
-            if case.scenario.startswith("hitl_"):
-                allowed_tool = tuple(
-                    str(item.get("name", "") or "")
-                    for item in case.tool_calls[:1]
-                    if str(item.get("name", "") or "").strip()
-                ) or ("python_repl",)
-                return (
-                    ExecutionStrategy(allow_tools=True, allow_knowledge=False, allow_retrieval=False),
-                    RoutingDecision(
-                        intent="workspace_file_ops",
-                        needs_tools=True,
-                        needs_retrieval=False,
-                        allowed_tools=allowed_tool,
-                        confidence=1.0,
-                        reason_short=case.scenario,
-                        source="live_validation",
-                        subtype="",
-                    ),
-                )
-            return await original_resolve_routing(message, history)
+            async def _resolve_with_tracking(message: str, history: list[dict[str, Any]]):
+                case = support.case_for_message(message)
+                support.set_active_message(message)
+                if case.scenario == "failure":
+                    return (
+                        ExecutionStrategy(allow_tools=False, allow_knowledge=False, allow_retrieval=False, force_direct_answer=True),
+                        RoutingDecision(
+                            intent="direct_answer",
+                            needs_tools=False,
+                            needs_retrieval=False,
+                            allowed_tools=(),
+                            confidence=1.0,
+                            reason_short="live_validation_failure",
+                            source="live_validation",
+                            subtype="",
+                        ),
+                    )
+                if case.scenario == "resume":
+                    return (
+                        ExecutionStrategy(allow_tools=False, allow_knowledge=False, allow_retrieval=False, force_direct_answer=True),
+                        RoutingDecision(
+                            intent="direct_answer",
+                            needs_tools=False,
+                            needs_retrieval=False,
+                            allowed_tools=(),
+                            confidence=1.0,
+                            reason_short=case.scenario,
+                            source="live_validation",
+                            subtype="",
+                        ),
+                    )
+                if case.scenario.startswith("mcp_filesystem_"):
+                    allowed_tool = tuple(
+                        str(item.get("name", "") or "")
+                        for item in case.tool_calls[:1]
+                        if str(item.get("name", "") or "").strip()
+                    ) or ("mcp_filesystem_read_file",)
+                    subtype = "read_existing_file" if allowed_tool[0] == "mcp_filesystem_read_file" else "search_workspace_file"
+                    return (
+                        ExecutionStrategy(allow_tools=True, allow_knowledge=False, allow_retrieval=False),
+                        RoutingDecision(
+                            intent="workspace_file_ops",
+                            needs_tools=True,
+                            needs_retrieval=False,
+                            allowed_tools=allowed_tool,
+                            confidence=1.0,
+                            reason_short=case.scenario,
+                            source="live_validation",
+                            subtype=subtype,
+                        ),
+                    )
+                if case.scenario.startswith("mcp_web_"):
+                    allowed_tool = tuple(
+                        str(item.get("name", "") or "")
+                        for item in case.tool_calls[:1]
+                        if str(item.get("name", "") or "").strip()
+                    ) or ("mcp_web_fetch_url",)
+                    return (
+                        ExecutionStrategy(allow_tools=True, allow_knowledge=False, allow_retrieval=False),
+                        RoutingDecision(
+                            intent="web_lookup",
+                            needs_tools=True,
+                            needs_retrieval=False,
+                            allowed_tools=allowed_tool,
+                            confidence=1.0,
+                            reason_short=case.scenario,
+                            source="live_validation",
+                            subtype="",
+                        ),
+                    )
+                if case.scenario.startswith("hitl_"):
+                    allowed_tool = tuple(
+                        str(item.get("name", "") or "")
+                        for item in case.tool_calls[:1]
+                        if str(item.get("name", "") or "").strip()
+                    ) or ("python_repl",)
+                    return (
+                        ExecutionStrategy(allow_tools=True, allow_knowledge=False, allow_retrieval=False),
+                        RoutingDecision(
+                            intent="workspace_file_ops",
+                            needs_tools=True,
+                            needs_retrieval=False,
+                            allowed_tools=allowed_tool,
+                            confidence=1.0,
+                            reason_short=case.scenario,
+                            source="live_validation",
+                            subtype="",
+                        ),
+                    )
+                return await original_resolve_routing(message, history)
 
-        def _initialize_with_live_tools(base_dir: Path) -> None:
-            original_initialize(base_dir)
-            agent_manager.tools = list(mcp_tools)
-            agent_manager._capability_registry = mcp_registry
+            def _initialize_with_live_tools(base_dir: Path) -> None:
+                original_initialize(base_dir)
+                agent_manager.tools = list(mcp_tools)
+                agent_manager._capability_registry = mcp_registry
 
-        stack.enter_context(patch.object(backend_app, "refresh_snapshot", lambda *_args, **_kwargs: None))
-        stack.enter_context(patch.object(backend_app.memory_indexer, "rebuild_index", lambda *_args, **_kwargs: None))
-        stack.enter_context(patch.object(backend_app, "_warm_knowledge_index", AsyncMock(return_value=None)))
-        stack.enter_context(patch.object(agent_manager, "get_harness_runtime", return_value=runtime))
-        stack.enter_context(patch.object(agent_manager, "resolve_routing", side_effect=_resolve_with_tracking))
-        stack.enter_context(patch.object(agent_manager, "initialize", side_effect=_initialize_with_live_tools))
-        stack.enter_context(patch.object(agent_manager, "create_execution_support", return_value=support))
-        stack.enter_context(patch.object(agent_manager, "tools", mcp_tools))
-        stack.enter_context(patch.object(agent_manager, "_capability_registry", mcp_registry))
-        stack.enter_context(patch("src.backend.runtime.executors.memory_indexer.retrieve", return_value=[]))
-        stack.enter_context(patch("src.backend.runtime.executors.knowledge_orchestrator.astream", side_effect=support.knowledge_astream))
+            stack.enter_context(patch.object(backend_app, "refresh_snapshot", lambda *_args, **_kwargs: None))
+            stack.enter_context(patch.object(backend_app.memory_indexer, "rebuild_index", lambda *_args, **_kwargs: None))
+            stack.enter_context(patch.object(backend_app, "_warm_knowledge_index", AsyncMock(return_value=None)))
+            stack.enter_context(patch.object(agent_manager, "get_harness_runtime", return_value=runtime))
+            stack.enter_context(patch.object(agent_manager, "resolve_routing", side_effect=_resolve_with_tracking))
+            stack.enter_context(patch.object(agent_manager, "initialize", side_effect=_initialize_with_live_tools))
+            stack.enter_context(patch.object(agent_manager, "create_execution_support", return_value=support))
+            stack.enter_context(patch.object(agent_manager, "tools", mcp_tools))
+            stack.enter_context(patch.object(agent_manager, "_capability_registry", mcp_registry))
+            stack.enter_context(patch("src.backend.runtime.executors.memory_indexer.retrieve", return_value=[]))
+            stack.enter_context(patch("src.backend.runtime.executors.knowledge_orchestrator.astream", side_effect=support.knowledge_astream))
 
-        with _serve_app() as base_url:
-            results = await _run_live_cases(base_url, runtime, cases)
+            with _serve_app() as base_url:
+                results = await _run_live_cases(base_url, runtime, cases)
+        finally:
+            checkpoint_store.configure(previous_checkpoint_db)
 
     payload = {
         "started_at": started_at,
