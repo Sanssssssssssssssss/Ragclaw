@@ -31,6 +31,11 @@ class GraphState(TypedDict, total=False):
     governor_snapshot: dict[str, Any]
     interrupt_request: dict[str, Any] | None
     approval_decision: str
+    recovery_attempts: dict[str, int]
+    last_failure: dict[str, Any] | None
+    recovery_action: str
+    recovered_from_failure: bool
+    recovery_metadata: dict[str, Any]
     error_state: dict[str, Any] | None
     checkpoint_meta: dict[str, Any]
     path_kind: GraphPathKind
@@ -73,6 +78,11 @@ def create_initial_graph_state(
         governor_snapshot={},
         interrupt_request=None,
         approval_decision="",
+        recovery_attempts={},
+        last_failure=None,
+        recovery_action="",
+        recovered_from_failure=False,
+        recovery_metadata={},
         error_state=None,
         checkpoint_meta={
             "thread_id": resolved_thread_id,

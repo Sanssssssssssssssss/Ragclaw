@@ -14,6 +14,7 @@ from unittest.mock import patch
 
 from benchmarks.local_http_fixture import serve_local_http_routes, substitute_web_base_url
 from src.backend.capabilities import build_tools_and_registry
+from src.backend.capabilities.types import CapabilityResult
 from src.backend.capabilities.registry import build_capability_registry
 from src.backend.decision.execution_strategy import ExecutionStrategy
 from src.backend.decision.lightweight_router import RoutingDecision
@@ -606,6 +607,63 @@ def _materialize_case_setup(root: Path, setup: dict[str, Any]) -> None:
         file_path.write_text(str(raw_file.get("content", "") or ""), encoding="utf-8")
 
 
+def _capability_result_from_dict(payload: dict[str, Any]) -> CapabilityResult:
+    return CapabilityResult(
+        status=str(payload.get("status", "success") or "success"),  # type: ignore[arg-type]
+        payload=dict(payload.get("payload", {}) or {}),
+        partial=bool(payload.get("partial", False)),
+        error_type=str(payload.get("error_type", "") or ""),
+        error_message=str(payload.get("error_message", "") or ""),
+        retryable=bool(payload.get("retryable", False)),
+    )
+
+
+def _build_recovery_sequence_stub(sequence: list[dict[str, Any]]):
+    scripted = [dict(item) for item in sequence]
+    fallback = dict(scripted[-1]) if scripted else {"status": "success", "payload": {"text": "ok"}}
+
+    async def _stub(payload: dict[str, Any]) -> CapabilityResult:
+        item = dict(scripted.pop(0) if scripted else fallback)
+        if str(item.get("kind", "result") or "result") == "exception":
+            raise RuntimeError(str(item.get("message", "") or "scripted capability failure"))
+        return _capability_result_from_dict(item)
+
+    return _stub
+
+
+def _patch_capability_override(stack: ExitStack, target: Any, attribute: str, value: Any) -> None:
+    original = getattr(target, attribute)
+    object.__setattr__(target, attribute, value)
+    stack.callback(lambda: object.__setattr__(target, attribute, original))
+
+
+def _patch_recovery_sequence_for_case(stack: ExitStack, case: BenchmarkCase, tools: list[Any], registry) -> None:
+    scripted = list(case.setup.get("recovery_sequence", []) or [])
+    tools_by_name = {str(getattr(tool, "name", "") or ""): tool for tool in tools}
+    for item in list(case.setup.get("recovery_capability_overrides", []) or []):
+        capability_id = str(item.get("name", "") or "")
+        tool = tools_by_name.get(capability_id)
+        if tool is None:
+            raise KeyError(f"unknown recovery override tool: {capability_id}")
+        spec = registry.get(capability_id)
+        for attribute, value in dict(item.get("attrs", {}) or {}).items():
+            _patch_capability_override(stack, tool._capability_spec, str(attribute), value)  # noqa: SLF001
+            _patch_capability_override(stack, spec, str(attribute), value)
+    if not scripted:
+        return
+    for item in scripted:
+        capability_id = str(item.get("name", "") or "")
+        tool = tools_by_name.get(capability_id)
+        if tool is None:
+            raise KeyError(f"unknown recovery-sequence tool: {capability_id}")
+        _patch_capability_override(
+            stack,
+            tool._inner_tool,  # noqa: SLF001
+            "aexecute_capability",
+            _build_recovery_sequence_stub(list(item.get("results", []) or [])),
+        )
+
+
 def _collect_http_routes(cases: list[BenchmarkCase]) -> list[dict[str, Any]]:
     routes: list[dict[str, Any]] = []
     for case in cases:
@@ -647,6 +705,8 @@ def _lifecycle_case_result(case: BenchmarkCase, trace: dict[str, Any], elapsed_m
             or "capability.blocked" in event_names
         )
     ) or capability_governance_visible
+    recovery_present = "recovery.started" in event_names
+    recovery_action = str(expect.get("recovery_action", "") or "").strip()
     guard_present = "guard.failed" in event_names
     final_answer_present = "answer.completed" in event_names and bool(final_answer.strip())
     completion_integrity = (
@@ -673,6 +733,8 @@ def _lifecycle_case_result(case: BenchmarkCase, trace: dict[str, Any], elapsed_m
         trace_completeness = trace_completeness and retrieval_present
     if expect.get("tool"):
         trace_completeness = trace_completeness and tool_present
+    if recovery_action:
+        trace_completeness = trace_completeness and recovery_present
 
     missing: list[str] = []
     if not route_present:
@@ -693,6 +755,18 @@ def _lifecycle_case_result(case: BenchmarkCase, trace: dict[str, Any], elapsed_m
         missing.append("skill_incorrect")
     if not guard_correct:
         missing.append("guard_incorrect")
+    if recovery_action:
+        action_map = {
+            "retry_once": "recovery.retrying",
+            "fallback_to_answer": "recovery.fallback",
+            "escalate_to_hitl": "recovery.escalated",
+            "fail_fast": "recovery.failed",
+        }
+        if not recovery_present:
+            missing.append("recovery_trace_missing")
+        expected_event = action_map.get(recovery_action)
+        if expected_event and expected_event not in event_names:
+            missing.append(f"recovery_action_missing:{recovery_action}")
 
     return {
         "case_id": case.case_id,
@@ -710,6 +784,8 @@ def _lifecycle_case_result(case: BenchmarkCase, trace: dict[str, Any], elapsed_m
         "capability_trace_present": capability_present if (capability_present or expect.get("tool") or expect.get("skill_name") or case.scenario.startswith("hitl_")) else None,
         "capability_governance_visible": capability_governance_visible if (capability_governance_visible or expect.get("tool") or expect.get("skill_name") or case.scenario.startswith("hitl_")) else None,
         "guard_present": guard_present if "guard" in expect else None,
+        "recovery_present": recovery_present if recovery_action else None,
+        "recovery_action": recovery_action or None,
         "completion_integrity": completion_integrity,
         "queue_integrity": queue_integrity if expect.get("queue") else None,
         "final_answer_present": final_answer_present if not expect.get("failure") else None,
@@ -993,10 +1069,15 @@ async def _run_integration_lifecycle_cases(
 
             async def _run_one(case: BenchmarkCase) -> tuple[str, int]:
                 support.set_active_case(case)
-                with patch("src.backend.runtime.executors.memory_indexer.retrieve", return_value=[]), patch(
-                    "src.backend.runtime.executors.knowledge_orchestrator.astream",
-                    side_effect=support.knowledge_astream,
-                ):
+                with ExitStack() as case_stack:
+                    case_stack.enter_context(patch("src.backend.runtime.executors.memory_indexer.retrieve", return_value=[]))
+                    case_stack.enter_context(
+                        patch(
+                            "src.backend.runtime.executors.knowledge_orchestrator.astream",
+                            side_effect=support.knowledge_astream,
+                        )
+                    )
+                    _patch_recovery_sequence_for_case(case_stack, case, manager.tools, manager._capability_registry)  # noqa: SLF001
                     return await _run_case_through_runtime(runtime=runtime, executor=executor, case=case)
 
             for case in cases:

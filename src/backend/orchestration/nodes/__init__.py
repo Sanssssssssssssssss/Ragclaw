@@ -8,6 +8,7 @@ from src.backend.orchestration.nodes.capability import (
     build_capability_approval_node,
     build_capability_guard_node,
     build_capability_invoke_node,
+    build_capability_recovery_node,
     build_capability_selection_node,
     build_capability_synthesis_node,
 )
@@ -30,6 +31,7 @@ __all__ = [
     "build_capability_selection_node",
     "build_capability_approval_node",
     "build_capability_invoke_node",
+    "build_capability_recovery_node",
     "build_capability_synthesis_node",
     "build_capability_guard_node",
     "build_finalize_node",

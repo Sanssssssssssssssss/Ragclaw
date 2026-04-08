@@ -250,6 +250,180 @@
         }
       ],
       "tags": ["smoke", "hitl"]
+    },
+    {
+      "case_id": "live_recovery_timeout_retry",
+      "scenario": "mcp_web_recovery_timeout",
+      "message": "Use Web MCP only, fetch {{web_base_url}}/live/recovery/retry, and answer with the page text.",
+      "expect_route": "web_lookup",
+      "expect_tool": true,
+      "expect_capability": true,
+      "expect_capability_governance": true,
+      "expect_recovery_action": "retry_once",
+      "expect_final_contains": ["live recovered web result"],
+      "model_answer": "live recovered web result",
+      "setup": {
+        "recovery_sequence": [
+          {
+            "name": "mcp_web_fetch_url",
+            "results": [
+              {
+                "status": "failed",
+                "error_type": "timeout",
+                "error_message": "live scripted timeout"
+              },
+              {
+                "status": "success",
+                "payload": {
+                  "text": "live recovered web result"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "tool_calls": [
+        {
+          "name": "mcp_web_fetch_url",
+          "args": {
+            "url": "{{web_base_url}}/live/recovery/retry"
+          }
+        }
+      ],
+      "tags": ["smoke", "recovery", "web"]
+    },
+    {
+      "case_id": "live_recovery_capability_unavailable_fallback",
+      "scenario": "mcp_web_recovery_unavailable",
+      "message": "Use Web MCP only, fetch {{web_base_url}}/live/recovery/unavailable, and answer with the page text.",
+      "expect_route": "web_lookup",
+      "expect_tool": true,
+      "expect_capability": true,
+      "expect_capability_governance": true,
+      "expect_recovery_action": "fallback_to_answer",
+      "expect_final_contains": ["capability_unavailable"],
+      "setup": {
+        "recovery_sequence": [
+          {
+            "name": "mcp_web_fetch_url",
+            "results": [
+              {
+                "status": "failed",
+                "error_type": "capability_unavailable",
+                "error_message": "live scripted unavailable"
+              }
+            ]
+          }
+        ]
+      },
+      "tool_calls": [
+        {
+          "name": "mcp_web_fetch_url",
+          "args": {
+            "url": "{{web_base_url}}/live/recovery/unavailable"
+          }
+        }
+      ],
+      "tags": ["smoke", "recovery", "web"]
+    },
+    {
+      "case_id": "live_recovery_escalate_to_hitl_reject",
+      "scenario": "hitl_python_repl_reject",
+      "message": "Use python_repl only, calculate 2 + 2 for recovery reject, and tell me the result.",
+      "expect_route": "workspace_file_ops",
+      "expect_tool": true,
+      "expect_capability": true,
+      "expect_capability_governance": true,
+      "expect_resume": true,
+      "expect_recovery_action": "escalate_to_hitl",
+      "expect_final_contains": ["rejected this approval request"],
+      "setup": {
+        "recovery_capability_overrides": [
+          {
+            "name": "python_repl",
+            "attrs": {
+              "approval_required": false
+            }
+          }
+        ],
+        "recovery_sequence": [
+          {
+            "name": "python_repl",
+            "results": [
+              {
+                "status": "failed",
+                "error_type": "capability_unavailable",
+                "error_message": "live scripted python unavailable"
+              },
+              {
+                "status": "success",
+                "payload": {
+                  "text": "4"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "tool_calls": [
+        {
+          "name": "python_repl",
+          "args": {
+            "code": "print(2 + 2)"
+          }
+        }
+      ],
+      "tags": ["smoke", "recovery", "hitl"]
+    },
+    {
+      "case_id": "live_recovery_resumed_after_hitl_approve",
+      "scenario": "hitl_python_repl_approve",
+      "message": "Use python_repl only, calculate 2 + 2 for recovery approve, and tell me the result.",
+      "expect_route": "workspace_file_ops",
+      "expect_tool": true,
+      "expect_capability": true,
+      "expect_capability_governance": true,
+      "expect_resume": true,
+      "expect_recovery_action": "escalate_to_hitl",
+      "expect_final_contains": ["4"],
+      "model_answer": "The result is 4.",
+      "setup": {
+        "recovery_capability_overrides": [
+          {
+            "name": "python_repl",
+            "attrs": {
+              "approval_required": false
+            }
+          }
+        ],
+        "recovery_sequence": [
+          {
+            "name": "python_repl",
+            "results": [
+              {
+                "status": "failed",
+                "error_type": "capability_unavailable",
+                "error_message": "live scripted python unavailable"
+              },
+              {
+                "status": "success",
+                "payload": {
+                  "text": "4"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "tool_calls": [
+        {
+          "name": "python_repl",
+          "args": {
+            "code": "print(2 + 2)"
+          }
+        }
+      ],
+      "tags": ["smoke", "recovery", "hitl", "resume"]
     }
   ]
 }

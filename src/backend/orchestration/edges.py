@@ -28,3 +28,14 @@ def branch_after_capability_approval(state: GraphState) -> str:
     if str(state.get("approval_decision", "") or "").strip().lower() == "reject":
         return "capability_guard"
     return "capability_invoke"
+
+
+def branch_after_capability_recovery(state: GraphState) -> str:
+    action = str(state.get("recovery_action", "") or "").strip().lower()
+    if action == "retry_once":
+        return "capability_invoke"
+    if action == "escalate_to_hitl":
+        return "capability_approval"
+    if action in {"fallback_to_answer", "fail_fast"}:
+        return "capability_guard"
+    return "capability_synthesis"

@@ -28,6 +28,7 @@ if str(PROJECT_ROOT) not in sys.path:
 from benchmarks.storage_layout import harness_live_output_path
 from benchmarks.local_http_fixture import serve_local_http_routes, substitute_web_base_url
 from src.backend.capabilities import build_tools_and_registry
+from src.backend.capabilities.types import CapabilityResult
 from src.backend.decision.execution_strategy import ExecutionStrategy
 from src.backend.decision.lightweight_router import RoutingDecision
 from src.backend.knowledge.types import Evidence, OrchestratedRetrievalResult, RetrievalStep
@@ -66,6 +67,7 @@ class LiveValidationCase:
     expect_capability: bool = False
     expect_capability_governance: bool = False
     expect_resume: bool = False
+    expect_recovery_action: str = ""
 
 
 @dataclass
@@ -93,6 +95,7 @@ class LiveCaseResult:
     capability_present: bool = False
     capability_governance_visible: bool = False
     resume_present: bool = False
+    recovery_present: bool = False
     completion_integrity: bool = False
     session_persisted: bool = False
     sse_order_ok: bool = False
@@ -133,6 +136,7 @@ def _load_live_cases() -> tuple[LiveValidationCase, ...]:
                 expect_capability=bool(raw.get("expect_capability", False)),
                 expect_capability_governance=bool(raw.get("expect_capability_governance", False)),
                 expect_resume=bool(raw.get("expect_resume", False)),
+                expect_recovery_action=str(raw.get("expect_recovery_action", "") or ""),
             )
         )
     return tuple(cases)
@@ -371,6 +375,62 @@ def _materialize_case_setup(root: Path, setup: dict[str, Any]) -> None:
         file_path.write_text(str(raw_file.get("content", "") or ""), encoding="utf-8")
 
 
+def _capability_result_from_dict(payload: dict[str, Any]) -> CapabilityResult:
+    return CapabilityResult(
+        status=str(payload.get("status", "success") or "success"),  # type: ignore[arg-type]
+        payload=dict(payload.get("payload", {}) or {}),
+        partial=bool(payload.get("partial", False)),
+        error_type=str(payload.get("error_type", "") or ""),
+        error_message=str(payload.get("error_message", "") or ""),
+        retryable=bool(payload.get("retryable", False)),
+    )
+
+
+def _build_recovery_sequence_stub(sequence: list[dict[str, Any]]):
+    scripted = [dict(item) for item in sequence]
+    fallback = dict(scripted[-1]) if scripted else {"status": "success", "payload": {"text": "ok"}}
+
+    async def _stub(payload: dict[str, Any]) -> CapabilityResult:
+        item = dict(scripted.pop(0) if scripted else fallback)
+        if str(item.get("kind", "result") or "result") == "exception":
+            raise RuntimeError(str(item.get("message", "") or "scripted capability failure"))
+        return _capability_result_from_dict(item)
+
+    return _stub
+
+
+def _patch_capability_override(stack: ExitStack, target: Any, attribute: str, value: Any) -> None:
+    original = getattr(target, attribute)
+    object.__setattr__(target, attribute, value)
+    stack.callback(lambda: object.__setattr__(target, attribute, original))
+
+
+def _patch_recovery_sequence_for_cases(stack: ExitStack, cases: list[LiveValidationCase], tools: list[Any], registry) -> None:
+    tools_by_name = {str(getattr(tool, "name", "") or ""): tool for tool in tools}
+    for case in cases:
+        for item in list(case.setup.get("recovery_capability_overrides", []) or []):
+            capability_id = str(item.get("name", "") or "")
+            tool = tools_by_name.get(capability_id)
+            if tool is None:
+                raise KeyError(f"unknown recovery override tool: {capability_id}")
+            spec = registry.get(capability_id)
+            for attribute, value in dict(item.get("attrs", {}) or {}).items():
+                _patch_capability_override(stack, tool._capability_spec, str(attribute), value)  # noqa: SLF001
+                _patch_capability_override(stack, spec, str(attribute), value)
+        scripted = list(case.setup.get("recovery_sequence", []) or [])
+        for item in scripted:
+            capability_id = str(item.get("name", "") or "")
+            tool = tools_by_name.get(capability_id)
+            if tool is None:
+                raise KeyError(f"unknown recovery-sequence tool: {capability_id}")
+            _patch_capability_override(
+                stack,
+                tool._inner_tool,  # noqa: SLF001
+                "aexecute_capability",
+                _build_recovery_sequence_stub(list(item.get("results", []) or [])),
+            )
+
+
 def _collect_http_routes(cases: list[LiveValidationCase]) -> list[dict[str, Any]]:
     routes: list[dict[str, Any]] = []
     for case in cases:
@@ -594,6 +654,7 @@ def _result_from_trace(
         "capability.started" in trace_events
         and any(name in trace_events for name in ("capability.completed", "capability.failed", "capability.blocked"))
     )
+    recovery_present = "recovery.started" in trace_events
     capability_governance_visible = any(name in trace_events for name in ("capability.retry", "capability.blocked", "capability.failed")) or any(
         str(item.get("name", "")) in {"run.completed", "run.failed"} and "capability_governance" in dict(item.get("payload", {}))
         for item in trace.get("events", [])
@@ -605,6 +666,18 @@ def _result_from_trace(
         failure_reason.append("missing_capability_governance")
     if case.expect_resume and not resume_present:
         failure_reason.append("missing_resume_trace")
+    if case.expect_recovery_action:
+        action_map = {
+            "retry_once": "recovery.retrying",
+            "fallback_to_answer": "recovery.fallback",
+            "escalate_to_hitl": "recovery.escalated",
+            "fail_fast": "recovery.failed",
+        }
+        if not recovery_present:
+            failure_reason.append("missing_recovery_trace")
+        expected_event = action_map.get(case.expect_recovery_action)
+        if expected_event and expected_event not in trace_events:
+            failure_reason.append(f"missing_recovery_action:{case.expect_recovery_action}")
 
     return LiveCaseResult(
         case_id=case.case_id,
@@ -630,6 +703,7 @@ def _result_from_trace(
         capability_present=capability_present,
         capability_governance_visible=capability_governance_visible,
         resume_present=resume_present,
+        recovery_present=recovery_present,
         completion_integrity=completion_integrity,
         session_persisted=session_persisted,
         sse_order_ok=sse_order_ok,
@@ -724,11 +798,13 @@ async def _run_one_case(client: httpx.AsyncClient, runtime, case: LiveValidation
         await _delete_session(client, session_id)
 
 
-async def _run_live_cases(base_url: str, runtime, cases: list[LiveValidationCase]) -> list[dict[str, Any]]:
+async def _run_live_cases(base_url: str, runtime, cases: list[LiveValidationCase], *, tools: list[Any], registry) -> list[dict[str, Any]]:
     async with httpx.AsyncClient(base_url=base_url) as client:
         results: list[dict[str, Any]] = []
         for case in cases:
-            results.append(await _run_one_case(client, runtime, case))
+            with ExitStack() as case_stack:
+                _patch_recovery_sequence_for_cases(case_stack, [case], tools, registry)
+                results.append(await _run_one_case(client, runtime, case))
         return results
 
 
@@ -870,9 +946,8 @@ async def run_live_validation(
             stack.enter_context(patch.object(agent_manager, "_capability_registry", mcp_registry))
             stack.enter_context(patch("src.backend.runtime.executors.memory_indexer.retrieve", return_value=[]))
             stack.enter_context(patch("src.backend.runtime.executors.knowledge_orchestrator.astream", side_effect=support.knowledge_astream))
-
             with _serve_app() as base_url:
-                results = await _run_live_cases(base_url, runtime, cases)
+                results = await _run_live_cases(base_url, runtime, cases, tools=mcp_tools, registry=mcp_registry)
         finally:
             checkpoint_store.configure(previous_checkpoint_db)
 

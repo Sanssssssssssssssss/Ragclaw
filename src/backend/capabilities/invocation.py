@@ -44,6 +44,7 @@ class CapabilityRuntimeContext:
     registry: CapabilityRegistry
     governor: CapabilityGovernor
     approval_overrides: set[str] = field(default_factory=set)
+    result_log: list[dict[str, Any]] = field(default_factory=list)
 
     @property
     def run_id(self) -> str:
@@ -61,6 +62,24 @@ class CapabilityRuntimeContext:
 
     def record(self, name: str, payload: dict[str, Any]) -> None:
         self.runtime.record_internal_event(self.handle.run_id, name, payload)
+
+    def capture_result(self, spec: CapabilitySpec, invocation: CapabilityInvocation, result: CapabilityResult) -> None:
+        self.result_log.append(
+            {
+                "capability_id": spec.capability_id,
+                "capability_type": spec.capability_type,
+                "display_name": spec.display_name,
+                "risk_level": spec.risk_level,
+                "approval_required": spec.approval_required,
+                "call_id": invocation.call_id,
+                "status": result.status,
+                "payload": dict(result.payload),
+                "error_type": result.error_type,
+                "error_message": result.error_message,
+                "retry_count": result.retry_count,
+                "input": dict(invocation.payload),
+            }
+        )
 
 
 _CURRENT_CONTEXT: ContextVar[CapabilityRuntimeContext | None] = ContextVar("capability_runtime_context", default=None)
@@ -237,6 +256,7 @@ async def invoke_capability(
 
         if result.status in {"success", "partial"}:
             if context is not None:
+                context.capture_result(spec, invocation, result)
                 await context.emit(
                     "capability.completed",
                     _event_payload(
@@ -253,6 +273,7 @@ async def invoke_capability(
 
         if result.status == "blocked":
             if context is not None:
+                context.capture_result(spec, invocation, result)
                 await context.emit(
                     "capability.blocked",
                     _event_payload(
@@ -287,6 +308,7 @@ async def invoke_capability(
             await asyncio.sleep(max(0.0, float(spec.retry_policy.backoff_seconds or 0.0)))
             continue
         if context is not None:
+            context.capture_result(spec, invocation, result)
             await context.emit(
                 "capability.failed",
                 _event_payload(

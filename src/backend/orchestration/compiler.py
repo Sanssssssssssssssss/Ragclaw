@@ -3,13 +3,13 @@ from __future__ import annotations
 from langgraph.graph import END, StateGraph
 
 from src.backend.orchestration.checkpointing import checkpoint_store
-from src.backend.orchestration.edges import branch_after_capability_selection, branch_after_memory
-from src.backend.orchestration.edges import branch_after_capability_approval
+from src.backend.orchestration.edges import branch_after_capability_approval, branch_after_capability_recovery, branch_after_capability_selection, branch_after_memory
 from src.backend.orchestration.nodes import (
     build_bootstrap_node,
     build_capability_approval_node,
     build_capability_guard_node,
     build_capability_invoke_node,
+    build_capability_recovery_node,
     build_capability_selection_node,
     build_capability_synthesis_node,
     build_direct_answer_node,
@@ -37,6 +37,7 @@ def compile_harness_orchestration_graph(orchestrator):
     graph.add_node("capability_selection", build_capability_selection_node(orchestrator))
     graph.add_node("capability_approval", build_capability_approval_node(orchestrator))
     graph.add_node("capability_invoke", build_capability_invoke_node(orchestrator))
+    graph.add_node("capability_recovery", build_capability_recovery_node(orchestrator))
     graph.add_node("capability_synthesis", build_capability_synthesis_node(orchestrator))
     graph.add_node("capability_guard", build_capability_guard_node(orchestrator))
     graph.add_node("finalize", build_finalize_node(orchestrator))
@@ -73,7 +74,17 @@ def compile_harness_orchestration_graph(orchestrator):
             "capability_invoke": "capability_invoke",
         },
     )
-    graph.add_edge("capability_invoke", "capability_synthesis")
+    graph.add_conditional_edges(
+        "capability_recovery",
+        branch_after_capability_recovery,
+        {
+            "capability_invoke": "capability_invoke",
+            "capability_approval": "capability_approval",
+            "capability_guard": "capability_guard",
+            "capability_synthesis": "capability_synthesis",
+        },
+    )
+    graph.add_edge("capability_invoke", "capability_recovery")
     graph.add_edge("capability_synthesis", "capability_guard")
     graph.add_edge("capability_guard", "finalize")
     graph.add_edge("direct_answer", "finalize")

@@ -29,6 +29,13 @@ def build_capability_synthesis_node(orchestrator):
     return _node
 
 
+def build_capability_recovery_node(orchestrator):
+    async def _node(state):
+        return await orchestrator.capability_recovery_node(state)
+
+    return _node
+
+
 def build_capability_guard_node(orchestrator):
     async def _node(state):
         return await orchestrator.capability_guard_node(state)

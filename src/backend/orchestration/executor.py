@@ -13,6 +13,8 @@ from src.backend.decision.skill_gate import SkillDecision, skill_instruction
 from src.backend.observability.types import AnswerRecord, RetrievalRecord, RouteDecisionRecord, SkillDecisionRecord, ToolCallRecord
 from src.backend.orchestration.checkpointing import PendingHitlRequest, checkpoint_store
 from src.backend.orchestration.compiler import compile_harness_orchestration_graph
+from src.backend.orchestration.recovery import build_recovery_fallback_answer, build_recovery_hitl_request, extract_latest_failed_capability
+from src.backend.orchestration.recovery_policies import select_recovery_action
 from src.backend.orchestration.state import GraphState, create_initial_graph_state
 from src.backend.runtime.graders import KnowledgeAnswerGrader
 
@@ -367,6 +369,7 @@ class HarnessLangGraphOrchestrator:
             return {
                 "interrupt_request": request,
                 "approval_decision": "approve",
+                "recovery_action": "",
             }
 
         blocked_result = CapabilityResult(
@@ -429,6 +432,7 @@ class HarnessLangGraphOrchestrator:
             "answer_segments": [rejection_answer],
             "answer_finalized": True,
             "needs_answer_synthesis": False,
+            "recovery_action": "",
         }
 
     async def capability_invoke_node(self, state: GraphState) -> dict[str, Any]:
@@ -456,14 +460,43 @@ class HarnessLangGraphOrchestrator:
             result = await tool.aexecute_capability(explicit_payload)
             rendered = tool.render_capability_result(result)
             await bindings.runtime.emit(bindings.handle, "tool.completed", ToolCallRecord(tool=explicit_id, input=tool_input, output=rendered, call_id=call_id).to_dict())
-            await self._emit_final_answer(rendered)
+            result_entry = {
+                "capability_id": explicit_id,
+                "capability_type": str(getattr(tool.capability_spec, "capability_type", "") or ""),
+                "display_name": str(getattr(tool.capability_spec, "display_name", "") or explicit_id),
+                "risk_level": str(getattr(tool.capability_spec, "risk_level", "") or ""),
+                "approval_required": bool(getattr(tool.capability_spec, "approval_required", False)),
+                "call_id": result.call_id,
+                "status": result.status,
+                "payload": dict(result.payload),
+                "error_type": result.error_type,
+                "error_message": result.error_message,
+                "retry_count": result.retry_count,
+                "input": dict(explicit_payload),
+            }
+            if result.status in {"success", "partial"}:
+                await self._emit_final_answer(rendered)
+                return {
+                    "recorded_tools": [{"tool": explicit_id, "input": tool_input, "output": rendered, "call_id": call_id}],
+                    "capability_results": [result_entry],
+                    "final_answer": rendered,
+                    "answer_segments": [rendered] if rendered else [],
+                    "answer_finalized": True,
+                    "needs_answer_synthesis": False,
+                    "last_failure": None,
+                    "recovery_action": "",
+                    "recovered_from_failure": bool(state.get("last_failure")),
+                }
             return {
                 "recorded_tools": [{"tool": explicit_id, "input": tool_input, "output": rendered, "call_id": call_id}],
-                "capability_results": [{"capability_id": explicit_id, "call_id": result.call_id, "status": result.status, "payload": dict(result.payload), "error_type": result.error_type, "error_message": result.error_message}],
-                "final_answer": rendered,
-                "answer_segments": [rendered] if rendered else [],
-                "answer_finalized": True,
+                "capability_results": [result_entry],
+                "final_answer": "",
+                "answer_segments": [],
+                "answer_finalized": False,
                 "needs_answer_synthesis": False,
+                "last_failure": result_entry,
+                "recovery_action": "",
+                "recovered_from_failure": False,
             }
         return await self._invoke_tool_path(
             message=state["user_message"],
@@ -472,6 +505,128 @@ class HarnessLangGraphOrchestrator:
             skill_decision=state.get("skill_decision"),
             allowed_tools=tools,
         )
+
+    async def capability_recovery_node(self, state: GraphState) -> dict[str, Any]:
+        bindings = self._bindings_or_raise()
+        failure = extract_latest_failed_capability(state)
+        if failure is None:
+            return {
+                "last_failure": None,
+                "recovery_action": "",
+                "recovery_metadata": dict(state.get("recovery_metadata", {}) or {}),
+            }
+
+        spec = self._agent.get_capability_registry().get(failure.capability_id)
+        recovery_attempts = dict(state.get("recovery_attempts", {}) or {})
+        recovery_metadata = dict(state.get("recovery_metadata", {}) or {})
+        retry_count = int(recovery_attempts.get(failure.failure_key, 0) or 0)
+        escalated_failures = set(str(item) for item in recovery_metadata.get("escalated_failures", []) or [])
+        decision = select_recovery_action(
+            spec=spec,
+            error_type=failure.error_type,
+            retry_count=retry_count,
+            already_escalated=failure.failure_key in escalated_failures,
+        )
+        base_payload = {
+            "run_id": bindings.handle.run_id,
+            "session_id": state.get("session_id"),
+            "thread_id": state.get("thread_id"),
+            "capability_id": failure.capability_id,
+            "capability_type": failure.capability_type,
+            "display_name": failure.display_name,
+            "error_type": failure.error_type,
+            "error_message": failure.error_message,
+            "recovery_action": decision.action,
+            "retry_count": retry_count,
+            "from_checkpoint": bool(self._resume_checkpoint_id),
+            "recovered": False,
+            "checkpoint_id": self._resume_checkpoint_id or str(state.get("checkpoint_meta", {}).get("checkpoint_id", "") or ""),
+        }
+        await bindings.runtime.emit(bindings.handle, "recovery.started", dict(base_payload))
+
+        if decision.action == "retry_once":
+            recovery_attempts[failure.failure_key] = retry_count + 1
+            await bindings.runtime.emit(
+                bindings.handle,
+                "recovery.retrying",
+                {
+                    **base_payload,
+                    "retry_count": retry_count + 1,
+                    "recovered": True,
+                },
+            )
+            return {
+                "recovery_attempts": recovery_attempts,
+                "last_failure": failure.to_dict(),
+                "recovery_action": "retry_once",
+                "recovered_from_failure": False,
+                "recovery_metadata": {
+                    **recovery_metadata,
+                    "last_decision_reason": decision.reason,
+                    "last_failure_key": failure.failure_key,
+                },
+                "answer_finalized": False,
+                "approval_decision": "",
+            }
+
+        if decision.action == "escalate_to_hitl":
+            escalated_failures.add(failure.failure_key)
+            interrupt_request = build_recovery_hitl_request(
+                state=state,
+                failure=failure,
+                checkpoint_id=self._resume_checkpoint_id,
+                reason=f"Recovery escalation for {failure.display_name}: {decision.reason}",
+            )
+            await bindings.runtime.emit(
+                bindings.handle,
+                "recovery.escalated",
+                {
+                    **base_payload,
+                    "recovered": False,
+                },
+            )
+            return {
+                "interrupt_request": interrupt_request,
+                "approval_decision": "",
+                "recovery_action": "escalate_to_hitl",
+                "last_failure": failure.to_dict(),
+                "recovery_metadata": {
+                    **recovery_metadata,
+                    "escalated_failures": sorted(escalated_failures),
+                    "last_decision_reason": decision.reason,
+                    "last_failure_key": failure.failure_key,
+                },
+                "answer_finalized": False,
+            }
+
+        fail_fast = decision.action == "fail_fast"
+        answer = build_recovery_fallback_answer(
+            failure=failure,
+            recovered=retry_count > 0,
+            fail_fast=fail_fast,
+        )
+        await bindings.runtime.emit(
+            bindings.handle,
+            "recovery.failed" if fail_fast else "recovery.fallback",
+            {
+                **base_payload,
+                "recovered": False,
+            },
+        )
+        await self._emit_final_answer(answer)
+        return {
+            "final_answer": answer,
+            "answer_segments": [answer] if answer else [],
+            "answer_finalized": True,
+            "needs_answer_synthesis": False,
+            "recovery_action": decision.action,
+            "last_failure": failure.to_dict(),
+            "recovery_metadata": {
+                **recovery_metadata,
+                "last_decision_reason": decision.reason,
+                "last_failure_key": failure.failure_key,
+            },
+        }
 
     async def capability_synthesis_node(self, state: GraphState) -> dict[str, Any]:
         bindings = self._bindings_or_raise()
@@ -613,6 +768,9 @@ class HarnessLangGraphOrchestrator:
         return _runner
 
     def _build_hitl_request(self, state: GraphState) -> dict[str, Any] | None:
+        existing_request = state.get("interrupt_request")
+        if isinstance(existing_request, dict) and existing_request:
+            return dict(existing_request)
         selected_capabilities = [str(item or "") for item in state.get("selected_capabilities", []) or []]
         if not selected_capabilities:
             return None
@@ -759,12 +917,16 @@ class HarnessLangGraphOrchestrator:
                         pending = pending_tools.pop(tool_call_id, {"tool": getattr(agent_message, "name", "tool"), "input": ""})
                         output = _stringify_content(getattr(agent_message, "content", ""))
                         recorded_tools.append({"tool": pending["tool"], "input": pending["input"], "output": output, "call_id": tool_call_id})
-                        capability_results.append({"capability_id": pending["tool"], "call_id": tool_call_id, "status": "success", "payload": {"text": output}})
+                        structured_result = self._consume_captured_result(bindings.context, pending["tool"])
+                        if structured_result is None:
+                            structured_result = {"capability_id": pending["tool"], "call_id": tool_call_id, "status": "success", "payload": {"text": output}}
+                        capability_results.append(structured_result)
                         await bindings.runtime.emit(bindings.handle, "tool.completed", ToolCallRecord(tool=pending["tool"], input=pending["input"], output=output, call_id=tool_call_id).to_dict())
                         bindings.runtime.advance_answer_segment(bindings.handle)
                         answer_started = False
 
         final_answer = "".join(final_parts).strip() or last_ai_message.strip()
+        last_failure = extract_latest_failed_capability({"capability_results": capability_results})
         return {
             "recorded_tools": recorded_tools,
             "capability_results": capability_results,
@@ -773,7 +935,16 @@ class HarnessLangGraphOrchestrator:
             "needs_answer_synthesis": self._execution.needs_tool_result_fallback(final_answer, recorded_tools),
             "answer_finalized": False,
             "error_state": None,
+            "last_failure": last_failure.to_dict() if last_failure is not None else None,
+            "recovery_action": "",
+            "recovered_from_failure": False,
         }
+
+    def _consume_captured_result(self, context: CapabilityRuntimeContext, capability_id: str) -> dict[str, Any] | None:
+        for index, entry in enumerate(list(context.result_log)):
+            if str(entry.get("capability_id", "") or "") == str(capability_id or ""):
+                return context.result_log.pop(index)
+        return None
 
     async def _stream_tool_result_fallback(self, *, history_messages: list[dict[str, str]], user_message: str, recorded_tools: list[dict[str, str]], strategy: "ExecutionStrategy | None") -> str:
         fallback_messages = list(history_messages)
