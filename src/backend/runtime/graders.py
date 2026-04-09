@@ -95,6 +95,19 @@ class KnowledgeAnswerGrader:
 
         return KnowledgeGuardDecision(final_answer=normalized_answer, guard_result=None)
 
+    @staticmethod
+    def _sanitize_unsupported_details(
+        answer: str,
+        *,
+        unsupported_numbers: list[str] | None = None,
+        unsupported_locators: list[str] | None = None,
+    ) -> str:
+        sanitized = str(answer or "")
+        replacements = [str(item).strip() for item in (unsupported_numbers or []) + (unsupported_locators or []) if str(item).strip()]
+        for token in sorted(set(replacements), key=len, reverse=True):
+            sanitized = sanitized.replace(token, "当前证据未显示")
+        return sanitized.strip()
+
     def _downgrade(
         self,
         retrieval_result,
@@ -113,6 +126,15 @@ class KnowledgeAnswerGrader:
             unsupported_numbers=unsupported_numbers,
             unsupported_locators=unsupported_locators,
         )
+        corrected_answer = conservative_answer
+        if trigger == "unsupported_numbers_or_locators":
+            sanitized_answer = self._sanitize_unsupported_details(
+                original_answer,
+                unsupported_numbers=unsupported_numbers,
+                unsupported_locators=unsupported_locators,
+            )
+            if sanitized_answer and sanitized_answer != original_answer:
+                corrected_answer = sanitized_answer
         guard_result = GuardResult(
             name="knowledge_grounding_guard",
             passed=False,
@@ -125,10 +147,10 @@ class KnowledgeAnswerGrader:
                 "unsupported_locators": list(unsupported_locators or []),
                 "unsupported_inference_terms": list(unsupported_inference_terms or []),
                 "original_answer": original_answer,
-                "corrected_answer": conservative_answer,
+                "corrected_answer": corrected_answer,
             },
         )
-        return KnowledgeGuardDecision(final_answer=conservative_answer, guard_result=guard_result)
+        return KnowledgeGuardDecision(final_answer=corrected_answer, guard_result=guard_result)
 
 
 @dataclass(frozen=True)

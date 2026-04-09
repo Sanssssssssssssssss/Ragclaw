@@ -1001,13 +1001,15 @@ class AgentManager:
             "Cite the source paths you used.",
             "Do not inspect files with tools or mention internal retrieval steps.",
             "Only state numbers or locators that appear directly in the evidence.",
-            "If evidence is incomplete, answer conservatively and mark unsupported parts as 当前证据未显示.",
+            "You may provide a high-level summary or qualitative synthesis when the retrieved snippets support it.",
+            "If evidence is incomplete, keep the answer grounded, and mark unsupported exact details as 当前证据未显示.",
         ]
         if getattr(retrieval_result, "status", "") == "partial":
             instructions.extend(
                 [
                     "The evidence is partial.",
-                    "State supported findings first, then state what is still unsupported.",
+                    "State the best grounded overview first, then mark unsupported exact figures, page numbers, paragraph numbers, or missing links explicitly.",
+                    "Do not say the whole knowledge base cannot answer if the evidence is enough for a narrower qualitative answer.",
                 ]
             )
         question_type = self._knowledge_question_type(retrieval_result)
@@ -1171,14 +1173,15 @@ class AgentManager:
         lines: list[str] = []
         status = str(getattr(retrieval_result, "status", "") or "").strip().lower()
         if status == "success":
-            lines.append("当前知识库命中了相关来源，但现有证据片段不足以支持更具体的数字或定位信息。")
+            lines.append("当前知识库命中了相关来源，但现有证据片段不足以稳定支持更具体的数字或定位信息。")
         elif status == "partial":
-            lines.append("当前知识库仅支持部分回答。")
+            lines.append("当前知识库已命中相关来源，但当前只能稳定支持部分结论。")
+            lines.append("可以先基于已命中的证据给出概览性介绍；未被片段直接支持的精确数字、页码、段落号或缺失链路需要保留。")
         else:
-            lines.append("当前知识库未检到足够证据。")
+            lines.append("当前知识库未检到足够证据，暂时不宜给出确定性结论。")
 
         if unsupported_numbers or unsupported_locators:
-            lines.append("当前未检到可直接支持具体财务数字、百分比、金额或页码/段落号等定位信息的证据。")
+            lines.append("当前未检到可直接支持部分具体财务数字、百分比、金额或页码/段落号等定位信息的证据。")
 
         reason = str(getattr(retrieval_result, "reason", "") or "").strip()
         if reason:

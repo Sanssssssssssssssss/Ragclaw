@@ -408,7 +408,7 @@ class KnowledgeOrchestrator:
                 )
             return (
                 "partial",
-                "The knowledge index found only partial cross-file coverage. Answer conservatively and do not complete the aggregation beyond the cited evidence.",
+                "The knowledge index found only partial cross-file coverage. You may still provide a grounded high-level summary from the cited evidence, but keep unsupported fields explicit and do not complete the missing aggregation.",
             )
 
         if query_plan.question_type == "compare":
@@ -419,7 +419,7 @@ class KnowledgeOrchestrator:
                 )
             return (
                 "partial",
-                "The knowledge index found only partial comparison coverage. Do not complete the comparison beyond the cited evidence.",
+                "The knowledge index found only partial comparison coverage. You may compare the supported dimensions at a high level, but keep unsupported company-level fields explicit and do not complete missing slots beyond the cited evidence.",
             )
 
         if query_plan.question_type == "multi_hop":
@@ -430,7 +430,7 @@ class KnowledgeOrchestrator:
                 )
             return (
                 "partial",
-                "The knowledge index found only partial multi-hop evidence. Answer only with the supported pieces and keep missing links explicit.",
+                "The knowledge index found only partial multi-hop evidence. You may synthesize a grounded high-level answer from the supported pieces, but keep missing links explicit and do not invent unsupported specifics.",
             )
 
         if query_plan.question_type == "negation":
@@ -451,7 +451,7 @@ class KnowledgeOrchestrator:
             )
         return (
             "partial",
-            "The knowledge index returned only weak or single-channel evidence. Respond with a partial answer instead of reading source files via skill or tools.",
+            "The knowledge index returned only weak or single-channel evidence. Prefer a grounded high-level answer from the retrieved evidence where possible, avoid unsupported numeric or locator details, and do not read source files via skill or tools.",
         )
 
     def _build_formal_retrieval_result(
