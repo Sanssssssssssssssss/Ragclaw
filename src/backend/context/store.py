@@ -155,7 +155,11 @@ class ContextStore:
                 completed_at TEXT NOT NULL,
                 summary_json TEXT NOT NULL
             );
-
+            """
+        )
+        self._ensure_memory_columns(conn)
+        conn.executescript(
+            """
             CREATE INDEX IF NOT EXISTS idx_memories_kind_namespace ON memories(kind, namespace, updated_at DESC);
             CREATE INDEX IF NOT EXISTS idx_memories_status ON memories(status, updated_at DESC);
             CREATE INDEX IF NOT EXISTS idx_memories_conflict_key ON memories(conflict_key);
@@ -163,7 +167,6 @@ class ContextStore:
             CREATE INDEX IF NOT EXISTS idx_consolidation_runs_created ON consolidation_runs(created_at DESC);
             """
         )
-        self._ensure_memory_columns(conn)
         conn.commit()
 
     def _ensure_memory_columns(self, conn: sqlite3.Connection) -> None:
