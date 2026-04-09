@@ -6,9 +6,9 @@
       "type": "python",
       "request": "launch",
       "module": "uvicorn",
-      "cwd": "${workspaceFolder}/backend",
+      "cwd": "${workspaceFolder}",
       "args": [
-        "app:app",
+        "src.backend.api.app:app",
         "--host",
         "127.0.0.1",
         "--port",
@@ -22,14 +22,14 @@
       "type": "node-terminal",
       "request": "launch",
       "command": "npm run dev",
-      "cwd": "${workspaceFolder}/frontend"
+      "cwd": "${workspaceFolder}/src/frontend"
     },
     {
       "name": "Open Frontend in Edge",
       "type": "pwa-msedge",
       "request": "launch",
       "url": "http://127.0.0.1:3000",
-      "webRoot": "${workspaceFolder}/frontend"
+      "webRoot": "${workspaceFolder}/src/frontend"
     }
   ],
   "compounds": [

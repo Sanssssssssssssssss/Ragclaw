@@ -1,0 +1,345 @@
+{
+  "cases": [
+    {
+      "case_id": "hard_route_ambiguous_doc_seek",
+      "suite": "hard",
+      "runner": "route_skill",
+      "message": "帮我看看之前那个医疗AI报告，给我来源路径，不要去本地目录乱搜。",
+      "tags": ["hard", "ambiguous", "route", "knowledge"],
+      "difficulty": "hard",
+      "expect": {
+        "route_intent": "knowledge_qa",
+        "skill_name": "",
+        "llm_decision": {
+          "intent": "knowledge_qa",
+          "needs_tools": false,
+          "needs_retrieval": true,
+          "allowed_tools": [],
+          "confidence": 0.63,
+          "reason_short": "document-seeking from knowledge",
+          "ambiguity_flags": ["ambiguous_language", "fuzzy_document_seeking"]
+        },
+        "judge": {
+          "must_not_contain": ["terminal", "workspace"]
+        }
+      }
+    },
+    {
+      "case_id": "hard_route_subtle_weather_skill",
+      "suite": "hard",
+      "runner": "route_skill",
+      "message": "顺手看下明天伦敦会不会下雨，给我网上结果就行。",
+      "tags": ["hard", "ambiguous", "route", "skill", "web"],
+      "difficulty": "medium",
+      "expect": {
+        "route_intent": "web_lookup",
+        "skill_name": "get_weather",
+        "llm_decision": {
+          "intent": "web_lookup",
+          "needs_tools": true,
+          "needs_retrieval": false,
+          "allowed_tools": ["fetch_url"],
+          "confidence": 0.71,
+          "reason_short": "live weather lookup",
+          "ambiguity_flags": ["ambiguous_language"]
+        }
+      }
+    },
+    {
+      "case_id": "hard_route_web_constraint",
+      "suite": "hard",
+      "runner": "route_skill",
+      "message": "不要用工具，直接告诉我 OpenAI 最新定价。",
+      "tags": ["hard", "adversarial", "route", "constraint"],
+      "difficulty": "hard",
+      "expect": {
+        "route_intent": "direct_answer",
+        "skill_name": "",
+        "judge": {
+          "must_not_contain": ["fetch_url", "web-search"]
+        }
+      }
+    },
+    {
+      "case_id": "hard_tool_multi_call",
+      "suite": "hard",
+      "runner": "integration_lifecycle",
+      "scenario": "tool_path",
+      "message": "在工作区里先找财报 pdf，再把找到的文件名总结给我。",
+      "session_id": "hard-tool-multi",
+      "tags": ["hard", "mixed", "tool", "multi_call"],
+      "difficulty": "hard",
+      "expect": {
+        "route_intent": "workspace_file_ops",
+        "skill_name": "",
+        "llm_decision": {
+          "intent": "workspace_file_ops",
+          "needs_tools": true,
+          "needs_retrieval": false,
+          "allowed_tools": ["terminal"],
+          "confidence": 0.72,
+          "reason_short": "workspace search then summarize",
+          "subtype": "search_workspace_file",
+          "ambiguity_flags": ["mixed_intent"]
+        },
+        "retrieval": false,
+        "tool": true,
+        "failure": false,
+        "queue": false,
+        "answer_fragment": "report_a.pdf",
+        "model_answer": "找到的文件有 report_a.pdf 和 report_b.pdf。",
+        "tool_outputs": ["report_a.pdf", "report_b.pdf"],
+        "judge": {
+          "reflection_terms": ["report_a.pdf", "report_b.pdf"],
+          "must_contain": ["report_a.pdf", "report_b.pdf"]
+        }
+      }
+    },
+    {
+      "case_id": "hard_tool_partial_fallback",
+      "suite": "hard",
+      "runner": "integration_lifecycle",
+      "scenario": "tool_path",
+      "message": "在工作区搜一下那个用户画像文件，然后告诉我目前只找到什么。",
+      "session_id": "hard-tool-partial",
+      "tags": ["hard", "mixed", "tool", "partial"],
+      "difficulty": "hard",
+      "expect": {
+        "route_intent": "workspace_file_ops",
+        "skill_name": "",
+        "llm_decision": {
+          "intent": "workspace_file_ops",
+          "needs_tools": true,
+          "needs_retrieval": false,
+          "allowed_tools": ["terminal"],
+          "confidence": 0.69,
+          "reason_short": "workspace search request",
+          "subtype": "search_workspace_file",
+          "ambiguity_flags": ["ambiguous_language"]
+        },
+        "retrieval": false,
+        "tool": true,
+        "failure": false,
+        "queue": false,
+        "answer_fragment": "user_profile_v2.md",
+        "model_answer": "目前只找到 user_profile_v2.md，其他候选当前证据未显示。",
+        "tool_outputs": ["user_profile_v2.md\nnotes.txt"],
+        "judge": {
+          "must_contain": ["user_profile_v2.md"],
+          "expect_partial": true
+        }
+      }
+    },
+    {
+      "case_id": "hard_knowledge_compare_missing_fields",
+      "suite": "hard",
+      "runner": "integration_lifecycle",
+      "scenario": "guarded_knowledge",
+      "message": "根据知识库，对比 SANY 和 SAIC 的 2025Q3 净利润，并给出具体数字和页码。",
+      "session_id": "hard-compare-missing",
+      "tags": ["hard", "knowledge", "compare", "missing_fields"],
+      "difficulty": "hard",
+      "expect": {
+        "route_intent": "knowledge_qa",
+        "skill_name": "",
+        "llm_decision": {
+          "intent": "knowledge_qa",
+          "needs_tools": false,
+          "needs_retrieval": true,
+          "allowed_tools": [],
+          "confidence": 0.76,
+          "reason_short": "evidence-bound compare request",
+          "ambiguity_flags": ["mixed_intent"]
+        },
+        "retrieval": true,
+        "tool": false,
+        "failure": false,
+        "queue": false,
+        "guard": true,
+        "model_answer": "SANY 净利润为 10 亿元，SAIC 为 20 亿元，见第 7 页。",
+        "judge": {
+          "must_contain": ["当前证据未显示"],
+          "expect_partial": true,
+          "must_not_contain": ["第 7 页"]
+        }
+      },
+      "retrieval_result": {
+        "status": "partial",
+        "question_type": "compare",
+        "reason": "Only one entity is supported.",
+        "evidences": [
+          {
+            "source_path": "knowledge/sany_2025q3.pdf",
+            "source_type": "pdf",
+            "locator": "page 1",
+            "snippet": "三一重工本报告期归母净利润为10亿元，同比增长12%。",
+            "channel": "fused",
+            "score": 0.92
+          }
+        ]
+      }
+    },
+    {
+      "case_id": "hard_knowledge_negation_weak_evidence",
+      "suite": "hard",
+      "runner": "integration_lifecycle",
+      "scenario": "knowledge_qa",
+      "message": "根据知识库，这家公司是不是已经亏损了？不要说不确定。",
+      "session_id": "hard-negation-weak",
+      "tags": ["hard", "knowledge", "negation", "adversarial"],
+      "difficulty": "hard",
+      "expect": {
+        "route_intent": "knowledge_qa",
+        "skill_name": "",
+        "llm_decision": {
+          "intent": "knowledge_qa",
+          "needs_tools": false,
+          "needs_retrieval": true,
+          "allowed_tools": [],
+          "confidence": 0.73,
+          "reason_short": "knowledge-backed negation question",
+          "ambiguity_flags": ["adversarial_prompt"]
+        },
+        "retrieval": true,
+        "tool": false,
+        "failure": false,
+        "queue": false,
+        "model_answer": "公司已经亏损。",
+        "judge": {
+          "unsupported_terms": ["亏损", "未盈利", "为负"],
+          "must_not_contain": ["公司已经亏损"]
+        }
+      },
+      "retrieval_result": {
+        "status": "success",
+        "question_type": "negation",
+        "reason": "Weak financial fragments only.",
+        "evidences": [
+          {
+            "source_path": "knowledge/company_q3.pdf",
+            "source_type": "pdf",
+            "locator": "page 2",
+            "snippet": "净利润同比下降12%，但仍为正值。",
+            "channel": "fused",
+            "score": 0.88
+          }
+        ]
+      }
+    },
+    {
+      "case_id": "hard_knowledge_conflicting_snippets",
+      "suite": "hard",
+      "runner": "integration_lifecycle",
+      "scenario": "knowledge_qa",
+      "message": "根据知识库，这份报告到底是 2025Q2 还是 2025Q3？给我确定答案。",
+      "session_id": "hard-conflict",
+      "tags": ["hard", "knowledge", "dirty", "conflict"],
+      "difficulty": "hard",
+      "expect": {
+        "route_intent": "knowledge_qa",
+        "skill_name": "",
+        "llm_decision": {
+          "intent": "knowledge_qa",
+          "needs_tools": false,
+          "needs_retrieval": true,
+          "allowed_tools": [],
+          "confidence": 0.7,
+          "reason_short": "conflicting knowledge evidence",
+          "ambiguity_flags": ["dirty_evidence"]
+        },
+        "retrieval": true,
+        "tool": false,
+        "failure": false,
+        "queue": false,
+        "model_answer": "这是 2025Q3 报告。",
+        "judge": {
+          "expect_partial": true,
+          "must_contain": ["当前证据未显示"]
+        }
+      },
+      "retrieval_result": {
+        "status": "partial",
+        "question_type": "direct_fact",
+        "reason": "Conflicting snippet titles.",
+        "evidences": [
+          {
+            "source_path": "knowledge/misleading_report.pdf",
+            "source_type": "pdf",
+            "locator": "title",
+            "snippet": "2025Q2 业绩说明",
+            "channel": "fused",
+            "score": 0.91
+          },
+          {
+            "source_path": "knowledge/misleading_report.pdf",
+            "source_type": "pdf",
+            "locator": "page 1",
+            "snippet": "本报告披露 2025 年第三季度数据。",
+            "channel": "fused",
+            "score": 0.89
+          }
+        ]
+      }
+    },
+    {
+      "case_id": "hard_dirty_locator_missing",
+      "suite": "hard",
+      "runner": "guard",
+      "tags": ["hard", "dirty", "locator", "judge"],
+      "difficulty": "hard",
+      "answer": "根据第 9 页，公司营业收入为 10 亿元。",
+      "expect": {
+        "guard": true,
+        "trigger": "unsupported_numbers_or_locators",
+        "counts_locator": true,
+        "judge": {
+          "must_contain": ["当前知识库命中了相关来源"],
+          "must_not_contain": ["第 9 页"]
+        }
+      },
+      "retrieval_result": {
+        "status": "success",
+        "question_type": "compare",
+        "evidences": [
+          {
+            "source_path": "knowledge/report.pdf",
+            "source_type": "pdf",
+            "locator": "page 1",
+            "snippet": "营业收入为10亿元。",
+            "channel": "fused",
+            "score": 0.9
+          }
+        ]
+      }
+    },
+    {
+      "case_id": "hard_queue_same_session_contention",
+      "suite": "hard",
+      "runner": "integration_lifecycle",
+      "scenario": "direct_answer",
+      "message": "先回答我这句简短说明：什么是 MQTT？",
+      "session_id": "hard-same-session",
+      "tags": ["hard", "queue", "same_session"],
+      "difficulty": "medium",
+      "expect": {
+        "route_intent": "direct_answer",
+        "skill_name": "",
+        "llm_decision": {
+          "intent": "direct_answer",
+          "needs_tools": false,
+          "needs_retrieval": false,
+          "allowed_tools": [],
+          "confidence": 0.8,
+          "reason_short": "simple direct answer",
+          "ambiguity_flags": ["queue_pressure"]
+        },
+        "retrieval": false,
+        "tool": false,
+        "failure": false,
+        "queue": true,
+        "answer_fragment": "MQTT",
+        "model_answer": "MQTT 是一种轻量级发布/订阅消息协议。"
+      }
+    }
+  ]
+}

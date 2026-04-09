@@ -1,0 +1,76 @@
+{
+  "cases": [
+    {
+      "case_id": "mixed_multi_tool_same_name_calls",
+      "suite": "hard",
+      "bucket": "mixed_execution",
+      "runner": "integration_lifecycle",
+      "scenario": "tool_path",
+      "message": "Search the workspace for Q3 reports, then summarize what files were found.",
+      "session_id": "mixed-multi-tool",
+      "tags": ["hard", "mixed_execution", "tool"],
+      "difficulty": "hard",
+      "expect": {
+        "route_intent": "workspace_file_ops",
+        "retrieval": false,
+        "tool": true,
+        "failure": false,
+        "queue": false,
+        "model_answer": "I found report_a.pdf, report_b.pdf, and notes.txt.",
+        "tool_outputs": ["report_a.pdf", "report_b.pdf", "notes.txt"],
+        "judge": {
+          "must_contain": ["report_a.pdf", "report_b.pdf", "notes.txt"],
+          "reflection_terms": ["report_a.pdf", "report_b.pdf", "notes.txt"]
+        }
+      }
+    },
+    {
+      "case_id": "mixed_long_messy_tool_output",
+      "suite": "hard",
+      "bucket": "mixed_execution",
+      "runner": "integration_lifecycle",
+      "scenario": "tool_path",
+      "message": "Run the workspace search and tell me only the likely user profile file.",
+      "session_id": "mixed-messy-tool",
+      "tags": ["hard", "mixed_execution", "tool", "dirty"],
+      "difficulty": "hard",
+      "expect": {
+        "route_intent": "workspace_file_ops",
+        "retrieval": false,
+        "tool": true,
+        "failure": false,
+        "queue": false,
+        "model_answer": "The most likely profile file is user_profile_v2.md.",
+        "tool_outputs": ["tmp.log\nuser_profile_v2.md\nrandom.bin\nnotes.txt\nREADME.md"],
+        "judge": {
+          "must_contain": ["user_profile_v2.md"],
+          "must_not_contain": ["tmp.log", "random.bin"]
+        }
+      }
+    },
+    {
+      "case_id": "mixed_partial_tool_output_synthesis",
+      "suite": "hard",
+      "bucket": "mixed_execution",
+      "runner": "integration_lifecycle",
+      "scenario": "tool_path",
+      "message": "Look for the onboarding document and tell me what we have so far.",
+      "session_id": "mixed-partial-tool",
+      "tags": ["hard", "mixed_execution", "partial"],
+      "difficulty": "hard",
+      "expect": {
+        "route_intent": "workspace_file_ops",
+        "retrieval": false,
+        "tool": true,
+        "failure": false,
+        "queue": false,
+        "model_answer": "So far I only found onboarding_draft.md.",
+        "tool_outputs": ["onboarding_draft.md\narchive.zip"],
+        "judge": {
+          "must_contain": ["onboarding_draft.md"],
+          "expect_partial": true
+        }
+      }
+    }
+  ]
+}

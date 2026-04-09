@@ -1,0 +1,183 @@
+{
+  "cases": [
+    {
+      "case_id": "route_direct_no_tools",
+      "suite": "scalable",
+      "runner": "route_skill",
+      "message": "Explain what DNS is. Do not use tools.",
+      "tags": ["route", "direct", "small"],
+      "difficulty": "smoke",
+      "expect": {
+        "route_intent": "direct_answer",
+        "skill_name": ""
+      }
+    },
+    {
+      "case_id": "route_knowledge_doc_seek",
+      "suite": "scalable",
+      "runner": "route_skill",
+      "message": "Based on the knowledge base, which report mentions SANY?",
+      "tags": ["route", "knowledge", "small"],
+      "difficulty": "smoke",
+      "expect": {
+        "route_intent": "knowledge_qa",
+        "skill_name": ""
+      }
+    },
+    {
+      "case_id": "route_workspace_read",
+      "suite": "scalable",
+      "runner": "route_skill",
+      "message": "Read src/backend/api/chat.py and summarize it.",
+      "tags": ["route", "workspace", "small"],
+      "difficulty": "smoke",
+      "expect": {
+        "route_intent": "workspace_file_ops",
+        "skill_name": ""
+      }
+    },
+    {
+      "case_id": "route_web_search",
+      "suite": "scalable",
+      "runner": "route_skill",
+      "message": "Find the latest OpenAI news on the web.",
+      "tags": ["route", "web", "small"],
+      "difficulty": "smoke",
+      "expect": {
+        "route_intent": "web_lookup",
+        "skill_name": "web-search"
+      }
+    },
+    {
+      "case_id": "route_weather",
+      "suite": "scalable",
+      "runner": "route_skill",
+      "message": "Look up the weather forecast for London tomorrow online.",
+      "tags": ["route", "weather", "small"],
+      "difficulty": "smoke",
+      "expect": {
+        "route_intent": "web_lookup",
+        "skill_name": "get_weather"
+      }
+    },
+    {
+      "case_id": "guard_supported",
+      "suite": "scalable",
+      "runner": "guard",
+      "answer": "营业收入为90亿元，同比增长12%。",
+      "tags": ["guard", "small"],
+      "difficulty": "smoke",
+      "expect": {
+        "guard": false
+      },
+      "retrieval_result": {
+        "status": "success",
+        "question_type": "compare",
+        "evidences": [
+          {
+            "source_path": "knowledge/report.pdf",
+            "locator": "page 1",
+            "snippet": "营业收入为90亿元，同比增长12%。"
+          }
+        ]
+      }
+    },
+    {
+      "case_id": "guard_unsupported_number",
+      "suite": "scalable",
+      "runner": "guard",
+      "answer": "营业收入为100亿元，同比增长12%。",
+      "tags": ["guard", "numeric", "small"],
+      "difficulty": "smoke",
+      "expect": {
+        "guard": true,
+        "trigger": "unsupported_numbers_or_locators",
+        "counts_numeric": true
+      },
+      "retrieval_result": {
+        "status": "success",
+        "question_type": "compare",
+        "evidences": [
+          {
+            "source_path": "knowledge/report.pdf",
+            "locator": "page 1",
+            "snippet": "营业收入为90亿元，同比增长12%。"
+          }
+        ]
+      }
+    },
+    {
+      "case_id": "guard_unsupported_locator",
+      "suite": "scalable",
+      "runner": "guard",
+      "answer": "根据第9页，营业收入为90亿元。",
+      "tags": ["guard", "locator", "small"],
+      "difficulty": "smoke",
+      "expect": {
+        "guard": true,
+        "trigger": "unsupported_numbers_or_locators",
+        "counts_locator": true
+      },
+      "retrieval_result": {
+        "status": "success",
+        "question_type": "compare",
+        "evidences": [
+          {
+            "source_path": "knowledge/report.pdf",
+            "locator": "page 1",
+            "snippet": "营业收入为90亿元，同比增长12%。"
+          }
+        ]
+      }
+    },
+    {
+      "case_id": "guard_unsupported_inference",
+      "suite": "scalable",
+      "runner": "guard",
+      "answer": "公司已经亏损。",
+      "tags": ["guard", "inference", "medium"],
+      "difficulty": "medium",
+      "expect": {
+        "guard": false,
+        "judge": {
+          "unsupported_terms": ["亏损", "未盈利", "为负"],
+          "must_not_contain": ["公司已经亏损"]
+        }
+      },
+      "retrieval_result": {
+        "status": "success",
+        "question_type": "negation",
+        "evidences": [
+          {
+            "source_path": "knowledge/report.pdf",
+            "locator": "page 2",
+            "snippet": "净利润同比下降12%，但仍为正值。"
+          }
+        ]
+      }
+    },
+    {
+      "case_id": "guard_directory_guides_only",
+      "suite": "scalable",
+      "runner": "guard",
+      "answer": "这里给出了一份完整结论。",
+      "tags": ["guard", "partial", "medium"],
+      "difficulty": "medium",
+      "expect": {
+        "guard": true,
+        "trigger": "directory_guides_only"
+      },
+      "retrieval_result": {
+        "status": "partial",
+        "question_type": "multi_hop",
+        "evidences": [
+          {
+            "source_path": "knowledge/data_structure.md",
+            "locator": "section 1",
+            "snippet": "This file describes the knowledge layout only."
+          }
+        ]
+      }
+    }
+  ]
+}

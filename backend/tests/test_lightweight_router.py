@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import sys
 import unittest
@@ -9,9 +9,9 @@ BACKEND_DIR = Path(__file__).resolve().parents[1]
 if str(BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(BACKEND_DIR))
 
-from graph.agent import AgentManager
-from graph.execution_strategy import parse_execution_strategy
-from graph.lightweight_router import RoutingDecision, deterministic_route
+from src.backend.decision.execution_strategy import parse_execution_strategy
+from src.backend.decision.lightweight_router import RoutingDecision, deterministic_route
+from src.backend.runtime.agent_manager import AgentManager
 
 
 class LightweightRouterTests(unittest.IsolatedAsyncioTestCase):
@@ -34,9 +34,9 @@ class LightweightRouterTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(decision.subtype, "code_execution_request")
 
     def test_known_file_prefers_read_file_only(self) -> None:
-        strategy = parse_execution_strategy("Read backend/config.py and summarize router_model.")
+        strategy = parse_execution_strategy("Read src/backend/runtime/config.py and summarize router_model.")
         decision = deterministic_route(
-            message="Read backend/config.py and summarize router_model.",
+            message="Read src/backend/runtime/config.py and summarize router_model.",
             strategy=strategy,
             tool_names=("fetch_url", "python_repl", "read_file", "terminal"),
             is_knowledge_query=False,
@@ -60,6 +60,39 @@ class LightweightRouterTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(decision.intent, "workspace_file_ops")
         self.assertEqual(decision.subtype, "search_workspace_file")
         self.assertEqual(decision.allowed_tools, ("terminal",))
+
+    def test_explicit_filesystem_mcp_read_routes_without_llm(self) -> None:
+        strategy = parse_execution_strategy(
+            "Use Filesystem MCP only, read mcp_manual/read_me.txt, and tell me the exact content."
+        )
+        decision = deterministic_route(
+            message="Use Filesystem MCP only, read mcp_manual/read_me.txt, and tell me the exact content.",
+            strategy=strategy,
+            tool_names=("fetch_url", "python_repl", "read_file", "terminal", "mcp_filesystem_read_file", "mcp_filesystem_list_directory"),
+            is_knowledge_query=False,
+            prefer_tool_agent=True,
+        )
+        self.assertIsNotNone(decision)
+        self.assertEqual(decision.intent, "workspace_file_ops")
+        self.assertEqual(decision.subtype, "read_existing_file")
+        self.assertEqual(decision.allowed_tools, ("mcp_filesystem_read_file",))
+        self.assertEqual(decision.source, "rules")
+
+    def test_explicit_web_mcp_fetch_routes_without_llm(self) -> None:
+        strategy = parse_execution_strategy(
+            "Use Web MCP only, fetch https://example.com/docs/readme, and tell me the page text."
+        )
+        decision = deterministic_route(
+            message="Use Web MCP only, fetch https://example.com/docs/readme, and tell me the page text.",
+            strategy=strategy,
+            tool_names=("fetch_url", "mcp_web_fetch_url", "python_repl", "read_file", "terminal"),
+            is_knowledge_query=False,
+            prefer_tool_agent=True,
+        )
+        self.assertIsNotNone(decision)
+        self.assertEqual(decision.intent, "web_lookup")
+        self.assertEqual(decision.allowed_tools, ("mcp_web_fetch_url",))
+        self.assertEqual(decision.source, "rules")
 
     def test_file_backed_calculation_prefers_python_only(self) -> None:
         strategy = parse_execution_strategy("Count how many rows are in knowledge/E-commerce Data/sales_orders.xlsx.")
@@ -89,6 +122,17 @@ class LightweightRouterTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(decision.subtype, "pure_text_transformation")
         self.assertEqual(decision.allowed_tools, ())
 
+    def test_fuzzy_doc_seeking_now_defers_to_llm_router(self) -> None:
+        strategy = parse_execution_strategy("I want that healthcare report and its source path.")
+        decision = deterministic_route(
+            message="I want that healthcare report and its source path.",
+            strategy=strategy,
+            tool_names=("fetch_url", "python_repl", "read_file", "terminal"),
+            is_knowledge_query=True,
+            prefer_tool_agent=False,
+        )
+        self.assertIsNone(decision)
+
     async def test_resolve_routing_skips_llm_when_rules_are_clear(self) -> None:
         with patch.object(self.manager._lightweight_router, "route", new_callable=AsyncMock) as mocked_route:
             _strategy, decision = await self.manager.resolve_routing(
@@ -98,6 +142,28 @@ class LightweightRouterTests(unittest.IsolatedAsyncioTestCase):
         mocked_route.assert_not_awaited()
         self.assertEqual(decision.intent, "direct_answer")
         self.assertEqual(decision.allowed_tools, ())
+
+    async def test_resolve_routing_skips_llm_for_explicit_filesystem_mcp(self) -> None:
+        with patch.object(self.manager._lightweight_router, "route", new_callable=AsyncMock) as mocked_route:
+            _strategy, decision = await self.manager.resolve_routing(
+                "Use Filesystem MCP only, read mcp_manual/read_me.txt, and tell me the exact content.",
+                [],
+            )
+        mocked_route.assert_not_awaited()
+        self.assertEqual(decision.intent, "workspace_file_ops")
+        self.assertEqual(decision.allowed_tools, ("mcp_filesystem_read_file",))
+        self.assertEqual(decision.source, "rules")
+
+    async def test_resolve_routing_skips_llm_for_explicit_web_mcp(self) -> None:
+        with patch.object(self.manager._lightweight_router, "route", new_callable=AsyncMock) as mocked_route:
+            _strategy, decision = await self.manager.resolve_routing(
+                "Use Web MCP only, fetch https://example.com/docs/readme, and tell me the page text.",
+                [],
+            )
+        mocked_route.assert_not_awaited()
+        self.assertEqual(decision.intent, "web_lookup")
+        self.assertEqual(decision.allowed_tools, ("mcp_web_fetch_url",))
+        self.assertEqual(decision.source, "rules")
 
     async def test_resolve_routing_uses_llm_for_ambiguous_message(self) -> None:
         mocked_decision = RoutingDecision(
@@ -139,20 +205,7 @@ class LightweightRouterTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(decision.intent, "workspace_file_ops")
         self.assertEqual(decision.allowed_tools, ("terminal",))
 
-    async def test_low_confidence_ambiguous_router_escalates(self) -> None:
-        small_decision = RoutingDecision(
-            intent="workspace_file_ops",
-            needs_tools=True,
-            needs_retrieval=False,
-            allowed_tools=("read_file", "terminal"),
-            confidence=0.42,
-            reason_short="unclear mixed request",
-            source="llm_router_small",
-            prompt_tokens=40,
-            output_tokens=20,
-            model_name="kimi-k2",
-            subtype="search_workspace_file",
-        )
+    async def test_ambiguous_router_prefers_large_model_contract(self) -> None:
         large_decision = RoutingDecision(
             intent="knowledge_qa",
             needs_tools=False,
@@ -160,19 +213,18 @@ class LightweightRouterTests(unittest.IsolatedAsyncioTestCase):
             allowed_tools=(),
             confidence=0.81,
             reason_short="document seeking request",
-            source="llm_router_large",
+            source="llm_router",
             prompt_tokens=60,
             output_tokens=30,
             model_name="kimi-k2.5",
         )
 
         with (
-            patch.object(self.manager._lightweight_router, "_build_small_model", return_value=(object(), "kimi-k2")),
             patch.object(self.manager._lightweight_router, "_build_large_model", return_value=object()),
             patch.object(
                 self.manager._lightweight_router,
                 "_invoke_router",
-                new=AsyncMock(side_effect=[small_decision, large_decision]),
+                new=AsyncMock(return_value=large_decision),
             ),
         ):
             _strategy, decision = await self.manager.resolve_routing(
@@ -181,9 +233,10 @@ class LightweightRouterTests(unittest.IsolatedAsyncioTestCase):
             )
 
         self.assertEqual(decision.intent, "knowledge_qa")
-        self.assertTrue(decision.escalated)
-        self.assertEqual(decision.source, "llm_router_large")
+        self.assertFalse(decision.escalated)
+        self.assertEqual(decision.source, "llm_router")
 
 
 if __name__ == "__main__":
     unittest.main()
+

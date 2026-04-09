@@ -9,11 +9,11 @@ BACKEND_DIR = Path(__file__).resolve().parents[1]
 if str(BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(BACKEND_DIR))
 
-from knowledge_retrieval.evidence_organizer import diversify_evidences, merge_parent_evidences
-from knowledge_retrieval.orchestrator import KnowledgeOrchestrator
-from knowledge_retrieval.query_rewrite import build_query_plan
-from knowledge_retrieval.reranker import rerank_evidences
-from knowledge_retrieval.types import Evidence, HybridRetrievalResult
+from src.backend.knowledge.evidence_organizer import diversify_evidences, merge_parent_evidences
+from src.backend.knowledge.orchestrator import KnowledgeOrchestrator
+from src.backend.knowledge.query_rewrite import build_query_plan
+from src.backend.knowledge.reranker import rerank_evidences
+from src.backend.knowledge.types import Evidence, HybridRetrievalResult
 
 
 class RetrievalEnhancementTests(unittest.TestCase):
@@ -232,7 +232,7 @@ class RetrievalEnhancementTests(unittest.TestCase):
         orchestrator = KnowledgeOrchestrator()
         plan = build_query_plan("根据知识库，对比上汽集团与三一重工 2025 Q3 的净利润变化情况，并给出来源。")
         with patch(
-            "knowledge_retrieval.orchestrator.hybrid_retriever.retrieve",
+            "src.backend.knowledge.orchestrator.hybrid_retriever.retrieve",
             side_effect=[
                 HybridRetrievalResult(
                     vector_evidences=[
@@ -283,7 +283,7 @@ class RetrievalEnhancementTests(unittest.TestCase):
         orchestrator = KnowledgeOrchestrator()
         query = "根据知识库，对比上汽集团和三一重工 2025 Q3 的财务表现，应检索哪些来源路径？"
         with patch(
-            "knowledge_retrieval.orchestrator.hybrid_retriever.retrieve",
+            "src.backend.knowledge.orchestrator.hybrid_retriever.retrieve",
             return_value=HybridRetrievalResult(
                 vector_evidences=[
                     Evidence(
@@ -318,7 +318,7 @@ class RetrievalEnhancementTests(unittest.TestCase):
         orchestrator = KnowledgeOrchestrator()
         query = "根据知识库，对比上汽集团和三一重工 2025 Q3 的财务表现，应检索哪些来源路径？"
         with patch(
-            "knowledge_retrieval.orchestrator.hybrid_retriever.retrieve",
+            "src.backend.knowledge.orchestrator.hybrid_retriever.retrieve",
             return_value=HybridRetrievalResult(
                 vector_evidences=[
                     Evidence(

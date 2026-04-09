@@ -1,0 +1,386 @@
+{
+  "cases": [
+    {
+      "case_id": "integration_direct",
+      "suite": "integration",
+      "runner": "integration_lifecycle",
+      "scenario": "direct_answer",
+      "message": "Explain what TCP is in one paragraph. Do not use tools.",
+      "session_id": "integration-direct",
+      "tags": ["smoke", "direct", "integration"],
+      "difficulty": "smoke",
+      "expect": {
+        "route_intent": "direct_answer",
+        "skill_name": "",
+        "retrieval": false,
+        "tool": false,
+        "failure": false,
+        "queue": false,
+        "answer_fragment": "TCP"
+      }
+    },
+    {
+      "case_id": "integration_knowledge",
+      "suite": "integration",
+      "runner": "integration_lifecycle",
+      "scenario": "knowledge_qa",
+      "message": "Based on the knowledge base, which report mentions SANY?",
+      "session_id": "integration-knowledge",
+      "tags": ["smoke", "knowledge", "integration"],
+      "difficulty": "smoke",
+      "expect": {
+        "route_intent": "knowledge_qa",
+        "skill_name": "",
+        "retrieval": true,
+        "tool": false,
+        "failure": false,
+        "queue": false,
+        "answer_fragment": "knowledge_case answer"
+      }
+    },
+    {
+      "case_id": "integration_tool",
+      "suite": "integration",
+      "runner": "integration_lifecycle",
+      "scenario": "tool_path",
+      "message": "Read the workspace directory and list the files.",
+      "session_id": "integration-tool",
+      "tags": ["smoke", "tool", "integration"],
+      "difficulty": "smoke",
+      "expect": {
+        "route_intent": "workspace_file_ops",
+        "skill_name": "",
+        "retrieval": false,
+        "tool": true,
+        "failure": false,
+        "queue": false,
+        "answer_fragment": "a.txt"
+      }
+    },
+    {
+      "case_id": "integration_guarded",
+      "suite": "integration",
+      "runner": "integration_lifecycle",
+      "scenario": "guarded_knowledge",
+      "message": "Based on the knowledge base, what is the exact revenue number?",
+      "session_id": "integration-guard",
+      "tags": ["guard", "knowledge", "integration"],
+      "difficulty": "medium",
+      "expect": {
+        "route_intent": "knowledge_qa",
+        "skill_name": "",
+        "retrieval": true,
+        "tool": false,
+        "failure": false,
+        "queue": false,
+        "guard": true,
+        "answer_fragment": "当前知识库命中了相关来源"
+      }
+    },
+    {
+      "case_id": "integration_queue",
+      "suite": "integration",
+      "runner": "integration_lifecycle",
+      "scenario": "direct_answer",
+      "message": "Explain HTTP in one sentence. Do not use tools.",
+      "session_id": "integration-queued",
+      "tags": ["queue", "integration"],
+      "difficulty": "medium",
+      "expect": {
+        "route_intent": "direct_answer",
+        "skill_name": "",
+        "retrieval": false,
+        "tool": false,
+        "failure": false,
+        "queue": true,
+        "answer_fragment": "HTTP"
+      }
+    },
+    {
+      "case_id": "mcp_filesystem_read_success",
+      "suite": "integration",
+      "runner": "integration_lifecycle",
+      "scenario": "mcp_filesystem_read_success",
+      "message": "Use Filesystem MCP only, read mcp_cases/read_success.txt, and tell me the content.",
+      "session_id": "integration-mcp-read",
+      "tags": ["smoke", "mcp", "integration"],
+      "difficulty": "smoke",
+      "setup": {
+        "files": [
+          {
+            "path": "mcp_cases/read_success.txt",
+            "content": "filesystem mcp says hello"
+          }
+        ]
+      },
+      "tool_calls": [
+        {
+          "name": "mcp_filesystem_read_file",
+          "args": {
+            "path": "mcp_cases/read_success.txt"
+          }
+        }
+      ],
+      "expect": {
+        "route_intent": "workspace_file_ops",
+        "skill_name": "",
+        "retrieval": false,
+        "tool": true,
+        "failure": false,
+        "queue": false,
+        "answer_fragment": "filesystem mcp says hello"
+      }
+    },
+    {
+      "case_id": "mcp_filesystem_list_success",
+      "suite": "integration",
+      "runner": "integration_lifecycle",
+      "scenario": "mcp_filesystem_list_success",
+      "message": "Use Filesystem MCP only, list mcp_cases/list_dir, and tell me which files are there.",
+      "session_id": "integration-mcp-list",
+      "tags": ["smoke", "mcp", "integration"],
+      "difficulty": "smoke",
+      "setup": {
+        "files": [
+          {
+            "path": "mcp_cases/list_dir/alpha.txt",
+            "content": "alpha"
+          },
+          {
+            "path": "mcp_cases/list_dir/beta.md",
+            "content": "beta"
+          }
+        ]
+      },
+      "tool_calls": [
+        {
+          "name": "mcp_filesystem_list_directory",
+          "args": {
+            "path": "mcp_cases/list_dir"
+          }
+        }
+      ],
+      "expect": {
+        "route_intent": "workspace_file_ops",
+        "skill_name": "",
+        "retrieval": false,
+        "tool": true,
+        "failure": false,
+        "queue": false,
+        "answer_fragment": "alpha.txt"
+      }
+    },
+    {
+      "case_id": "mcp_filesystem_blocked_by_governance",
+      "suite": "integration",
+      "runner": "integration_lifecycle",
+      "scenario": "mcp_filesystem_blocked_by_governance",
+      "message": "Use Filesystem MCP only, read mcp_cases/repeated.txt three times, then tell me what happened.",
+      "session_id": "integration-mcp-blocked",
+      "tags": ["smoke", "mcp", "governance", "integration"],
+      "difficulty": "smoke",
+      "setup": {
+        "files": [
+          {
+            "path": "mcp_cases/repeated.txt",
+            "content": "repeat me"
+          }
+        ]
+      },
+      "tool_calls": [
+        {
+          "name": "mcp_filesystem_read_file",
+          "args": {
+            "path": "mcp_cases/repeated.txt"
+          }
+        },
+        {
+          "name": "mcp_filesystem_read_file",
+          "args": {
+            "path": "mcp_cases/repeated.txt"
+          }
+        },
+        {
+          "name": "mcp_filesystem_read_file",
+          "args": {
+            "path": "mcp_cases/repeated.txt"
+          }
+        }
+      ],
+      "expect": {
+        "route_intent": "workspace_file_ops",
+        "skill_name": "",
+        "retrieval": false,
+        "tool": true,
+        "failure": false,
+        "queue": false,
+        "answer_fragment": "repeated_call_limit"
+      }
+    },
+    {
+      "case_id": "mcp_filesystem_not_found_or_invalid_path",
+      "suite": "integration",
+      "runner": "integration_lifecycle",
+      "scenario": "mcp_filesystem_not_found_or_invalid_path",
+      "message": "Use Filesystem MCP only, read mcp_cases/missing.txt, and tell me the error.",
+      "session_id": "integration-mcp-missing",
+      "tags": ["smoke", "mcp", "error", "integration"],
+      "difficulty": "smoke",
+      "tool_calls": [
+        {
+          "name": "mcp_filesystem_read_file",
+          "args": {
+            "path": "mcp_cases/missing.txt"
+          }
+        }
+      ],
+      "expect": {
+        "route_intent": "workspace_file_ops",
+        "skill_name": "",
+        "retrieval": false,
+        "tool": true,
+        "failure": false,
+        "queue": false,
+        "answer_fragment": "file does not exist"
+      }
+    },
+    {
+      "case_id": "mcp_web_fetch_success",
+      "suite": "integration",
+      "runner": "integration_lifecycle",
+      "scenario": "mcp_web_fetch_success",
+      "message": "Use Web MCP only, fetch {{web_base_url}}/docs/readme, and tell me the page text.",
+      "session_id": "integration-mcp-web-read",
+      "tags": ["smoke", "mcp", "integration", "web"],
+      "difficulty": "smoke",
+      "setup": {
+        "http_routes": [
+          {
+            "path": "/docs/readme",
+            "content_type": "text/plain; charset=utf-8",
+            "body": "web mcp says hello"
+          }
+        ]
+      },
+      "tool_calls": [
+        {
+          "name": "mcp_web_fetch_url",
+          "args": {
+            "url": "{{web_base_url}}/docs/readme"
+          }
+        }
+      ],
+      "expect": {
+        "route_intent": "web_lookup",
+        "skill_name": "",
+        "retrieval": false,
+        "tool": true,
+        "failure": false,
+        "queue": false,
+        "answer_fragment": "web mcp says hello"
+      }
+    },
+    {
+      "case_id": "mcp_web_fetch_invalid_url",
+      "suite": "integration",
+      "runner": "integration_lifecycle",
+      "scenario": "mcp_web_fetch_invalid_url",
+      "message": "Use Web MCP only, fetch ftp://bad-url, and tell me the result.",
+      "session_id": "integration-mcp-web-invalid",
+      "tags": ["smoke", "mcp", "integration", "web", "error"],
+      "difficulty": "smoke",
+      "tool_calls": [
+        {
+          "name": "mcp_web_fetch_url",
+          "args": {
+            "url": "ftp://bad-url"
+          }
+        }
+      ],
+      "expect": {
+        "route_intent": "web_lookup",
+        "skill_name": "",
+        "retrieval": false,
+        "tool": true,
+        "failure": false,
+        "queue": false,
+        "answer_fragment": "valid http or https URL"
+      }
+    },
+    {
+      "case_id": "mcp_web_fetch_timeout_or_unavailable",
+      "suite": "integration",
+      "runner": "integration_lifecycle",
+      "scenario": "mcp_web_fetch_timeout_or_unavailable",
+      "message": "Use Web MCP only, fetch http://127.0.0.1:9/docs/unavailable, and tell me the result.",
+      "session_id": "integration-mcp-web-timeout",
+      "tags": ["smoke", "mcp", "integration", "web", "error"],
+      "difficulty": "smoke",
+      "tool_calls": [
+        {
+          "name": "mcp_web_fetch_url",
+          "args": {
+            "url": "http://127.0.0.1:9/docs/unavailable"
+          }
+        }
+      ],
+      "expect": {
+        "route_intent": "web_lookup",
+        "skill_name": "",
+        "retrieval": false,
+        "tool": true,
+        "failure": false,
+        "queue": false,
+        "answer_fragment": "unavailable"
+      }
+    },
+    {
+      "case_id": "mcp_web_fetch_blocked_by_governance",
+      "suite": "integration",
+      "runner": "integration_lifecycle",
+      "scenario": "mcp_web_fetch_blocked_by_governance",
+      "message": "Use Web MCP only, fetch {{web_base_url}}/docs/repeat three times, then tell me what happened.",
+      "session_id": "integration-mcp-web-blocked",
+      "tags": ["smoke", "mcp", "integration", "web", "governance"],
+      "difficulty": "smoke",
+      "setup": {
+        "http_routes": [
+          {
+            "path": "/docs/repeat",
+            "content_type": "text/plain; charset=utf-8",
+            "body": "repeat web"
+          }
+        ]
+      },
+      "tool_calls": [
+        {
+          "name": "mcp_web_fetch_url",
+          "args": {
+            "url": "{{web_base_url}}/docs/repeat"
+          }
+        },
+        {
+          "name": "mcp_web_fetch_url",
+          "args": {
+            "url": "{{web_base_url}}/docs/repeat"
+          }
+        },
+        {
+          "name": "mcp_web_fetch_url",
+          "args": {
+            "url": "{{web_base_url}}/docs/repeat"
+          }
+        }
+      ],
+      "expect": {
+        "route_intent": "web_lookup",
+        "skill_name": "",
+        "retrieval": false,
+        "tool": true,
+        "failure": false,
+        "queue": false,
+        "answer_fragment": "repeated_call_limit"
+      }
+    }
+  ]
+}

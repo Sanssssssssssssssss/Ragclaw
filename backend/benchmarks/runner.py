@@ -12,7 +12,7 @@ from typing import Any
 
 import httpx
 
-from config import get_settings
+from src.backend.runtime.config import get_settings
 
 try:
     from .case_loader import (
@@ -28,6 +28,7 @@ try:
     from .evaluator import evaluate_case, summarize_results
     from .judge import evaluate_with_judge
     from .judge_client import load_judge_client
+    from .storage_layout import rag_general_output_dir
 except ImportError:  # pragma: no cover - fallback for running inside backend cwd
     from benchmarks.case_loader import (
         BenchmarkSelection,
@@ -42,12 +43,13 @@ except ImportError:  # pragma: no cover - fallback for running inside backend cw
     from benchmarks.evaluator import evaluate_case, summarize_results
     from benchmarks.judge import evaluate_with_judge
     from benchmarks.judge_client import load_judge_client
+    from benchmarks.storage_layout import rag_general_output_dir
 
 
 BACKEND_DIR = Path(__file__).resolve().parents[1]
 PROJECT_ROOT = BACKEND_DIR.parent
 DEFAULT_BASE_URL = "http://127.0.0.1:8015"
-OUTPUT_DIR = BACKEND_DIR / "storage" / "benchmarks"
+OUTPUT_DIR = rag_general_output_dir()
 KNOWLEDGE_MANIFEST_PATH = BACKEND_DIR / "storage" / "knowledge" / "manifest.json"
 KNOWLEDGE_INGESTION_ERRORS_PATH = BACKEND_DIR / "storage" / "knowledge" / "derived" / "ingestion_errors.json"
 DEFAULT_CASE_DELAY_SECONDS = 3.0

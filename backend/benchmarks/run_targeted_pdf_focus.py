@@ -17,14 +17,16 @@ try:
     from .case_loader import BenchmarkSelection, load_cases
     from .evaluator import summarize_results
     from .runner import BenchmarkRunner
+    from .storage_layout import rag_pdf_output_path
 except ImportError:  # pragma: no cover - fallback for running inside backend cwd
     from benchmarks.case_loader import BenchmarkSelection, load_cases
     from benchmarks.evaluator import summarize_results
     from benchmarks.runner import BenchmarkRunner
+    from benchmarks.storage_layout import rag_pdf_output_path
 
 
 DEFAULT_BASE_URL = "http://127.0.0.1:8015"
-DEFAULT_OUTPUT_PATH = BACKEND_DIR / "storage" / "benchmarks" / "pdf_targeted_after_focus.json"
+DEFAULT_OUTPUT_PATH = rag_pdf_output_path()
 INGESTION_ERRORS_PATH = BACKEND_DIR / "storage" / "knowledge" / "derived" / "ingestion_errors.json"
 PDF_TARGETED_SLICES: tuple[tuple[str, str], ...] = (
     ("retrieval", "cross_file_aggregation"),

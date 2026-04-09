@@ -1,0 +1,74 @@
+{
+  "cases": [
+    {
+      "case_id": "rewrite_compare_preserves_entities_and_period",
+      "suite": "rewrite",
+      "bucket": "rewrite_planner",
+      "runner": "rewrite_planner",
+      "message": "Compare SANY and SAIC net profit in 2025 Q3.",
+      "tags": ["rewrite", "compare", "small"],
+      "difficulty": "medium",
+      "expect": {
+        "question_type": "compare",
+        "must_preserve_terms": ["SANY", "SAIC", "2025", "Q3"],
+        "must_not_introduce_terms": ["weather", "workspace"]
+      }
+    },
+    {
+      "case_id": "rewrite_multi_hop_preserves_constraints",
+      "suite": "rewrite",
+      "bucket": "rewrite_planner",
+      "runner": "rewrite_planner",
+      "message": "Which company both increased revenue and explained the reason in the same report?",
+      "tags": ["rewrite", "multi_hop"],
+      "difficulty": "hard",
+      "expect": {
+        "question_type": "multi_hop",
+        "must_preserve_terms": ["increased", "reason"],
+        "must_not_introduce_terms": ["loss", "weather"]
+      }
+    },
+    {
+      "case_id": "rewrite_negation_keeps_negative_intent",
+      "suite": "rewrite",
+      "bucket": "rewrite_planner",
+      "runner": "rewrite_planner",
+      "message": "Was Atlas not profitable in 2025?",
+      "tags": ["rewrite", "negation"],
+      "difficulty": "medium",
+      "expect": {
+        "question_type": "negation",
+        "must_preserve_terms": ["Atlas", "2025"],
+        "must_not_introduce_terms": ["workspace", "terminal"]
+      }
+    },
+    {
+      "case_id": "rewrite_fuzzy_doc_seek_should_not_become_workspace",
+      "suite": "rewrite",
+      "bucket": "rewrite_planner",
+      "runner": "rewrite_planner",
+      "message": "Which report was that earlier medical AI document?",
+      "tags": ["rewrite", "fuzzy", "knowledge"],
+      "difficulty": "hard",
+      "expect": {
+        "question_type": "fuzzy",
+        "must_preserve_terms": ["report", "medical", "AI"],
+        "must_not_introduce_terms": ["workspace", "backend/", "terminal"]
+      }
+    },
+    {
+      "case_id": "rewrite_openai_fuzzy_drift_probe",
+      "suite": "rewrite",
+      "bucket": "rewrite_planner",
+      "runner": "rewrite_planner",
+      "message": "What is that OpenAI thing roughly?",
+      "tags": ["rewrite", "drift_probe", "hard"],
+      "difficulty": "hard",
+      "expect": {
+        "question_type": "fuzzy",
+        "must_preserve_terms": ["OpenAI"],
+        "must_not_introduce_terms": ["营收", "员工人数"]
+      }
+    }
+  ]
+}

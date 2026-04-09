@@ -1,0 +1,180 @@
+{
+  "cases": [
+    {
+      "case_id": "recovery_timeout_retry_success",
+      "suite": "integration",
+      "runner": "integration_lifecycle",
+      "scenario": "mcp_web_recovery_timeout",
+      "message": "Use Web MCP only, fetch {{web_base_url}}/recovery/retry, and tell me the result.",
+      "session_id": "integration-recovery-timeout",
+      "tags": ["smoke", "recovery", "mcp", "web"],
+      "difficulty": "smoke",
+      "setup": {
+        "recovery_sequence": [
+          {
+            "name": "mcp_web_fetch_url",
+            "results": [
+              {
+                "status": "failed",
+                "error_type": "timeout",
+                "error_message": "scripted timeout"
+              },
+              {
+                "status": "success",
+                "payload": {
+                  "text": "recovered web result"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "tool_calls": [
+        {
+          "name": "mcp_web_fetch_url",
+          "args": {
+            "url": "{{web_base_url}}/recovery/retry"
+          }
+        }
+      ],
+      "expect": {
+        "route_intent": "web_lookup",
+        "tool": true,
+        "failure": false,
+        "answer_fragment": "recovered web result",
+        "recovery_action": "retry_once"
+      }
+    },
+    {
+      "case_id": "recovery_capability_unavailable_fallback",
+      "suite": "integration",
+      "runner": "integration_lifecycle",
+      "scenario": "mcp_web_recovery_unavailable",
+      "message": "Use Web MCP only, fetch {{web_base_url}}/recovery/unavailable, and tell me the result.",
+      "session_id": "integration-recovery-unavailable",
+      "tags": ["smoke", "recovery", "mcp", "web"],
+      "difficulty": "smoke",
+      "setup": {
+        "recovery_sequence": [
+          {
+            "name": "mcp_web_fetch_url",
+            "results": [
+              {
+                "status": "failed",
+                "error_type": "capability_unavailable",
+                "error_message": "scripted unavailable"
+              }
+            ]
+          }
+        ]
+      },
+      "tool_calls": [
+        {
+          "name": "mcp_web_fetch_url",
+          "args": {
+            "url": "{{web_base_url}}/recovery/unavailable"
+          }
+        }
+      ],
+      "expect": {
+        "route_intent": "web_lookup",
+        "tool": true,
+        "failure": false,
+        "answer_fragment": "capability_unavailable",
+        "recovery_action": "fallback_to_answer"
+      }
+    },
+    {
+      "case_id": "recovery_execution_error_fail_fast",
+      "suite": "integration",
+      "runner": "integration_lifecycle",
+      "scenario": "mcp_web_recovery_execution_error",
+      "message": "Use Web MCP only, fetch {{web_base_url}}/recovery/execution, and tell me the result.",
+      "session_id": "integration-recovery-execution",
+      "tags": ["smoke", "recovery", "mcp", "web"],
+      "difficulty": "smoke",
+      "setup": {
+        "recovery_sequence": [
+          {
+            "name": "mcp_web_fetch_url",
+            "results": [
+              {
+                "status": "failed",
+                "error_type": "execution_error",
+                "error_message": "scripted execution error"
+              }
+            ]
+          }
+        ]
+      },
+      "tool_calls": [
+        {
+          "name": "mcp_web_fetch_url",
+          "args": {
+            "url": "{{web_base_url}}/recovery/execution"
+          }
+        }
+      ],
+      "expect": {
+        "route_intent": "web_lookup",
+        "tool": true,
+        "failure": false,
+        "answer_fragment": "execution_error",
+        "recovery_action": "fail_fast"
+      }
+    },
+    {
+      "case_id": "recovery_capability_unavailable_escalate_hitl",
+      "suite": "integration",
+      "runner": "integration_lifecycle",
+      "scenario": "hitl_python_repl_approve",
+      "message": "Use python_repl only, calculate 2 + 2, and tell me the result.",
+      "session_id": "integration-recovery-hitl",
+      "tags": ["smoke", "recovery", "hitl"],
+      "difficulty": "smoke",
+      "setup": {
+        "recovery_capability_overrides": [
+          {
+            "name": "python_repl",
+            "attrs": {
+              "approval_required": false
+            }
+          }
+        ],
+        "recovery_sequence": [
+          {
+            "name": "python_repl",
+            "results": [
+              {
+                "status": "failed",
+                "error_type": "capability_unavailable",
+                "error_message": "scripted python unavailable"
+              },
+              {
+                "status": "success",
+                "payload": {
+                  "text": "4"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "tool_calls": [
+        {
+          "name": "python_repl",
+          "args": {
+            "code": "print(2 + 2)"
+          }
+        }
+      ],
+      "expect": {
+        "route_intent": "workspace_file_ops",
+        "tool": true,
+        "failure": false,
+        "answer_fragment": "The result is 4.",
+        "recovery_action": "escalate_to_hitl"
+      }
+    }
+  ]
+}

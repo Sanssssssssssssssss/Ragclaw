@@ -1,4 +1,5 @@
 .env
+.codex/memory/
 .venv/
 backend/.env
 backend/.venv/
@@ -18,10 +19,10 @@ backend/storage/knowledge/*
 !backend/storage/knowledge/.gitkeep
 backend/storage/benchmarks/*
 !backend/storage/benchmarks/.gitkeep
-frontend/.next/
-frontend/node_modules/
-frontend/.npm-cache/
-frontend/output/
+src/frontend/.next/
+src/frontend/node_modules/
+src/frontend/.npm-cache/
+src/frontend/output/
 .vscode/*
 !.vscode/settings.json
 !.vscode/tasks.json

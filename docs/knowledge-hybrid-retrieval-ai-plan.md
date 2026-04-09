@@ -258,7 +258,7 @@ backend/storage/knowledge/
 
 ### 10.1 重建索引按钮位置
 
-按钮放在现有顶部导航栏控制区，即 `frontend/src/components/layout/Navbar.tsx` 的右侧操作按钮组。
+按钮放在现有顶部导航栏控制区，即 `src/frontend/src/components/layout/Navbar.tsx` 的右侧操作按钮组。
 
 原因：
 
@@ -366,9 +366,9 @@ backend/knowledge_retrieval/
 
 ### 后端
 
-- `backend/app.py`
+- `src/backend/api/app.py`
   - 初始化知识索引器和 orchestrator
-- `backend/api/chat.py`
+- `src/backend/api/chat.py`
   - 支持输出知识检索阶段事件
 - `backend/api/files.py`
   - 保存 `knowledge/` 文件后允许后续手动重建；本方案不要求保存即自动重建
@@ -381,16 +381,16 @@ backend/knowledge_retrieval/
 
 ### 前端
 
-- `frontend/src/lib/api.ts`
+- `src/frontend/src/lib/api.ts`
   - 新增知识索引状态接口和重建接口
-- `frontend/src/lib/store.tsx`
+- `src/frontend/src/lib/store.tsx`
   - 新增索引状态管理
   - 新增 knowledge retrieval notice 状态
-- `frontend/src/components/layout/Navbar.tsx`
+- `src/frontend/src/components/layout/Navbar.tsx`
   - 新增“重建索引”按钮
-- `frontend/src/components/chat/RetrievalCard.tsx`
+- `src/frontend/src/components/chat/RetrievalCard.tsx`
   - 支持展示 skill 结果、fallback 提示、vector/bm25 结果、fused 结果
-- `frontend/src/components/chat/ChatMessage.tsx`
+- `src/frontend/src/components/chat/ChatMessage.tsx`
   - 将新的 retrieval card 信息挂到 assistant 消息上
 
 ## 14. 验收标准

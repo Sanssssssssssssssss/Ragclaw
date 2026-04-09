@@ -1,56 +1,56 @@
-[
-  {"id":"direct_001","bucket":"direct_answer","input":"不要调用任何工具，也不要读取知识库。请直接解释一下 RAG 和微调的区别。","expected_intent":"direct_answer","expected_allowed_tools":[]},
-  {"id":"direct_002","bucket":"direct_answer","input":"直接回答：什么是向量检索？","expected_intent":"direct_answer","expected_allowed_tools":[]},
+﻿[
+  {"id":"direct_001","bucket":"direct_answer","input":"涓嶈璋冪敤浠讳綍宸ュ叿锛屼篃涓嶈璇诲彇鐭ヨ瘑搴撱€傝鐩存帴瑙ｉ噴涓€涓?RAG 鍜屽井璋冪殑鍖哄埆銆?,"expected_intent":"direct_answer","expected_allowed_tools":[]},
+  {"id":"direct_002","bucket":"direct_answer","input":"鐩存帴鍥炵瓟锛氫粈涔堟槸鍚戦噺妫€绱紵","expected_intent":"direct_answer","expected_allowed_tools":[]},
   {"id":"direct_003","bucket":"direct_answer","input":"Answer directly: what is BM25?","expected_intent":"direct_answer","expected_allowed_tools":[]},
-  {"id":"direct_004","bucket":"direct_answer","input":"Translate this sentence into English without using tools: 知识库检索可以提升答案可靠性。","expected_intent":"direct_answer","expected_allowed_tools":[]},
-  {"id":"direct_005","bucket":"direct_answer","input":"不用工具，简短总结一下 hybrid retrieval 的含义。","expected_intent":"direct_answer","expected_allowed_tools":[]},
+  {"id":"direct_004","bucket":"direct_answer","input":"Translate this sentence into English without using tools: 鐭ヨ瘑搴撴绱㈠彲浠ユ彁鍗囩瓟妗堝彲闈犳€с€?,"expected_intent":"direct_answer","expected_allowed_tools":[]},
+  {"id":"direct_005","bucket":"direct_answer","input":"涓嶇敤宸ュ叿锛岀畝鐭€荤粨涓€涓?hybrid retrieval 鐨勫惈涔夈€?,"expected_intent":"direct_answer","expected_allowed_tools":[]},
   {"id":"direct_006","bucket":"direct_answer","input":"What is reciprocal rank fusion? Answer directly.","expected_intent":"direct_answer","expected_allowed_tools":[]},
 
-  {"id":"knowledge_001","bucket":"knowledge_qa","input":"根据知识库，找出讲 XSS 主要类型的文档，并给出来源路径。","expected_intent":"knowledge_qa","expected_allowed_tools":[]},
-  {"id":"knowledge_002","bucket":"knowledge_qa","input":"根据知识库，哪个 FAQ 文件包含退款规则和支付方式？请给出来源。","expected_intent":"knowledge_qa","expected_allowed_tools":[]},
-  {"id":"knowledge_003","bucket":"knowledge_qa","input":"根据知识库，说明三一重工和航天动力 2025 Q3 财报中有哪些可比较的指标，并给出来源。","expected_intent":"knowledge_qa","expected_allowed_tools":[]},
+  {"id":"knowledge_001","bucket":"knowledge_qa","input":"鏍规嵁鐭ヨ瘑搴擄紝鎵惧嚭璁?XSS 涓昏绫诲瀷鐨勬枃妗ｏ紝骞剁粰鍑烘潵婧愯矾寰勩€?,"expected_intent":"knowledge_qa","expected_allowed_tools":[]},
+  {"id":"knowledge_002","bucket":"knowledge_qa","input":"鏍规嵁鐭ヨ瘑搴擄紝鍝釜 FAQ 鏂囦欢鍖呭惈閫€娆捐鍒欏拰鏀粯鏂瑰紡锛熻缁欏嚭鏉ユ簮銆?,"expected_intent":"knowledge_qa","expected_allowed_tools":[]},
+  {"id":"knowledge_003","bucket":"knowledge_qa","input":"鏍规嵁鐭ヨ瘑搴擄紝璇存槑涓変竴閲嶅伐鍜岃埅澶╁姩鍔?2025 Q3 璐㈡姤涓湁鍝簺鍙瘮杈冪殑鎸囨爣锛屽苟缁欏嚭鏉ユ簮銆?,"expected_intent":"knowledge_qa","expected_allowed_tools":[]},
   {"id":"knowledge_004","bucket":"knowledge_qa","input":"Which file in the knowledge base explains CSRF with a blog deletion example? Return the path.","expected_intent":"knowledge_qa","expected_allowed_tools":[]},
   {"id":"knowledge_005","bucket":"knowledge_qa","input":"From the knowledge base, identify the report that mentions AI application topics in healthcare and cite the source path.","expected_intent":"knowledge_qa","expected_allowed_tools":[]},
-  {"id":"knowledge_006","bucket":"knowledge_qa","input":"知识库里哪份文档解释了‘利用已登录状态发起请求’这种攻击？给我来源路径。","expected_intent":"knowledge_qa","expected_allowed_tools":[]},
+  {"id":"knowledge_006","bucket":"knowledge_qa","input":"鐭ヨ瘑搴撻噷鍝唤鏂囨。瑙ｉ噴浜嗏€樺埄鐢ㄥ凡鐧诲綍鐘舵€佸彂璧疯姹傗€欒繖绉嶆敾鍑伙紵缁欐垜鏉ユ簮璺緞銆?,"expected_intent":"knowledge_qa","expected_allowed_tools":[]},
 
-  {"id":"workspace_001","bucket":"workspace_file_ops","input":"读取 backend/config.py，然后告诉我当前 llm provider 配置成什么。","expected_intent":"workspace_file_ops","expected_allowed_tools":["read_file"]},
+  {"id":"workspace_001","bucket":"workspace_file_ops","input":"璇诲彇 src/backend/runtime/config.py锛岀劧鍚庡憡璇夋垜褰撳墠 llm provider 閰嶇疆鎴愪粈涔堛€?,"expected_intent":"workspace_file_ops","expected_allowed_tools":["read_file"]},
   {"id":"workspace_002","bucket":"workspace_file_ops","input":"Open workspace/USER.md and summarize it in one sentence.","expected_intent":"workspace_file_ops","expected_allowed_tools":["read_file"]},
-  {"id":"workspace_003","bucket":"workspace_file_ops","input":"列出 knowledge/Financial Report Data 目录下的所有文件名。","expected_intent":"workspace_file_ops","expected_allowed_tools":["terminal"]},
+  {"id":"workspace_003","bucket":"workspace_file_ops","input":"鍒楀嚭 knowledge/Financial Report Data 鐩綍涓嬬殑鎵€鏈夋枃浠跺悕銆?,"expected_intent":"workspace_file_ops","expected_allowed_tools":["terminal"]},
   {"id":"workspace_004","bucket":"workspace_file_ops","input":"Show me the files under backend/tests and count how many there are.","expected_intent":"workspace_file_ops","expected_allowed_tools":["terminal"]},
-  {"id":"workspace_005","bucket":"workspace_file_ops","input":"读取 memory/MEMORY.md，告诉我最近记录的主题。","expected_intent":"workspace_file_ops","expected_allowed_tools":["read_file"]},
+  {"id":"workspace_005","bucket":"workspace_file_ops","input":"璇诲彇 memory/MEMORY.md锛屽憡璇夋垜鏈€杩戣褰曠殑涓婚銆?,"expected_intent":"workspace_file_ops","expected_allowed_tools":["read_file"]},
   {"id":"workspace_006","bucket":"workspace_file_ops","input":"List the files under knowledge/E-commerce Data.","expected_intent":"workspace_file_ops","expected_allowed_tools":["terminal"]},
 
-  {"id":"compute_001","bucket":"computation_or_transformation","input":"读取 knowledge/E-commerce Data/faq.json，统计总记录数，并给出前 3 条 question。","expected_intent":"computation_or_transformation","expected_allowed_tools":["python_repl"]},
+  {"id":"compute_001","bucket":"computation_or_transformation","input":"璇诲彇 knowledge/E-commerce Data/faq.json锛岀粺璁℃€昏褰曟暟锛屽苟缁欏嚭鍓?3 鏉?question銆?,"expected_intent":"computation_or_transformation","expected_allowed_tools":["python_repl"]},
   {"id":"compute_002","bucket":"computation_or_transformation","input":"Count how many rows are in knowledge/E-commerce Data/sales_orders.xlsx and summarize the columns.","expected_intent":"computation_or_transformation","expected_allowed_tools":["python_repl"]},
-  {"id":"compute_003","bucket":"computation_or_transformation","input":"解析 backend/storage/benchmarks/latest.json，统计 skipped_cases 数量。","expected_intent":"computation_or_transformation","expected_allowed_tools":["python_repl"]},
-  {"id":"compute_004","bucket":"computation_or_transformation","input":"计算 knowledge/E-commerce Data/faq.json 里 question 字段去重后有多少种。","expected_intent":"computation_or_transformation","expected_allowed_tools":["python_repl"]},
+  {"id":"compute_003","bucket":"computation_or_transformation","input":"瑙ｆ瀽 backend/storage/benchmarks/rag/general/latest.json锛岀粺璁?skipped_cases 鏁伴噺銆?,"expected_intent":"computation_or_transformation","expected_allowed_tools":["python_repl"]},
+  {"id":"compute_004","bucket":"computation_or_transformation","input":"璁＄畻 knowledge/E-commerce Data/faq.json 閲?question 瀛楁鍘婚噸鍚庢湁澶氬皯绉嶃€?,"expected_intent":"computation_or_transformation","expected_allowed_tools":["python_repl"]},
   {"id":"compute_005","bucket":"computation_or_transformation","input":"Parse backend/config.json and tell me whether rag_mode is enabled.","expected_intent":"computation_or_transformation","expected_allowed_tools":["python_repl"]},
-  {"id":"compute_006","bucket":"computation_or_transformation","input":"转换 knowledge/E-commerce Data/faq.json 的前 5 条记录为紧凑表格。","expected_intent":"computation_or_transformation","expected_allowed_tools":["python_repl"]},
+  {"id":"compute_006","bucket":"computation_or_transformation","input":"杞崲 knowledge/E-commerce Data/faq.json 鐨勫墠 5 鏉¤褰曚负绱у噾琛ㄦ牸銆?,"expected_intent":"computation_or_transformation","expected_allowed_tools":["python_repl"]},
 
   {"id":"web_001","bucket":"web_lookup","input":"Look up the latest OpenAI pricing on the web and give me the link.","expected_intent":"web_lookup","expected_allowed_tools":["fetch_url"]},
-  {"id":"web_002","bucket":"web_lookup","input":"请联网查一下 Moonshot 官方文档首页地址。","expected_intent":"web_lookup","expected_allowed_tools":["fetch_url"]},
+  {"id":"web_002","bucket":"web_lookup","input":"璇疯仈缃戞煡涓€涓?Moonshot 瀹樻柟鏂囨。棣栭〉鍦板潃銆?,"expected_intent":"web_lookup","expected_allowed_tools":["fetch_url"]},
   {"id":"web_003","bucket":"web_lookup","input":"Fetch the webpage at https://platform.moonshot.ai and summarize the title.","expected_intent":"web_lookup","expected_allowed_tools":["fetch_url"]},
   {"id":"web_004","bucket":"web_lookup","input":"Search online for the latest Python release notes homepage.","expected_intent":"web_lookup","expected_allowed_tools":["fetch_url"]},
-  {"id":"web_005","bucket":"web_lookup","input":"抓取这个网址的内容并简单说明：https://example.com","expected_intent":"web_lookup","expected_allowed_tools":["fetch_url"]},
+  {"id":"web_005","bucket":"web_lookup","input":"鎶撳彇杩欎釜缃戝潃鐨勫唴瀹瑰苟绠€鍗曡鏄庯細https://example.com","expected_intent":"web_lookup","expected_allowed_tools":["fetch_url"]},
   {"id":"web_006","bucket":"web_lookup","input":"Can you visit the website and tell me whether the page mentions embeddings?","expected_intent":"web_lookup","expected_allowed_tools":["fetch_url"]},
 
-  {"id":"constraint_001","bucket":"hard_constraint_override","input":"不要调用任何工具，也不要读取知识库。请直接回答什么是 rerank。","expected_intent":"direct_answer","expected_allowed_tools":[]},
-  {"id":"constraint_002","bucket":"hard_constraint_override","input":"请只使用 terminal 工具，不要用 python_repl、read_file 或知识库检索。列出 knowledge/Financial Report Data 下有多少文件。","expected_intent":"workspace_file_ops","expected_allowed_tools":["terminal"]},
-  {"id":"constraint_003","bucket":"hard_constraint_override","input":"只允许使用 python_repl，不要使用 read_file、terminal 或知识库。统计 faq.json 的记录数。","expected_intent":"computation_or_transformation","expected_allowed_tools":["python_repl"]},
+  {"id":"constraint_001","bucket":"hard_constraint_override","input":"涓嶈璋冪敤浠讳綍宸ュ叿锛屼篃涓嶈璇诲彇鐭ヨ瘑搴撱€傝鐩存帴鍥炵瓟浠€涔堟槸 rerank銆?,"expected_intent":"direct_answer","expected_allowed_tools":[]},
+  {"id":"constraint_002","bucket":"hard_constraint_override","input":"璇峰彧浣跨敤 terminal 宸ュ叿锛屼笉瑕佺敤 python_repl銆乺ead_file 鎴栫煡璇嗗簱妫€绱€傚垪鍑?knowledge/Financial Report Data 涓嬫湁澶氬皯鏂囦欢銆?,"expected_intent":"workspace_file_ops","expected_allowed_tools":["terminal"]},
+  {"id":"constraint_003","bucket":"hard_constraint_override","input":"鍙厑璁镐娇鐢?python_repl锛屼笉瑕佷娇鐢?read_file銆乼erminal 鎴栫煡璇嗗簱銆傜粺璁?faq.json 鐨勮褰曟暟銆?,"expected_intent":"computation_or_transformation","expected_allowed_tools":["python_repl"]},
   {"id":"constraint_004","bucket":"hard_constraint_override","input":"Only use fetch_url. Do not use any other tools. Find the official OpenAI API docs homepage.","expected_intent":"web_lookup","expected_allowed_tools":["fetch_url"]},
-  {"id":"constraint_005","bucket":"hard_constraint_override","input":"不要读取知识库。读取 backend/config.py 并告诉我有没有 router_model。","expected_intent":"workspace_file_ops","expected_allowed_tools":["read_file"]},
+  {"id":"constraint_005","bucket":"hard_constraint_override","input":"涓嶈璇诲彇鐭ヨ瘑搴撱€傝鍙?src/backend/runtime/config.py 骞跺憡璇夋垜鏈夋病鏈?router_model銆?,"expected_intent":"workspace_file_ops","expected_allowed_tools":["read_file"]},
   {"id":"constraint_006","bucket":"hard_constraint_override","input":"Directly answer this without tools or retrieval: why can grounding reduce hallucination?","expected_intent":"direct_answer","expected_allowed_tools":[]},
 
-  {"id":"fuzzy_001","bucket":"fuzzy_document_seeking","input":"那个讲退款规则的 FAQ 文件是哪一个？给我路径。","expected_intent":"knowledge_qa","expected_allowed_tools":[]},
-  {"id":"fuzzy_002","bucket":"fuzzy_document_seeking","input":"哪份文档更像是在讲利用登录态发起恶意请求，而不是脚本注入？请给出来源。","expected_intent":"knowledge_qa","expected_allowed_tools":[]},
+  {"id":"fuzzy_001","bucket":"fuzzy_document_seeking","input":"閭ｄ釜璁查€€娆捐鍒欑殑 FAQ 鏂囦欢鏄摢涓€涓紵缁欐垜璺緞銆?,"expected_intent":"knowledge_qa","expected_allowed_tools":[]},
+  {"id":"fuzzy_002","bucket":"fuzzy_document_seeking","input":"鍝唤鏂囨。鏇村儚鏄湪璁插埄鐢ㄧ櫥褰曟€佸彂璧锋伓鎰忚姹傦紝鑰屼笉鏄剼鏈敞鍏ワ紵璇风粰鍑烘潵婧愩€?,"expected_intent":"knowledge_qa","expected_allowed_tools":[]},
   {"id":"fuzzy_003","bucket":"fuzzy_document_seeking","input":"Which report is the one about comparing Sany and Aerospace Q3 performance? Return the path.","expected_intent":"knowledge_qa","expected_allowed_tools":[]},
-  {"id":"fuzzy_004","bucket":"fuzzy_document_seeking","input":"那个不是库存也不是员工，而是订单明细的数据文件是哪一个？请给出来源。","expected_intent":"knowledge_qa","expected_allowed_tools":[]},
-  {"id":"fuzzy_005","bucket":"fuzzy_document_seeking","input":"我想找那份提到 AI 医疗应用的专题报告，给我来源路径。","expected_intent":"knowledge_qa","expected_allowed_tools":[]},
+  {"id":"fuzzy_004","bucket":"fuzzy_document_seeking","input":"閭ｄ釜涓嶆槸搴撳瓨涔熶笉鏄憳宸ワ紝鑰屾槸璁㈠崟鏄庣粏鐨勬暟鎹枃浠舵槸鍝竴涓紵璇风粰鍑烘潵婧愩€?,"expected_intent":"knowledge_qa","expected_allowed_tools":[]},
+  {"id":"fuzzy_005","bucket":"fuzzy_document_seeking","input":"鎴戞兂鎵鹃偅浠芥彁鍒?AI 鍖荤枟搴旂敤鐨勪笓棰樻姤鍛婏紝缁欐垜鏉ユ簮璺緞銆?,"expected_intent":"knowledge_qa","expected_allowed_tools":[]},
   {"id":"fuzzy_006","bucket":"fuzzy_document_seeking","input":"Which knowledge-base file is more like an ecommerce FAQ than a schema description? Return the source path.","expected_intent":"knowledge_qa","expected_allowed_tools":[]},
   {
     "id":"fuzzy_007",
     "bucket":"fuzzy_document_seeking",
-    "input":"我想找那个提到 AI 医疗应用的材料。",
+    "input":"鎴戞兂鎵鹃偅涓彁鍒?AI 鍖荤枟搴旂敤鐨勬潗鏂欍€?,
     "expected_intent":"knowledge_qa",
     "expected_route":"knowledge_qa",
     "expected_allowed_tools":[],
@@ -60,7 +60,7 @@
   {
     "id":"workspace_007",
     "bucket":"workspace_file_ops",
-    "input":"帮我看下 repo 里那个用户画像文件写了什么。",
+    "input":"甯垜鐪嬩笅 repo 閲岄偅涓敤鎴风敾鍍忔枃浠跺啓浜嗕粈涔堛€?,
     "history":[{"role":"assistant","content":"The repository has a file at workspace/USER.md that stores the user profile."}],
     "expected_intent":"workspace_file_ops",
     "expected_route":"workspace_file_ops",
@@ -71,7 +71,7 @@
   {
     "id":"compute_007",
     "bucket":"computation_or_transformation",
-    "input":"帮我数一下 faq 里一共有多少条问答。",
+    "input":"甯垜鏁颁竴涓?faq 閲屼竴鍏辨湁澶氬皯鏉￠棶绛斻€?,
     "history":[{"role":"assistant","content":"The workspace contains knowledge/E-commerce Data/faq.json with FAQ records."}],
     "expected_intent":"computation_or_transformation",
     "expected_route":"computation_or_transformation",
@@ -82,7 +82,7 @@
   {
     "id":"ambiguous_knowledge_001",
     "bucket":"fuzzy_document_seeking",
-    "input":"之前提过那个医疗 AI 的专题，给我定位一下来源。",
+    "input":"涔嬪墠鎻愯繃閭ｄ釜鍖荤枟 AI 鐨勪笓棰橈紝缁欐垜瀹氫綅涓€涓嬫潵婧愩€?,
     "history":[{"role":"assistant","content":"We discussed an AI application report in the knowledge base earlier."}],
     "expected_route":"knowledge_qa",
     "expected_allowed_tools":[],
@@ -92,8 +92,8 @@
   {
     "id":"ambiguous_workspace_001",
     "bucket":"workspace_file_ops",
-    "input":"顺手帮我看看那个 backend 里的配置文件，主要配了啥。",
-    "history":[{"role":"assistant","content":"The router-related config lives in backend/config.py."}],
+    "input":"椤烘墜甯垜鐪嬬湅閭ｄ釜 backend 閲岀殑閰嶇疆鏂囦欢锛屼富瑕侀厤浜嗗暐銆?,
+    "history":[{"role":"assistant","content":"The router-related config lives in src/backend/runtime/config.py."}],
     "expected_route":"workspace_file_ops",
     "expected_allowed_tools":["read_file"],
     "ambiguous":true,
@@ -102,7 +102,7 @@
   {
     "id":"ambiguous_compute_001",
     "bucket":"computation_or_transformation",
-    "input":"之前那个 faq，帮我大概数一下有多少条就行。",
+    "input":"涔嬪墠閭ｄ釜 faq锛屽府鎴戝ぇ姒傛暟涓€涓嬫湁澶氬皯鏉″氨琛屻€?,
     "history":[{"role":"assistant","content":"The FAQ data is stored in knowledge/E-commerce Data/faq.json."}],
     "expected_route":"computation_or_transformation",
     "expected_allowed_tools":["python_repl"],
@@ -112,7 +112,7 @@
   {
     "id":"ambiguous_mixed_001",
     "bucket":"fuzzy_document_seeking",
-    "input":"先帮我定位一下哪份财报在讲三一和航天，再把来源给我。",
+    "input":"鍏堝府鎴戝畾浣嶄竴涓嬪摢浠借储鎶ュ湪璁蹭笁涓€鍜岃埅澶╋紝鍐嶆妸鏉ユ簮缁欐垜銆?,
     "expected_route":"knowledge_qa",
     "expected_allowed_tools":[],
     "ambiguous":true,
@@ -121,7 +121,7 @@
   {
     "id":"ambiguous_mixed_002",
     "bucket":"workspace_file_ops",
-    "input":"打开那个用户画像文件，顺便一句话说下它主要写啥。",
+    "input":"鎵撳紑閭ｄ釜鐢ㄦ埛鐢诲儚鏂囦欢锛岄『渚夸竴鍙ヨ瘽璇翠笅瀹冧富瑕佸啓鍟ャ€?,
     "history":[{"role":"assistant","content":"The user profile file is workspace/USER.md."}],
     "expected_route":"workspace_file_ops",
     "expected_allowed_tools":["read_file"],
@@ -131,7 +131,7 @@
   {
     "id":"ambiguous_fuzzy_001",
     "bucket":"fuzzy_document_seeking",
-    "input":"类似退款说明那个材料，是哪一个来着？",
+    "input":"绫讳技閫€娆捐鏄庨偅涓潗鏂欙紝鏄摢涓€涓潵鐫€锛?,
     "history":[{"role":"assistant","content":"There is an ecommerce FAQ file in the knowledge base."}],
     "expected_route":"knowledge_qa",
     "expected_allowed_tools":[],
@@ -142,7 +142,7 @@
   {
     "id":"workspace_008",
     "bucket":"workspace_file_ops",
-    "input":"Read backend/config.py and tell me what ROUTER_MODEL is set to.",
+    "input":"Read src/backend/runtime/config.py and tell me what ROUTER_MODEL is set to.",
     "expected_route":"workspace_file_ops",
     "expected_allowed_tools":["read_file"],
     "expected_subtype":"read_existing_file"
@@ -215,3 +215,4 @@
     "case_style":"mixed_intent"
   }
 ]
+
