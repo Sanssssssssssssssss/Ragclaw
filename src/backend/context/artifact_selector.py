@@ -37,7 +37,7 @@ class ArtifactSelector:
     def select_retrieval_evidence(self, state: dict[str, Any], *, path_kind: ContextPathKind) -> list[str]:
         items: list[str] = []
         memory_retrieval = list(state.get("memory_retrieval", []) or [])
-        if memory_retrieval and path_kind in {"direct_answer", "capability", "resumed_hitl"}:
+        if memory_retrieval and path_kind in {"direct_answer", "capability_path", "resumed_hitl", "recovery_path"}:
             for item in memory_retrieval[:2]:
                 if not isinstance(item, dict):
                     continue
@@ -46,7 +46,7 @@ class ArtifactSelector:
                 items.append(f"{source}\n{snippet}".strip())
 
         knowledge_retrieval = state.get("knowledge_retrieval")
-        if knowledge_retrieval is not None and path_kind in {"knowledge_qa", "resumed_hitl"}:
+        if knowledge_retrieval is not None and path_kind in {"knowledge_qa", "resumed_hitl", "recovery_path"}:
             for evidence in list(getattr(knowledge_retrieval, "evidences", []) or [])[:4]:
                 source_path = str(getattr(evidence, "source_path", "") or "").strip()
                 locator = str(getattr(evidence, "locator", "") or "").strip()

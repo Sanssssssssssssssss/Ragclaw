@@ -21,6 +21,7 @@ import {
   getKnowledgeIndexStatus,
   getPendingHitl,
   getRagMode,
+  getSessionContext,
   getSessionHistory,
   getSessionTokens,
   getSkillRetrieval,
@@ -48,6 +49,7 @@ import {
   type McpCapabilitySummary,
   type MessageUsage,
   type PendingHitlInterrupt,
+  type SessionContextPayload,
   type RetrievalStep,
   type RunMeta,
   type RunStatus,
@@ -86,6 +88,7 @@ type ChatStore = {
   pendingHitl: PendingHitlInterrupt | null;
   hitlAudit: HitlAuditEntry[];
   mcpCapabilities: McpCapabilitySummary[];
+  sessionContext: SessionContextPayload | null;
   isInitializing: boolean;
   isSessionLoading: boolean;
   isStreaming: boolean;
@@ -437,6 +440,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [pendingHitl, setPendingHitl] = useState<PendingHitlInterrupt | null>(null);
   const [hitlAudit, setHitlAudit] = useState<HitlAuditEntry[]>([]);
   const [mcpCapabilities, setMcpCapabilities] = useState<McpCapabilitySummary[]>([]);
+  const [sessionContext, setSessionContext] = useState<SessionContextPayload | null>(null);
   const [isInitializing, setIsInitializing] = useState(true);
   const [isSessionLoading, setIsSessionLoading] = useState(false);
   const [isStreaming, setIsStreaming] = useState(false);
@@ -493,31 +497,34 @@ export function AppProvider({ children }: { children: ReactNode }) {
     async (sessionId?: string | null) => {
       const resolvedSessionId = sessionId ?? currentSessionId;
       setAssetsLoading(true);
-      try {
-        if (!resolvedSessionId) {
-          setCheckpoints([]);
-          setPendingHitl(null);
-          setHitlAudit([]);
-          const mcpPayload = await listMcpCapabilities();
-          setMcpCapabilities(mcpPayload.capabilities);
-          return;
+        try {
+          if (!resolvedSessionId) {
+            setCheckpoints([]);
+            setPendingHitl(null);
+            setHitlAudit([]);
+            setSessionContext(null);
+            const mcpPayload = await listMcpCapabilities();
+            setMcpCapabilities(mcpPayload.capabilities);
+            return;
+          }
+          const [checkpointPayload, pendingPayload, mcpPayload, contextPayload] = await Promise.all([
+            listSessionCheckpoints(resolvedSessionId),
+            getPendingHitl(resolvedSessionId),
+            listMcpCapabilities(),
+            getSessionContext(resolvedSessionId)
+          ]);
+          setCheckpoints(checkpointPayload.checkpoints);
+          setPendingHitl(normalizePendingHitl(pendingPayload.pending_interrupt));
+          setHitlAudit(
+            (Array.isArray(pendingPayload.requests) ? pendingPayload.requests : [])
+              .map((item) => normalizeHitlAuditEntry(item))
+              .filter((item): item is HitlAuditEntry => item !== null)
+          );
+          setMcpCapabilities(Array.isArray(mcpPayload.capabilities) ? mcpPayload.capabilities : []);
+          setSessionContext(contextPayload);
+        } finally {
+          setAssetsLoading(false);
         }
-        const [checkpointPayload, pendingPayload, mcpPayload] = await Promise.all([
-          listSessionCheckpoints(resolvedSessionId),
-          getPendingHitl(resolvedSessionId),
-          listMcpCapabilities()
-        ]);
-        setCheckpoints(checkpointPayload.checkpoints);
-        setPendingHitl(normalizePendingHitl(pendingPayload.pending_interrupt));
-        setHitlAudit(
-          (Array.isArray(pendingPayload.requests) ? pendingPayload.requests : [])
-            .map((item) => normalizeHitlAuditEntry(item))
-            .filter((item): item is HitlAuditEntry => item !== null)
-        );
-        setMcpCapabilities(Array.isArray(mcpPayload.capabilities) ? mcpPayload.capabilities : []);
-      } finally {
-        setAssetsLoading(false);
-      }
     },
     [currentSessionId]
   );
@@ -525,26 +532,28 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const loadSessionEssentials = useCallback(
     async (sessionId: string) => {
       const loadVersion = ++sessionLoadVersionRef.current;
-      const [history, tokens, checkpointPayload, pendingPayload, mcpPayload] = await Promise.all([
-        getSessionHistory(sessionId),
-        getSessionTokens(sessionId),
-        listSessionCheckpoints(sessionId),
-        getPendingHitl(sessionId),
-        listMcpCapabilities()
-      ]);
-      if (loadVersion !== sessionLoadVersionRef.current) return;
-      setMessages(toUiMessages(history.messages));
-      setStreamingMessages([]);
-      setTokenStats(tokens);
+        const [history, tokens, checkpointPayload, pendingPayload, mcpPayload, contextPayload] = await Promise.all([
+          getSessionHistory(sessionId),
+          getSessionTokens(sessionId),
+          listSessionCheckpoints(sessionId),
+          getPendingHitl(sessionId),
+          listMcpCapabilities(),
+          getSessionContext(sessionId)
+        ]);
+        if (loadVersion !== sessionLoadVersionRef.current) return;
+        setMessages(toUiMessages(history.messages));
+        setStreamingMessages([]);
+        setTokenStats(tokens);
       setCheckpoints(checkpointPayload.checkpoints);
       setPendingHitl(normalizePendingHitl(pendingPayload.pending_interrupt));
-      setHitlAudit(
-        (Array.isArray(pendingPayload.requests) ? pendingPayload.requests : [])
-          .map((item) => normalizeHitlAuditEntry(item))
-          .filter((item): item is HitlAuditEntry => item !== null)
-      );
-      setMcpCapabilities(Array.isArray(mcpPayload.capabilities) ? mcpPayload.capabilities : []);
-    },
+        setHitlAudit(
+          (Array.isArray(pendingPayload.requests) ? pendingPayload.requests : [])
+            .map((item) => normalizeHitlAuditEntry(item))
+            .filter((item): item is HitlAuditEntry => item !== null)
+        );
+        setMcpCapabilities(Array.isArray(mcpPayload.capabilities) ? mcpPayload.capabilities : []);
+        setSessionContext(contextPayload);
+      },
     [setStreamingMessages]
   );
 
@@ -609,6 +618,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         setStreamingMessages([]);
         setCheckpoints([]);
         setPendingHitl(null);
+        setSessionContext(null);
         setTokenStats(null);
       }
     } catch (error) {
@@ -620,6 +630,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       setCheckpoints([]);
       setPendingHitl(null);
       setHitlAudit([]);
+      setSessionContext(null);
       setMcpCapabilities([]);
       setTokenStats(null);
       setKnowledgeIndexStatus(null);
@@ -683,6 +694,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     setStreamingMessages([]);
     setCheckpoints([]);
     setPendingHitl(null);
+    setSessionContext(null);
     setTokenStats(null);
     return created.id;
   }, [currentSessionId, setStreamingMessages]);
@@ -692,12 +704,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
       const created = await createSession();
       setCurrentSessionId(created.id);
       setSessions((previous) => [created, ...previous]);
-      setMessages([]);
-      setStreamingMessages([]);
-      setCheckpoints([]);
-      setPendingHitl(null);
-      setTokenStats(null);
-      setConnectionError(null);
+        setMessages([]);
+        setStreamingMessages([]);
+        setCheckpoints([]);
+        setPendingHitl(null);
+        setSessionContext(null);
+        setTokenStats(null);
+        setConnectionError(null);
       void refreshSessions();
     } catch (error) {
       setConnectionError(toErrorMessage(error));
@@ -708,12 +721,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
     async (sessionId: string) => {
       if (!sessionId || isStreaming) return;
       setCurrentSessionId(sessionId);
-      setMessages([]);
-      setStreamingMessages([]);
-      setCheckpoints([]);
-      setPendingHitl(null);
-      setTokenStats(null);
-      setIsSessionLoading(true);
+        setMessages([]);
+        setStreamingMessages([]);
+        setCheckpoints([]);
+        setPendingHitl(null);
+        setSessionContext(null);
+        setTokenStats(null);
+        setIsSessionLoading(true);
       setConnectionError(null);
       try {
         await loadSessionEssentials(sessionId);
@@ -749,18 +763,20 @@ export function AppProvider({ children }: { children: ReactNode }) {
         const nextSessionId = nextSessions[0]?.id ?? null;
         setCurrentSessionId(nextSessionId);
         if (!nextSessionId) {
-          setMessages([]);
-          setStreamingMessages([]);
-          setCheckpoints([]);
-          setPendingHitl(null);
-          setTokenStats(null);
-          return;
+            setMessages([]);
+            setStreamingMessages([]);
+            setCheckpoints([]);
+            setPendingHitl(null);
+            setSessionContext(null);
+            setTokenStats(null);
+            return;
         }
         setIsSessionLoading(true);
         setMessages([]);
         setStreamingMessages([]);
         setCheckpoints([]);
         setPendingHitl(null);
+        setSessionContext(null);
         setTokenStats(null);
         try {
           await loadSessionEssentials(nextSessionId);
@@ -1227,6 +1243,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       pendingHitl,
       hitlAudit,
       mcpCapabilities,
+      sessionContext,
       isInitializing,
       isSessionLoading,
       isStreaming,
@@ -1240,7 +1257,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       refreshCheckpoints: async () => refreshCheckpoints(),
       refreshAssets: async () => refreshCheckpoints()
     }),
-    [assetsLoading, checkpoints, connectionError, hitlAudit, isInitializing, isSessionLoading, isStreaming, mcpCapabilities, messages, pendingHitl, refreshCheckpoints, retryInitialization, resumeCheckpoint, sendMessage, streamingMessagesState, submitHitlDecision, tokenStats]
+    [assetsLoading, checkpoints, connectionError, hitlAudit, isInitializing, isSessionLoading, isStreaming, mcpCapabilities, messages, pendingHitl, refreshCheckpoints, retryInitialization, resumeCheckpoint, sendMessage, sessionContext, streamingMessagesState, submitHitlDecision, tokenStats]
   );
 
   const runtimeValue = useMemo<RuntimeStore>(

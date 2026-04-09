@@ -62,13 +62,14 @@ class ContextAssemblerTests(unittest.TestCase):
         }
 
     def test_capability_context_assembly_includes_budgeted_sections(self) -> None:
-        assembly = self.assembler.assemble(path_kind="capability", state=self.base_state)
-        self.assertEqual(assembly.path_kind, "capability")
+        assembly = self.assembler.assemble(path_kind="capability_path", state=self.base_state)
+        self.assertEqual(assembly.path_kind, "capability_path")
         self.assertTrue(assembly.history_messages)
         self.assertIn("[Working memory]", assembly.working_memory_block)
-        self.assertIn("[Episodic summary]", assembly.summary_block)
+        self.assertIn("[Episodic summary]", assembly.episodic_block)
         self.assertIn("[Capability outputs]", assembly.artifacts_block)
         self.assertIn("[Retrieval evidence]", assembly.retrieval_block)
+        self.assertIn("[Context policy]", assembly.envelope.system_block)
         self.assertIn("raw trace events", assembly.excluded_from_prompt)
 
     def test_resumed_hitl_path_prefers_resume_context(self) -> None:

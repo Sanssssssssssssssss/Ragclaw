@@ -90,12 +90,44 @@ def build_episodic_summary(
     if str(getattr(knowledge_retrieval, "status", "") or "").strip().lower() == "partial":
         open_loops.append("knowledge answer remains partial")
 
+    previous_version = 0
+    if isinstance(previous, dict):
+        try:
+            previous_version = int(previous.get("summary_version", 0) or 0)
+        except (TypeError, ValueError):
+            previous_version = 0
+
+    thread_id = str(
+        state.get("thread_id", "")
+        or state.get("session_id", "")
+        or state.get("run_id", "")
+        or (previous.get("thread_id", "") if isinstance(previous, dict) else "")
+    )
+
+    next_key_facts = _merge(previous, "key_facts", key_facts)
+    next_completed_subtasks = _merge(previous, "completed_subtasks", completed_subtasks)
+    next_rejected_paths = _merge(previous, "rejected_paths", rejected_paths)
+    next_important_decisions = _merge(previous, "important_decisions", important_decisions)
+    next_important_artifacts = _merge(previous, "important_artifacts", important_artifacts)
+    next_open_loops = _merge(previous, "open_loops", open_loops)
+
+    summary_changed = (
+        next_key_facts != tuple(previous.get("key_facts", []) if isinstance(previous, dict) else ())
+        or next_completed_subtasks != tuple(previous.get("completed_subtasks", []) if isinstance(previous, dict) else ())
+        or next_rejected_paths != tuple(previous.get("rejected_paths", []) if isinstance(previous, dict) else ())
+        or next_important_decisions != tuple(previous.get("important_decisions", []) if isinstance(previous, dict) else ())
+        or next_important_artifacts != tuple(previous.get("important_artifacts", []) if isinstance(previous, dict) else ())
+        or next_open_loops != tuple(previous.get("open_loops", []) if isinstance(previous, dict) else ())
+    )
+
     return EpisodicSummary(
-        key_facts=_merge(previous, "key_facts", key_facts),
-        completed_subtasks=_merge(previous, "completed_subtasks", completed_subtasks),
-        rejected_paths=_merge(previous, "rejected_paths", rejected_paths),
-        important_decisions=_merge(previous, "important_decisions", important_decisions),
-        important_artifacts=_merge(previous, "important_artifacts", important_artifacts),
-        open_loops=_merge(previous, "open_loops", open_loops),
+        thread_id=thread_id,
+        summary_version=max(1, previous_version + (1 if summary_changed or previous_version == 0 else 0)),
+        key_facts=next_key_facts,
+        completed_subtasks=next_completed_subtasks,
+        rejected_paths=next_rejected_paths,
+        important_decisions=next_important_decisions,
+        important_artifacts=next_important_artifacts,
+        open_loops=next_open_loops,
         updated_at=str(updated_at or state.get("checkpoint_meta", {}).get("updated_at", "") or ""),
     )

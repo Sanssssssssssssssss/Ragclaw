@@ -85,8 +85,8 @@ class HarnessLangGraphOrchestrator:
         self._execution = execution_support
         self._knowledge_grader = knowledge_grader or KnowledgeAnswerGrader(agent_manager)
         self._graph = compile_harness_orchestration_graph(self)
-        self._context_assembler = ContextAssembler()
-        self._context_writer = ContextWriter()
+        self._context_assembler = ContextAssembler(base_dir=self._agent.base_dir)
+        self._context_writer = ContextWriter(base_dir=self._agent.base_dir)
         self._bindings: _ExecutionBindings | None = None
         self._resume_checkpoint_id = str(resume_checkpoint_id or "")
         self._resume_thread_id = str(resume_thread_id or "")
@@ -169,7 +169,7 @@ class HarnessLangGraphOrchestrator:
 
     async def route_node(self, state: GraphState) -> dict[str, Any]:
         bindings = self._bindings_or_raise()
-        route_context = self._context_assembler.assemble(path_kind="direct_answer", state=state)
+        route_context = self._context_assembler.assemble(path_kind="direct_answer", state=state, call_site="route")
         strategy, decision = await self._agent.resolve_routing(state["user_message"], list(route_context.history_messages))
         await bindings.runtime.emit(
             bindings.handle,
@@ -196,7 +196,11 @@ class HarnessLangGraphOrchestrator:
         decision = state.get("route_decision")
         if strategy is None or decision is None:
             return {}
-        skill_context = self._context_assembler.assemble(path_kind=self._path_kind_from_decision(decision), state=state)
+        skill_context = self._context_assembler.assemble(
+            path_kind=self._path_kind_from_decision(decision),
+            state=state,
+            call_site="skill",
+        )
         skill = self._agent.decide_skill(state["user_message"], list(skill_context.history_messages), strategy, decision)
         if skill.use_skill:
             await self._activate_skill_capability(message=state["user_message"], routing_decision=decision, skill_decision=skill)
@@ -244,7 +248,7 @@ class HarnessLangGraphOrchestrator:
 
     async def direct_answer_node(self, state: GraphState) -> dict[str, Any]:
         strategy = state.get("execution_strategy")
-        assembly = self._context_assembler.assemble(path_kind="direct_answer", state=state)
+        assembly = self._context_assembler.assemble(path_kind="direct_answer", state=state, call_site="direct_answer")
         messages = list(assembly.history_messages)
         messages.append({"role": "user", "content": state["user_message"]})
         extra_instructions = list(assembly.extra_instructions)
@@ -285,7 +289,7 @@ class HarnessLangGraphOrchestrator:
 
     async def knowledge_synthesis_node(self, state: GraphState) -> dict[str, Any]:
         result = state.get("knowledge_retrieval")
-        assembly = self._context_assembler.assemble(path_kind="knowledge_qa", state=state)
+        assembly = self._context_assembler.assemble(path_kind="knowledge_qa", state=state, call_site="knowledge_synthesis")
         messages = list(assembly.history_messages)
         messages.append({"role": "user", "content": state["user_message"]})
         extra_instructions = list(assembly.extra_instructions)
@@ -333,7 +337,7 @@ class HarnessLangGraphOrchestrator:
             "selected_capabilities": [str(getattr(tool, "name", "") or "") for tool in tools],
             "explicit_capability_id": explicit_id,
             "explicit_capability_payload": explicit_payload,
-            "path_kind": "capability",
+            "path_kind": "capability_path",
         }
         updates = self._context_writer.snapshot({**dict(state), **result}, updated_at=bindings.runtime.now())
         return {**result, **updates}
@@ -849,7 +853,7 @@ class HarnessLangGraphOrchestrator:
             return "knowledge_qa"
         if decision.intent == "direct_answer" or (not decision.needs_tools and not decision.needs_retrieval):
             return "direct_answer"
-        return "capability"
+        return "capability_path"
 
     async def _activate_skill_capability(self, *, message: str, routing_decision: "RoutingDecision", skill_decision: SkillDecision) -> None:
         skill_key = skill_decision.skill_name.replace("-", "_")
@@ -972,7 +976,11 @@ class HarnessLangGraphOrchestrator:
         bindings = self._bindings_or_raise()
         if strategy is None:
             raise RuntimeError("capability path requires execution strategy")
-        assembly = self._context_assembler.assemble(path_kind="capability", state=state)
+        assembly = self._context_assembler.assemble(
+            path_kind="capability_path",
+            state=state,
+            call_site="tool_agent",
+        )
         extra_instructions = list(assembly.extra_instructions)
         extra_instructions.extend(self._execution.tool_agent_instructions(strategy, skill_decision or SkillDecision(False, "", 0.0, "")))
         agent = self._execution.build_tool_agent(
@@ -1063,7 +1071,11 @@ class HarnessLangGraphOrchestrator:
         return None
 
     async def _stream_tool_result_fallback(self, *, state: GraphState, user_message: str, recorded_tools: list[dict[str, str]], strategy: "ExecutionStrategy | None") -> str:
-        assembly = self._context_assembler.assemble(path_kind="capability", state=state)
+        assembly = self._context_assembler.assemble(
+            path_kind="capability_path",
+            state=state,
+            call_site="tool_result_fallback",
+        )
         fallback_messages = list(assembly.history_messages)
         fallback_messages.append({"role": "assistant", "content": self._execution.tool_results_context(recorded_tools)})
         fallback_messages.append({"role": "user", "content": user_message})

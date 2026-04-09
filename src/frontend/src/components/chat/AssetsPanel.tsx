@@ -14,6 +14,7 @@ export function AssetsPanel() {
     pendingHitl,
     hitlAudit,
     mcpCapabilities,
+    sessionContext,
     assetsLoading,
     isStreaming,
     refreshAssets,
@@ -52,7 +53,7 @@ export function AssetsPanel() {
           <div>
             <p className="pixel-label">assets</p>
             <h3 className="pixel-title mt-2 text-[1rem] text-[var(--color-ink)]">
-              Checkpoints, HITL requests, and MCP capabilities
+              Checkpoints, context memory, HITL requests, and MCP capabilities
             </h3>
           </div>
           <button className="ui-button" disabled={assetsLoading || isStreaming} onClick={() => void refreshAssets()} type="button">
@@ -202,6 +203,112 @@ export function AssetsPanel() {
               ))
             ) : null}
           </div>
+        </section>
+
+        <section className="pixel-card p-4">
+          <p className="pixel-label">context memory</p>
+          <p className="pixel-note mt-2">Current working memory, episodic summary, and the latest semantic/procedural hits used for context assembly.</p>
+          {sessionContext ? (
+            <div className="mt-4 space-y-3">
+              <div className="pixel-card-soft p-4">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="pixel-tag">working memory</span>
+                  <span className="mono text-[0.92rem] text-[var(--color-ink-soft)]">{sessionContext.thread_id}</span>
+                </div>
+                <div className="mt-3 grid gap-2 text-sm text-[var(--color-ink-soft)] md:grid-cols-2">
+                  <p>current_goal: {sessionContext.working_memory.current_goal || "-"}</p>
+                  <p>latest_user_intent: {sessionContext.working_memory.latest_user_intent || "-"}</p>
+                  <p>active_constraints: {(sessionContext.working_memory.active_constraints || []).join(" | ") || "-"}</p>
+                  <p>active_entities: {(sessionContext.working_memory.active_entities || []).join(" | ") || "-"}</p>
+                  <p>active_artifacts: {(sessionContext.working_memory.active_artifacts || []).join(" | ") || "-"}</p>
+                  <p>unresolved_items: {(sessionContext.working_memory.unresolved_items || []).join(" | ") || "-"}</p>
+                </div>
+              </div>
+
+              <div className="pixel-card-soft p-4">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="pixel-tag">episodic summary</span>
+                  <span className="pixel-tag">v{sessionContext.episodic_summary.summary_version}</span>
+                </div>
+                <div className="mt-3 grid gap-2 text-sm text-[var(--color-ink-soft)] md:grid-cols-2">
+                  <p>key_facts: {(sessionContext.episodic_summary.key_facts || []).join(" | ") || "-"}</p>
+                  <p>completed_subtasks: {(sessionContext.episodic_summary.completed_subtasks || []).join(" | ") || "-"}</p>
+                  <p>rejected_paths: {(sessionContext.episodic_summary.rejected_paths || []).join(" | ") || "-"}</p>
+                  <p>open_loops: {(sessionContext.episodic_summary.open_loops || []).join(" | ") || "-"}</p>
+                </div>
+              </div>
+
+              <div className="grid gap-3 xl:grid-cols-2">
+                <div className="pixel-card-soft p-4">
+                  <p className="pixel-label">semantic memory hits</p>
+                  <div className="mt-3 space-y-3">
+                    {sessionContext.semantic_memories.length ? (
+                      sessionContext.semantic_memories.map((item) => (
+                        <div key={item.memory_id} className="rounded-[10px] border border-[var(--color-line)] px-3 py-3 text-sm text-[var(--color-ink-soft)]">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <span className="pixel-tag">{item.namespace}</span>
+                            <span className="mono text-[0.92rem]">{item.memory_id}</span>
+                          </div>
+                          <p className="mt-2 text-[var(--color-ink)]">{item.title}</p>
+                          <p className="mt-2">{item.summary || item.content}</p>
+                        </div>
+                      ))
+                    ) : (
+                      <p className="text-sm text-[var(--color-ink-soft)]">No semantic memory hits yet.</p>
+                    )}
+                  </div>
+                </div>
+                <div className="pixel-card-soft p-4">
+                  <p className="pixel-label">procedural memory hits</p>
+                  <div className="mt-3 space-y-3">
+                    {sessionContext.procedural_memories.length ? (
+                      sessionContext.procedural_memories.map((item) => (
+                        <div key={item.memory_id} className="rounded-[10px] border border-[var(--color-line)] px-3 py-3 text-sm text-[var(--color-ink-soft)]">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <span className="pixel-tag">{item.namespace}</span>
+                            <span className="mono text-[0.92rem]">{item.memory_id}</span>
+                          </div>
+                          <p className="mt-2 text-[var(--color-ink)]">{item.title}</p>
+                          <p className="mt-2">{item.summary || item.content}</p>
+                        </div>
+                      ))
+                    ) : (
+                      <p className="text-sm text-[var(--color-ink-soft)]">No procedural memory hits yet.</p>
+                    )}
+                  </div>
+                </div>
+              </div>
+
+              <div className="pixel-card-soft p-4">
+                <p className="pixel-label">recent context assemblies</p>
+                <div className="mt-3 space-y-3">
+                  {sessionContext.assemblies.length ? (
+                    sessionContext.assemblies.map((item) => (
+                      <div key={item.assembly_id} className="rounded-[10px] border border-[var(--color-line)] px-3 py-3 text-sm text-[var(--color-ink-soft)]">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className="pixel-tag">{item.path_kind}</span>
+                          <span className="pixel-tag">{item.call_site}</span>
+                          <span className="mono text-[0.92rem]">{item.created_at}</span>
+                        </div>
+                        <p className="mt-2">
+                          selected_memory_ids: {Array.isArray(item.decision?.["selected_memory_ids"]) ? (item.decision["selected_memory_ids"] as string[]).join(" | ") || "-" : "-"}
+                        </p>
+                        <p className="mt-1">
+                          truncation_reason: {typeof item.decision?.["truncation_reason"] === "string" ? (item.decision["truncation_reason"] as string) || "-" : "-"}
+                        </p>
+                      </div>
+                    ))
+                  ) : (
+                    <p className="text-sm text-[var(--color-ink-soft)]">No context assemblies recorded yet.</p>
+                  )}
+                </div>
+              </div>
+            </div>
+          ) : (
+            <div className="pixel-card-soft mt-4 px-4 py-4 text-sm text-[var(--color-ink-soft)]">
+              No context snapshot for this session yet.
+            </div>
+          )}
         </section>
 
         <section className="pixel-card p-4">

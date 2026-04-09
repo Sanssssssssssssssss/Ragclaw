@@ -95,6 +95,67 @@ export type McpCapabilitySummary = {
   tags: string[];
 };
 
+export type WorkingMemoryPayload = {
+  thread_id: string;
+  current_goal: string;
+  active_constraints: string[];
+  active_entities: string[];
+  active_artifacts: string[];
+  latest_capability_results: string[];
+  latest_retrieval_summary: string;
+  latest_user_intent: string;
+  unresolved_items: string[];
+  updated_at: string;
+};
+
+export type EpisodicSummaryPayload = {
+  thread_id: string;
+  summary_version: number;
+  key_facts: string[];
+  completed_subtasks: string[];
+  rejected_paths: string[];
+  important_decisions: string[];
+  important_artifacts: string[];
+  open_loops: string[];
+  updated_at: string;
+};
+
+export type ContextMemoryRecord = {
+  memory_id: string;
+  kind: "semantic" | "procedural";
+  namespace: string;
+  title: string;
+  content: string;
+  summary: string;
+  tags: string[];
+  metadata: Record<string, unknown>;
+  source: string;
+  created_at: string;
+  updated_at: string;
+  enabled: boolean;
+};
+
+export type ContextAssemblyRecord = {
+  assembly_id: string;
+  run_id: string;
+  thread_id: string;
+  call_site: string;
+  path_kind: string;
+  created_at: string;
+  assembly: Record<string, unknown>;
+  decision: Record<string, unknown>;
+};
+
+export type SessionContextPayload = {
+  session_id: string;
+  thread_id: string;
+  working_memory: WorkingMemoryPayload;
+  episodic_summary: EpisodicSummaryPayload;
+  semantic_memories: ContextMemoryRecord[];
+  procedural_memories: ContextMemoryRecord[];
+  assemblies: ContextAssemblyRecord[];
+};
+
 export type ExecutionPlatform = "windows" | "linux";
 
 export type MessageUsage = {
@@ -339,6 +400,38 @@ export async function listMcpCapabilities() {
 export async function getMcpCapability(capabilityId: string) {
   return request<{ capability: McpCapabilitySummary }>(
     `/capabilities/mcp/${encodeURIComponent(capabilityId)}`
+  );
+}
+
+export async function getSessionContext(sessionId: string) {
+  return request<SessionContextPayload>(`/context/sessions/${sessionId}`);
+}
+
+export async function listContextMemories(params: {
+  kind: "semantic" | "procedural";
+  namespace?: string;
+  query?: string;
+  limit?: number;
+}) {
+  const search = new URLSearchParams({
+    kind: params.kind,
+    ...(params.namespace ? { namespace: params.namespace } : {}),
+    ...(params.query ? { query: params.query } : {}),
+    ...(params.limit ? { limit: String(params.limit) } : {}),
+  });
+  return request<{ kind: string; namespace: string | null; query: string; items: ContextMemoryRecord[] }>(
+    `/context/memories?${search.toString()}`
+  );
+}
+
+export async function listContextAssemblies(params: { sessionId?: string; runId?: string; limit?: number }) {
+  const search = new URLSearchParams({
+    ...(params.sessionId ? { session_id: params.sessionId } : {}),
+    ...(params.runId ? { run_id: params.runId } : {}),
+    ...(params.limit ? { limit: String(params.limit) } : {}),
+  });
+  return request<{ thread_id: string | null; run_id: string | null; assemblies: ContextAssemblyRecord[] }>(
+    `/context/assemblies?${search.toString()}`
   );
 }
 

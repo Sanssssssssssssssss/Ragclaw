@@ -140,8 +140,10 @@ class AgentManager:
         self.session_manager = SessionManager(base_dir)
         self.tools, self._capability_registry = build_tools_and_registry(base_dir)
         from src.backend.orchestration.checkpointing import checkpoint_store  # pylint: disable=import-outside-toplevel
+        from src.backend.context.store import context_store  # pylint: disable=import-outside-toplevel
 
         checkpoint_store.configure_for_base_dir(base_dir)
+        context_store.configure_for_base_dir(base_dir)
         knowledge_orchestrator.configure(base_dir, self._build_chat_model)
         self._harness_runtime = None
 

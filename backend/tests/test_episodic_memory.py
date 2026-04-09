@@ -14,11 +14,11 @@ if str(PROJECT_ROOT) not in sys.path:
 from src.backend.context.episodic_memory import build_episodic_summary
 
 
-class EpisodicSummaryTests(unittest.TestCase):
+class EpisodicMemoryTests(unittest.TestCase):
     def test_build_summary_tracks_completed_rejected_and_open_loops(self) -> None:
         state = {
             "thread_id": "session-1",
-            "path_kind": "capability",
+            "path_kind": "capability_path",
             "final_answer": "The web fetch failed, so I answered conservatively.",
             "approval_decision": "reject",
             "recovery_action": "fallback_to_answer",
@@ -39,10 +39,9 @@ class EpisodicSummaryTests(unittest.TestCase):
         self.assertIn("The web fetch failed", summary.key_facts[0])
         self.assertIn("mcp_filesystem_read_file::success", summary.completed_subtasks)
         self.assertTrue(any("rejected" in item for item in summary.rejected_paths))
-        self.assertTrue(any("recovery=fallback_to_answer" == item for item in summary.important_decisions))
+        self.assertTrue(any(item == "recovery=fallback_to_answer" for item in summary.important_decisions))
         self.assertIn("memory/MEMORY.md", summary.important_artifacts)
         self.assertTrue(any("pending approval" in item for item in summary.open_loops))
-        self.assertEqual(summary.updated_at, "2026-04-09T09:10:00Z")
 
 
 if __name__ == "__main__":

@@ -8,7 +8,7 @@ from src.backend.decision.lightweight_router import RoutingDecision
 from src.backend.decision.skill_gate import SkillDecision
 
 
-GraphPathKind = Literal["direct_answer", "knowledge_qa", "capability"]
+GraphPathKind = Literal["direct_answer", "knowledge_qa", "capability_path"]
 
 
 class GraphState(TypedDict, total=False):
