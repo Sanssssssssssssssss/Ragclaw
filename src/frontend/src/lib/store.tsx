@@ -17,6 +17,7 @@ import {
   compressSession,
   createSession,
   deleteSession,
+  getContextTurn,
   getExecutionPlatform,
   getKnowledgeIndexStatus,
   getPendingHitl,
@@ -25,6 +26,7 @@ import {
   getSessionHistory,
   getSessionTokens,
   getSkillRetrieval,
+  listContextTurns,
   listSessionCheckpoints,
   listSessions,
   listSkills,
@@ -42,6 +44,8 @@ import {
   triggerContextConsolidation,
   type CheckpointEvent,
   type CheckpointSummary,
+  type ContextTurnPayload,
+  type ContextTurnSummary,
   type Evidence,
   type ExecutionPlatform,
   type HitlAuditEntry,
@@ -90,10 +94,13 @@ type ChatStore = {
   hitlAudit: HitlAuditEntry[];
   mcpCapabilities: McpCapabilitySummary[];
   sessionContext: SessionContextPayload | null;
+  contextTurns: ContextTurnSummary[];
+  selectedContextTurn: ContextTurnPayload | null;
   isInitializing: boolean;
   isSessionLoading: boolean;
   isStreaming: boolean;
   assetsLoading: boolean;
+  contextTurnsLoading: boolean;
   connectionError: string | null;
   tokenStats: SessionTokenStats | null;
   retryInitialization: () => Promise<void>;
@@ -107,6 +114,7 @@ type ChatStore = {
   refreshCheckpoints: () => Promise<void>;
   refreshAssets: () => Promise<void>;
   triggerConsolidation: () => Promise<void>;
+  selectContextTurn: (turnId: string) => Promise<void>;
 };
 
 type RuntimeStore = {
@@ -443,10 +451,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [hitlAudit, setHitlAudit] = useState<HitlAuditEntry[]>([]);
   const [mcpCapabilities, setMcpCapabilities] = useState<McpCapabilitySummary[]>([]);
   const [sessionContext, setSessionContext] = useState<SessionContextPayload | null>(null);
+  const [contextTurns, setContextTurns] = useState<ContextTurnSummary[]>([]);
+  const [selectedContextTurn, setSelectedContextTurn] = useState<ContextTurnPayload | null>(null);
   const [isInitializing, setIsInitializing] = useState(true);
   const [isSessionLoading, setIsSessionLoading] = useState(false);
   const [isStreaming, setIsStreaming] = useState(false);
   const [assetsLoading, setAssetsLoading] = useState(false);
+  const [contextTurnsLoading, setContextTurnsLoading] = useState(false);
   const [connectionError, setConnectionError] = useState<string | null>(null);
   const [tokenStats, setTokenStats] = useState<SessionTokenStats | null>(null);
   const [ragMode, setRagModeState] = useState(false);
@@ -494,6 +505,27 @@ export function AppProvider({ children }: { children: ReactNode }) {
     setTokenStats(await getSessionTokens(sessionId));
   }, []);
 
+  const loadContextTurns = useCallback(
+    async (sessionId: string, preferredTurnId?: string | null) => {
+      setContextTurnsLoading(true);
+      try {
+        const payload = await listContextTurns(sessionId, 24);
+        const items = Array.isArray(payload.items) ? payload.items : [];
+        setContextTurns(items);
+        const nextTurnId = preferredTurnId ?? items[0]?.turn_id ?? null;
+        if (!nextTurnId) {
+          setSelectedContextTurn(null);
+          return;
+        }
+        const detail = await getContextTurn(sessionId, nextTurnId);
+        setSelectedContextTurn(detail.turn);
+      } finally {
+        setContextTurnsLoading(false);
+      }
+    },
+    []
+  );
+
   const refreshCheckpoints = useCallback(
       async (sessionId?: string | null) => {
       const resolvedSessionId = sessionId ?? currentSessionId;
@@ -504,6 +536,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
             setPendingHitl(null);
             setHitlAudit([]);
             setSessionContext(null);
+            setContextTurns([]);
+            setSelectedContextTurn(null);
             const mcpPayload = await listMcpCapabilities();
             setMcpCapabilities(mcpPayload.capabilities);
             return;
@@ -523,11 +557,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
           );
           setMcpCapabilities(Array.isArray(mcpPayload.capabilities) ? mcpPayload.capabilities : []);
           setSessionContext(contextPayload);
+          await loadContextTurns(resolvedSessionId, selectedContextTurn?.turn_id ?? null);
         } finally {
           setAssetsLoading(false);
         }
     },
-      [currentSessionId]
+      [currentSessionId, loadContextTurns, selectedContextTurn?.turn_id]
     );
 
   const triggerConsolidation = useCallback(async () => {
@@ -543,6 +578,23 @@ export function AppProvider({ children }: { children: ReactNode }) {
       setAssetsLoading(false);
     }
   }, [currentSessionId, refreshCheckpoints]);
+
+  const selectContextTurn = useCallback(
+    async (turnId: string) => {
+      if (!currentSessionId || !turnId) return;
+      setContextTurnsLoading(true);
+      try {
+        const detail = await getContextTurn(currentSessionId, turnId);
+        setSelectedContextTurn(detail.turn);
+        setConnectionError(null);
+      } catch (error) {
+        setConnectionError(toErrorMessage(error));
+      } finally {
+        setContextTurnsLoading(false);
+      }
+    },
+    [currentSessionId]
+  );
 
   const loadSessionEssentials = useCallback(
     async (sessionId: string) => {
@@ -568,8 +620,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
         );
         setMcpCapabilities(Array.isArray(mcpPayload.capabilities) ? mcpPayload.capabilities : []);
         setSessionContext(contextPayload);
+        await loadContextTurns(sessionId);
       },
-    [setStreamingMessages]
+    [loadContextTurns, setStreamingMessages]
   );
 
   const refreshRuntime = useCallback(async () => {
@@ -634,6 +687,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
         setCheckpoints([]);
         setPendingHitl(null);
         setSessionContext(null);
+        setContextTurns([]);
+        setSelectedContextTurn(null);
         setTokenStats(null);
       }
     } catch (error) {
@@ -646,6 +701,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
       setPendingHitl(null);
       setHitlAudit([]);
       setSessionContext(null);
+      setContextTurns([]);
+      setSelectedContextTurn(null);
       setMcpCapabilities([]);
       setTokenStats(null);
       setKnowledgeIndexStatus(null);
@@ -710,6 +767,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
     setCheckpoints([]);
     setPendingHitl(null);
     setSessionContext(null);
+    setContextTurns([]);
+    setSelectedContextTurn(null);
     setTokenStats(null);
     return created.id;
   }, [currentSessionId, setStreamingMessages]);
@@ -724,6 +783,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
         setCheckpoints([]);
         setPendingHitl(null);
         setSessionContext(null);
+        setContextTurns([]);
+        setSelectedContextTurn(null);
         setTokenStats(null);
         setConnectionError(null);
       void refreshSessions();
@@ -741,6 +802,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
         setCheckpoints([]);
         setPendingHitl(null);
         setSessionContext(null);
+        setContextTurns([]);
+        setSelectedContextTurn(null);
         setTokenStats(null);
         setIsSessionLoading(true);
       setConnectionError(null);
@@ -783,6 +846,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
             setCheckpoints([]);
             setPendingHitl(null);
             setSessionContext(null);
+            setContextTurns([]);
+            setSelectedContextTurn(null);
             setTokenStats(null);
             return;
         }
@@ -792,6 +857,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
         setCheckpoints([]);
         setPendingHitl(null);
         setSessionContext(null);
+        setContextTurns([]);
+        setSelectedContextTurn(null);
         setTokenStats(null);
         try {
           await loadSessionEssentials(nextSessionId);
@@ -1271,10 +1338,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
       hitlAudit,
       mcpCapabilities,
       sessionContext,
+      contextTurns,
+      selectedContextTurn,
       isInitializing,
       isSessionLoading,
       isStreaming,
       assetsLoading,
+      contextTurnsLoading,
       connectionError,
       tokenStats,
       retryInitialization,
@@ -1283,9 +1353,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
         submitHitlDecision,
         refreshCheckpoints: async () => refreshCheckpoints(),
         refreshAssets: async () => refreshCheckpoints(),
-        triggerConsolidation
+        triggerConsolidation,
+        selectContextTurn
       }),
-    [assetsLoading, checkpoints, connectionError, hitlAudit, isInitializing, isSessionLoading, isStreaming, mcpCapabilities, messages, pendingHitl, refreshCheckpoints, retryInitialization, resumeCheckpoint, sendMessage, sessionContext, streamingMessagesState, submitHitlDecision, tokenStats, triggerConsolidation]
+    [assetsLoading, checkpoints, connectionError, contextTurns, contextTurnsLoading, hitlAudit, isInitializing, isSessionLoading, isStreaming, mcpCapabilities, messages, pendingHitl, refreshCheckpoints, retryInitialization, resumeCheckpoint, selectContextTurn, selectedContextTurn, sendMessage, sessionContext, streamingMessagesState, submitHitlDecision, tokenStats, triggerConsolidation]
   );
 
   const runtimeValue = useMemo<RuntimeStore>(

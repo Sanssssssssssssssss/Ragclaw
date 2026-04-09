@@ -190,6 +190,66 @@ export type ContextAssemblyRecord = {
   decision: Record<string, unknown>;
 };
 
+export type ContextEnvelopePayload = {
+  system_block: string;
+  history_block: string;
+  working_memory_block: string;
+  episodic_block: string;
+  semantic_block: string;
+  procedural_block: string;
+  conversation_block: string;
+  artifact_block: string;
+  evidence_block: string;
+  budget_report: Record<string, number>;
+};
+
+export type ContextAssemblyDecisionPayload = {
+  path_type: string;
+  selected_history_ids: string[];
+  selected_memory_ids: string[];
+  selected_artifact_ids: string[];
+  selected_evidence_ids: string[];
+  selected_conversation_ids: string[];
+  dropped_items: string[];
+  truncation_reason: string;
+};
+
+export type ContextTurnBudgetReport = {
+  allocated: Record<string, number>;
+  used: Record<string, number>;
+  excluded_from_prompt: string[];
+};
+
+export type ContextTurnSummary = {
+  turn_id: string;
+  session_id: string | null;
+  run_id: string;
+  thread_id: string;
+  assistant_message_id: string | null;
+  segment_index: number;
+  call_site: string;
+  path_type: string;
+  user_query: string;
+  budget_report: ContextTurnBudgetReport;
+  selected_memory_ids: string[];
+  selected_artifact_ids: string[];
+  selected_evidence_ids: string[];
+  selected_conversation_ids: string[];
+  dropped_items: string[];
+  truncation_reason: string;
+  run_status: string;
+  resume_source: string;
+  checkpoint_id: string;
+  orchestration_engine: string;
+  model_invoked: boolean;
+  created_at: string;
+};
+
+export type ContextTurnPayload = ContextTurnSummary & {
+  context_envelope: ContextEnvelopePayload;
+  assembly_decision: ContextAssemblyDecisionPayload;
+};
+
 export type SessionContextPayload = {
   session_id: string;
   thread_id: string;
@@ -481,6 +541,19 @@ export async function listContextAssemblies(params: { sessionId?: string; runId?
   });
   return request<{ thread_id: string | null; run_id: string | null; assemblies: ContextAssemblyRecord[] }>(
     `/context/assemblies?${search.toString()}`
+  );
+}
+
+export async function listContextTurns(sessionId: string, limit = 20) {
+  const search = new URLSearchParams({ limit: String(limit) });
+  return request<{ session_id: string; thread_id: string; items: ContextTurnSummary[] }>(
+    `/context/sessions/${encodeURIComponent(sessionId)}/turns?${search.toString()}`
+  );
+}
+
+export async function getContextTurn(sessionId: string, turnId: string) {
+  return request<{ session_id: string; turn: ContextTurnPayload }>(
+    `/context/sessions/${encodeURIComponent(sessionId)}/turns/${encodeURIComponent(turnId)}`
   );
 }
 

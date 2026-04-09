@@ -281,6 +281,88 @@ class ContextAssembly:
 
 
 @dataclass(frozen=True)
+class ContextTurnSnapshot:
+    turn_id: str
+    session_id: str | None
+    run_id: str
+    thread_id: str
+    assistant_message_id: str | None
+    segment_index: int
+    call_site: str
+    path_type: ContextPathKind
+    user_query: str
+    context_envelope: ContextEnvelope
+    assembly_decision: ContextAssemblyDecision
+    budget_report: dict[str, Any] = field(default_factory=dict)
+    selected_memory_ids: tuple[str, ...] = ()
+    selected_artifact_ids: tuple[str, ...] = ()
+    selected_evidence_ids: tuple[str, ...] = ()
+    selected_conversation_ids: tuple[str, ...] = ()
+    dropped_items: tuple[str, ...] = ()
+    truncation_reason: str = ""
+    run_status: str = "fresh"
+    resume_source: str = ""
+    checkpoint_id: str = ""
+    orchestration_engine: str = "langgraph"
+    model_invoked: bool = True
+    created_at: str = ""
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "turn_id": self.turn_id,
+            "session_id": self.session_id,
+            "run_id": self.run_id,
+            "thread_id": self.thread_id,
+            "assistant_message_id": self.assistant_message_id,
+            "segment_index": self.segment_index,
+            "call_site": self.call_site,
+            "path_type": self.path_type,
+            "user_query": self.user_query,
+            "context_envelope": self.context_envelope.to_dict(),
+            "assembly_decision": self.assembly_decision.to_dict(),
+            "budget_report": dict(self.budget_report),
+            "selected_memory_ids": list(self.selected_memory_ids),
+            "selected_artifact_ids": list(self.selected_artifact_ids),
+            "selected_evidence_ids": list(self.selected_evidence_ids),
+            "selected_conversation_ids": list(self.selected_conversation_ids),
+            "dropped_items": list(self.dropped_items),
+            "truncation_reason": self.truncation_reason,
+            "run_status": self.run_status,
+            "resume_source": self.resume_source,
+            "checkpoint_id": self.checkpoint_id,
+            "orchestration_engine": self.orchestration_engine,
+            "model_invoked": self.model_invoked,
+            "created_at": self.created_at,
+        }
+
+    def to_summary_dict(self) -> dict[str, Any]:
+        return {
+            "turn_id": self.turn_id,
+            "session_id": self.session_id,
+            "run_id": self.run_id,
+            "thread_id": self.thread_id,
+            "assistant_message_id": self.assistant_message_id,
+            "segment_index": self.segment_index,
+            "call_site": self.call_site,
+            "path_type": self.path_type,
+            "user_query": self.user_query,
+            "budget_report": dict(self.budget_report),
+            "selected_memory_ids": list(self.selected_memory_ids),
+            "selected_artifact_ids": list(self.selected_artifact_ids),
+            "selected_evidence_ids": list(self.selected_evidence_ids),
+            "selected_conversation_ids": list(self.selected_conversation_ids),
+            "dropped_items": list(self.dropped_items),
+            "truncation_reason": self.truncation_reason,
+            "run_status": self.run_status,
+            "resume_source": self.resume_source,
+            "checkpoint_id": self.checkpoint_id,
+            "orchestration_engine": self.orchestration_engine,
+            "model_invoked": self.model_invoked,
+            "created_at": self.created_at,
+        }
+
+
+@dataclass(frozen=True)
 class ConversationRecallRecord:
     chunk_id: str
     thread_id: str

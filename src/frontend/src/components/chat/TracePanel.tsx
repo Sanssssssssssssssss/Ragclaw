@@ -1,8 +1,9 @@
 "use client";
 
-import { memo, useMemo, useRef } from "react";
+import { memo, useMemo, useRef, useState } from "react";
 import { MessageSquareText, Route, Sparkles } from "lucide-react";
 
+import { ContextTracePanel } from "@/components/chat/ContextTracePanel";
 import { RetrievalCard } from "@/components/chat/RetrievalCard";
 import { ThoughtChain } from "@/components/chat/ThoughtChain";
 import { VirtualizedStack } from "@/components/chat/VirtualizedStack";
@@ -134,6 +135,7 @@ const TraceTurnCard = memo(function TraceTurnCard({ turn }: { turn: TraceTurn })
 
 export function TracePanel() {
   const { messages, streamingMessages, isStreaming } = useChatStore();
+  const [view, setView] = useState<"execution" | "context">("context");
   const turnCacheRef = useRef(
     new Map<
       string,
@@ -200,7 +202,28 @@ export function TracePanel() {
   return (
     <section className="flex min-h-0 flex-1 flex-col">
       <div className="panel flex min-h-0 flex-1 flex-col px-4 pb-4 pt-4">
-        {!turns.length ? (
+        <div className="mb-4 flex flex-wrap items-center gap-2">
+          <button
+            className={`pixel-button px-4 py-2 text-sm ${view === "context" ? "is-active" : ""}`}
+            onClick={() => setView("context")}
+            type="button"
+          >
+            Model-visible context
+          </button>
+          <button
+            className={`pixel-button px-4 py-2 text-sm ${view === "execution" ? "is-active" : ""}`}
+            onClick={() => setView("execution")}
+            type="button"
+          >
+            Execution trace
+          </button>
+        </div>
+
+        {view === "context" ? (
+          <div className="trace-scroll-area flex-1 overflow-y-auto pr-2">
+            <ContextTracePanel />
+          </div>
+        ) : !turns.length ? (
           <div className="trace-scroll-area flex-1 overflow-y-auto pr-2">
             <div className="pixel-card-soft px-6 py-8">
               <p className="pixel-label">ready</p>

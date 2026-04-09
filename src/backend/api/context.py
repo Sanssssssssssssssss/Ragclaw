@@ -60,6 +60,30 @@ async def get_session_context(session_id: str) -> dict[str, Any]:
     }
 
 
+@router.get("/context/sessions/{session_id}/turns")
+async def list_context_turns(
+    session_id: str,
+    limit: int = Query(default=20, ge=1, le=100),
+) -> dict[str, Any]:
+    _base_dir_or_raise()
+    thread_id = _thread_id_for(session_id)
+    items = context_store.list_context_turn_snapshots(session_id=session_id, thread_id=thread_id, limit=limit)
+    return {
+        "session_id": session_id,
+        "thread_id": thread_id,
+        "items": [item.to_summary_dict() for item in items],
+    }
+
+
+@router.get("/context/sessions/{session_id}/turns/{turn_id}")
+async def get_context_turn(session_id: str, turn_id: str) -> dict[str, Any]:
+    _base_dir_or_raise()
+    item = context_store.get_context_turn_snapshot(turn_id=turn_id, session_id=session_id)
+    if item is None:
+        raise HTTPException(status_code=404, detail="Context turn not found")
+    return {"session_id": session_id, "turn": item.to_dict()}
+
+
 @router.get("/context/memories")
 async def list_context_memories(
     kind: str = Query(..., pattern="^(semantic|procedural|episodic)$"),

@@ -12,6 +12,9 @@ from src.backend.context.manifest import score_manifest
 from src.backend.context.models import (
     ConsolidationRunSummary,
     ContextAssembly,
+    ContextAssemblyDecision,
+    ContextEnvelope,
+    ContextTurnSnapshot,
     ConversationRecallRecord,
     EpisodicSummary,
     MemoryCandidate,
@@ -130,6 +133,33 @@ class ContextStore:
                 created_at TEXT NOT NULL
             );
 
+            CREATE TABLE IF NOT EXISTS context_turns (
+                turn_id TEXT PRIMARY KEY,
+                session_id TEXT,
+                run_id TEXT NOT NULL,
+                thread_id TEXT NOT NULL,
+                assistant_message_id TEXT,
+                segment_index INTEGER NOT NULL,
+                call_site TEXT NOT NULL,
+                path_type TEXT NOT NULL,
+                user_query TEXT NOT NULL,
+                context_envelope_json TEXT NOT NULL,
+                assembly_decision_json TEXT NOT NULL,
+                budget_report_json TEXT NOT NULL,
+                selected_memory_ids_json TEXT NOT NULL,
+                selected_artifact_ids_json TEXT NOT NULL,
+                selected_evidence_ids_json TEXT NOT NULL,
+                selected_conversation_ids_json TEXT NOT NULL,
+                dropped_items_json TEXT NOT NULL,
+                truncation_reason TEXT NOT NULL,
+                run_status TEXT NOT NULL DEFAULT 'fresh',
+                resume_source TEXT NOT NULL DEFAULT '',
+                checkpoint_id TEXT NOT NULL DEFAULT '',
+                orchestration_engine TEXT NOT NULL DEFAULT 'langgraph',
+                model_invoked INTEGER NOT NULL DEFAULT 1,
+                created_at TEXT NOT NULL
+            );
+
             CREATE TABLE IF NOT EXISTS conversation_recall (
                 chunk_id TEXT PRIMARY KEY,
                 thread_id TEXT NOT NULL,
@@ -163,6 +193,9 @@ class ContextStore:
             CREATE INDEX IF NOT EXISTS idx_memories_kind_namespace ON memories(kind, namespace, updated_at DESC);
             CREATE INDEX IF NOT EXISTS idx_memories_status ON memories(status, updated_at DESC);
             CREATE INDEX IF NOT EXISTS idx_memories_conflict_key ON memories(conflict_key);
+            CREATE INDEX IF NOT EXISTS idx_context_turns_session_created ON context_turns(session_id, created_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_context_turns_thread_created ON context_turns(thread_id, created_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_context_turns_run_segment ON context_turns(run_id, segment_index DESC);
             CREATE INDEX IF NOT EXISTS idx_conversation_recall_thread ON conversation_recall(thread_id, updated_at DESC);
             CREATE INDEX IF NOT EXISTS idx_consolidation_runs_created ON consolidation_runs(created_at DESC);
             """
@@ -915,6 +948,107 @@ class ContextStore:
             for row in rows
         ]
 
+    def record_context_turn_snapshot(self, snapshot: ContextTurnSnapshot) -> None:
+        with self._lock:
+            self._conn_or_raise().execute(
+                """
+                INSERT INTO context_turns (
+                    turn_id, session_id, run_id, thread_id, assistant_message_id, segment_index, call_site,
+                    path_type, user_query, context_envelope_json, assembly_decision_json, budget_report_json,
+                    selected_memory_ids_json, selected_artifact_ids_json, selected_evidence_ids_json,
+                    selected_conversation_ids_json, dropped_items_json, truncation_reason, run_status,
+                    resume_source, checkpoint_id, orchestration_engine, model_invoked, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(turn_id) DO UPDATE SET
+                    session_id = excluded.session_id,
+                    assistant_message_id = excluded.assistant_message_id,
+                    path_type = excluded.path_type,
+                    user_query = excluded.user_query,
+                    context_envelope_json = excluded.context_envelope_json,
+                    assembly_decision_json = excluded.assembly_decision_json,
+                    budget_report_json = excluded.budget_report_json,
+                    selected_memory_ids_json = excluded.selected_memory_ids_json,
+                    selected_artifact_ids_json = excluded.selected_artifact_ids_json,
+                    selected_evidence_ids_json = excluded.selected_evidence_ids_json,
+                    selected_conversation_ids_json = excluded.selected_conversation_ids_json,
+                    dropped_items_json = excluded.dropped_items_json,
+                    truncation_reason = excluded.truncation_reason,
+                    run_status = excluded.run_status,
+                    resume_source = excluded.resume_source,
+                    checkpoint_id = excluded.checkpoint_id,
+                    orchestration_engine = excluded.orchestration_engine,
+                    model_invoked = excluded.model_invoked,
+                    created_at = excluded.created_at
+                """,
+                (
+                    snapshot.turn_id,
+                    snapshot.session_id,
+                    snapshot.run_id,
+                    snapshot.thread_id,
+                    snapshot.assistant_message_id,
+                    snapshot.segment_index,
+                    snapshot.call_site,
+                    snapshot.path_type,
+                    snapshot.user_query,
+                    json.dumps(snapshot.context_envelope.to_dict(), ensure_ascii=False),
+                    json.dumps(snapshot.assembly_decision.to_dict(), ensure_ascii=False),
+                    json.dumps(dict(snapshot.budget_report), ensure_ascii=False),
+                    json.dumps(list(snapshot.selected_memory_ids), ensure_ascii=False),
+                    json.dumps(list(snapshot.selected_artifact_ids), ensure_ascii=False),
+                    json.dumps(list(snapshot.selected_evidence_ids), ensure_ascii=False),
+                    json.dumps(list(snapshot.selected_conversation_ids), ensure_ascii=False),
+                    json.dumps(list(snapshot.dropped_items), ensure_ascii=False),
+                    snapshot.truncation_reason,
+                    snapshot.run_status,
+                    snapshot.resume_source,
+                    snapshot.checkpoint_id,
+                    snapshot.orchestration_engine,
+                    1 if snapshot.model_invoked else 0,
+                    snapshot.created_at,
+                ),
+            )
+            self._conn_or_raise().commit()
+
+    def list_context_turn_snapshots(
+        self,
+        *,
+        session_id: str | None = None,
+        thread_id: str | None = None,
+        run_id: str | None = None,
+        limit: int = 20,
+    ) -> list[ContextTurnSnapshot]:
+        query = "SELECT * FROM context_turns WHERE 1 = 1"
+        params: list[Any] = []
+        if session_id is not None:
+            query += " AND session_id = ?"
+            params.append(session_id)
+        if thread_id is not None:
+            query += " AND thread_id = ?"
+            params.append(thread_id)
+        if run_id is not None:
+            query += " AND run_id = ?"
+            params.append(run_id)
+        query += " ORDER BY created_at DESC LIMIT ?"
+        params.append(max(1, int(limit)))
+        with self._lock:
+            rows = self._conn_or_raise().execute(query, tuple(params)).fetchall()
+        return [self._context_turn_from_row(row) for row in rows]
+
+    def get_context_turn_snapshot(
+        self,
+        *,
+        turn_id: str,
+        session_id: str | None = None,
+    ) -> ContextTurnSnapshot | None:
+        query = "SELECT * FROM context_turns WHERE turn_id = ?"
+        params: list[Any] = [turn_id]
+        if session_id is not None:
+            query += " AND session_id = ?"
+            params.append(session_id)
+        with self._lock:
+            row = self._conn_or_raise().execute(query, tuple(params)).fetchone()
+        return self._context_turn_from_row(row) if row is not None else None
+
     def _refresh_staleness_locked(self, conn: sqlite3.Connection) -> None:
         rows = conn.execute(
             """
@@ -1006,6 +1140,56 @@ class ContextStore:
             created_at=str(row["created_at"] or ""),
             updated_at=str(row["updated_at"] or ""),
             fingerprint=str(row["fingerprint"] or ""),
+        )
+
+    def _context_turn_from_row(self, row: sqlite3.Row) -> ContextTurnSnapshot:
+        envelope_payload = dict(json.loads(str(row["context_envelope_json"] or "{}")))
+        decision_payload = dict(json.loads(str(row["assembly_decision_json"] or "{}")))
+        return ContextTurnSnapshot(
+            turn_id=str(row["turn_id"] or ""),
+            session_id=str(row["session_id"]) if row["session_id"] is not None else None,
+            run_id=str(row["run_id"] or ""),
+            thread_id=str(row["thread_id"] or ""),
+            assistant_message_id=str(row["assistant_message_id"]) if row["assistant_message_id"] is not None else None,
+            segment_index=int(row["segment_index"] or 0),
+            call_site=str(row["call_site"] or ""),
+            path_type=str(row["path_type"] or "direct_answer"),  # type: ignore[arg-type]
+            user_query=str(row["user_query"] or ""),
+            context_envelope=ContextEnvelope(
+                system_block=str(envelope_payload.get("system_block", "") or ""),
+                history_block=str(envelope_payload.get("history_block", "") or ""),
+                working_memory_block=str(envelope_payload.get("working_memory_block", "") or ""),
+                episodic_block=str(envelope_payload.get("episodic_block", "") or ""),
+                semantic_block=str(envelope_payload.get("semantic_block", "") or ""),
+                procedural_block=str(envelope_payload.get("procedural_block", "") or ""),
+                conversation_block=str(envelope_payload.get("conversation_block", "") or ""),
+                artifact_block=str(envelope_payload.get("artifact_block", "") or ""),
+                evidence_block=str(envelope_payload.get("evidence_block", "") or ""),
+                budget_report=dict(envelope_payload.get("budget_report", {}) or {}),
+            ),
+            assembly_decision=ContextAssemblyDecision(
+                path_type=str(decision_payload.get("path_type", "direct_answer")),  # type: ignore[arg-type]
+                selected_history_ids=tuple(decision_payload.get("selected_history_ids", []) or []),
+                selected_memory_ids=tuple(decision_payload.get("selected_memory_ids", []) or []),
+                selected_artifact_ids=tuple(decision_payload.get("selected_artifact_ids", []) or []),
+                selected_evidence_ids=tuple(decision_payload.get("selected_evidence_ids", []) or []),
+                selected_conversation_ids=tuple(decision_payload.get("selected_conversation_ids", []) or []),
+                dropped_items=tuple(decision_payload.get("dropped_items", []) or []),
+                truncation_reason=str(decision_payload.get("truncation_reason", "") or ""),
+            ),
+            budget_report=dict(json.loads(str(row["budget_report_json"] or "{}"))),
+            selected_memory_ids=tuple(json.loads(str(row["selected_memory_ids_json"] or "[]"))),
+            selected_artifact_ids=tuple(json.loads(str(row["selected_artifact_ids_json"] or "[]"))),
+            selected_evidence_ids=tuple(json.loads(str(row["selected_evidence_ids_json"] or "[]"))),
+            selected_conversation_ids=tuple(json.loads(str(row["selected_conversation_ids_json"] or "[]"))),
+            dropped_items=tuple(json.loads(str(row["dropped_items_json"] or "[]"))),
+            truncation_reason=str(row["truncation_reason"] or ""),
+            run_status=str(row["run_status"] or "fresh"),
+            resume_source=str(row["resume_source"] or ""),
+            checkpoint_id=str(row["checkpoint_id"] or ""),
+            orchestration_engine=str(row["orchestration_engine"] or "langgraph"),
+            model_invoked=bool(row["model_invoked"]),
+            created_at=str(row["created_at"] or ""),
         )
 
     def _consolidation_from_row(self, row: sqlite3.Row) -> ConsolidationRunSummary:
