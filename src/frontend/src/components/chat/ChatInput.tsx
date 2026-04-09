@@ -3,9 +3,6 @@
 import { SendHorizonal } from "lucide-react";
 import { useState } from "react";
 
-/**
- * Returns one rendered chat input from disabled state and send handler inputs and captures a user prompt for submission.
- */
 export function ChatInput({
   disabled,
   onSend
@@ -15,46 +12,44 @@ export function ChatInput({
 }) {
   const [value, setValue] = useState("");
 
+  const submitValue = () => {
+    const nextValue = value.trim();
+    if (!nextValue || disabled) {
+      return;
+    }
+    void onSend(nextValue);
+    setValue("");
+  };
+
   return (
-    <div className="panel rounded-[28px] px-4 py-3">
+    <form
+      className="panel shrink-0 px-4 py-4"
+      onSubmit={(event) => {
+        event.preventDefault();
+        submitValue();
+      }}
+    >
       <textarea
-        className="min-h-36 w-full resize-none rounded-[24px] border border-[var(--color-line)] bg-[rgba(255,255,255,0.03)] px-5 py-4 text-base leading-8 text-white outline-none transition placeholder:text-[var(--color-ink-muted)] focus:border-[var(--color-accent-strong)] focus:bg-[rgba(255,255,255,0.05)]"
+        className="pixel-field min-h-28 resize-none px-5 py-5 text-[1rem] leading-7 placeholder:text-[var(--color-ink-muted)]"
         onChange={(event) => setValue(event.target.value)}
         onKeyDown={(event) => {
-          if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
+          const isEnter =
+            event.key === "Enter" || event.code === "Enter" || event.code === "NumpadEnter";
+          if ((event.metaKey || event.ctrlKey) && isEnter && !event.nativeEvent.isComposing) {
             event.preventDefault();
-            const nextValue = value.trim();
-            if (!nextValue) {
-              return;
-            }
-            void onSend(nextValue);
-            setValue("");
+            submitValue();
           }
         }}
-        placeholder="Message Onyx Chat. Press Ctrl/Cmd + Enter to send."
+        placeholder="随便问点什么… “优化数据库查询”"
         value={value}
       />
       <div className="mt-3 flex flex-wrap items-center justify-between gap-3">
-        <p className="text-sm text-[var(--color-ink-soft)]">
-          Same actions and APIs, refreshed into a calmer dark workspace.
-        </p>
-        <button
-          className="ui-button ui-button-primary"
-          disabled={disabled || !value.trim()}
-          onClick={() => {
-            const nextValue = value.trim();
-            if (!nextValue) {
-              return;
-            }
-            void onSend(nextValue);
-            setValue("");
-          }}
-          type="button"
-        >
+        <p className="mono text-[0.92rem] text-[var(--color-ink-soft)]">Ctrl/Cmd + Enter to send.</p>
+        <button className="ui-button ui-button-primary" disabled={disabled || !value.trim()} type="submit">
           <SendHorizonal size={16} />
           Send
         </button>
       </div>
-    </div>
+    </form>
   );
 }

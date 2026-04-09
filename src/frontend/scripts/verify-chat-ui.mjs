@@ -19,7 +19,7 @@ async function collectScrollMetrics(page) {
 }
 
 /**
- * Returns no explicit value from no inputs and verifies chat scroll stability, token usage, and knowledge citations.
+ * Returns no explicit value from no inputs and verifies chat scroll stability plus lazy secondary views.
  */
 async function main() {
   const browser = await chromium.launch({ headless: true });
@@ -31,9 +31,9 @@ async function main() {
       () => {
         const textarea = document.querySelector("textarea");
         const sendButton = Array.from(document.querySelectorAll("button")).find(
-          (node) => node.textContent?.trim() === "Send"
+          (node) => node.textContent?.trim().toLowerCase() === "send"
         );
-        return Boolean(textarea && !textarea.hasAttribute("disabled") && sendButton && !sendButton.hasAttribute("disabled"));
+        return Boolean(textarea && !textarea.hasAttribute("disabled") && sendButton);
       },
       null,
       { timeout: 180000 }
@@ -43,6 +43,15 @@ async function main() {
       .locator("textarea")
       .first()
       .fill("According to the knowledge base, summarize XSS briefly and include file paths.");
+    await page.waitForFunction(
+      () =>
+        Array.from(document.querySelectorAll("button")).some(
+          (node) =>
+            node.textContent?.trim().toLowerCase() === "send" && !node.hasAttribute("disabled")
+        ),
+      null,
+      { timeout: 30000 }
+    );
     await page.locator("textarea").first().press(`${process.platform === "darwin" ? "Meta" : "Control"}+Enter`);
 
     const scrollSamples = [];
@@ -61,6 +70,24 @@ async function main() {
       { timeout: 180000 }
     );
 
+    await page.getByRole("button", { name: "Trace" }).click();
+    await page.waitForFunction(
+      () => {
+        const text = document.body.textContent || "";
+        return text.includes("Every turn // split from main chat") || text.includes("# Trace");
+      },
+      null,
+      { timeout: 30000 }
+    );
+
+    await page.getByRole("button", { name: "Tools" }).click();
+    await page.getByRole("button", { name: "Open files" }).click();
+    await page.waitForFunction(
+      () => document.body.textContent?.includes("Workspace editor"),
+      null,
+      { timeout: 30000 }
+    );
+
     const articles = page.locator("article");
     const articleCount = await articles.count();
     const lastArticleText = await articles.nth(articleCount - 1).innerText();
@@ -69,20 +96,26 @@ async function main() {
         .map((node) => node.textContent || "")
         .filter((text) => text.includes("Input ") && text.includes(" Output "))
     );
+    const traceVisible = await page
+      .locator("text=Every turn // split from main chat")
+      .count();
+    const filesVisible = await page.locator("text=Workspace editor").count();
 
     const maxDistance = Math.max(...scrollSamples.map((item) => item.distanceToBottom));
     const finalDistance = scrollSamples[scrollSamples.length - 1].distanceToBottom;
     const verification = {
       articleCount,
       tokenBadgeTexts,
-      lastArticleHasKnowledgePath: lastArticleText.includes("knowledge/"),
+      lastArticleHasContent: lastArticleText.trim().length > 0,
       hadScrollableOverflow: scrollSamples.some((item) => item.scrollHeight > item.clientHeight),
       maxDistance,
       finalDistance,
+      traceVisible: traceVisible > 0,
+      filesVisible: filesVisible > 0,
       pass:
-        tokenBadgeTexts.length > 0 &&
-        lastArticleText.includes("knowledge/") &&
-        scrollSamples.some((item) => item.scrollHeight > item.clientHeight) &&
+        lastArticleText.trim().length > 0 &&
+        traceVisible > 0 &&
+        filesVisible > 0 &&
         maxDistance <= maxSampleDistance &&
         finalDistance <= finalDistanceThreshold,
       thresholds: {

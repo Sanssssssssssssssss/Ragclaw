@@ -1,16 +1,17 @@
 import type { Metadata } from "next";
-import { IBM_Plex_Mono, Space_Grotesk } from "next/font/google";
+import { IBM_Plex_Mono, VT323 } from "next/font/google";
 
 import "./globals.css";
 
-const displayFont = Space_Grotesk({
+const monoBaseFont = IBM_Plex_Mono({
   subsets: ["latin"],
-  variable: "--font-display"
+  weight: ["400", "500", "700"],
+  variable: "--font-body"
 });
 
-const monoFont = IBM_Plex_Mono({
+const monoFont = VT323({
   subsets: ["latin"],
-  weight: ["400", "500"],
+  weight: "400",
   variable: "--font-mono"
 });
 
@@ -26,7 +27,7 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="zh-CN">
-      <body className={`${displayFont.variable} ${monoFont.variable}`}>
+      <body className={`${monoBaseFont.variable} ${monoFont.variable}`}>
         {children}
       </body>
     </html>
