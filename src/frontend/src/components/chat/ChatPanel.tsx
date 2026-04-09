@@ -34,6 +34,8 @@ export function ChatPanel() {
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const stickToBottomRef = useRef(true);
   const frameRef = useRef<number | null>(null);
+  const lastScrollTopRef = useRef(0);
+  const programmaticScrollRef = useRef(false);
   const rowCacheRef = useRef(
     new Map<string, { source: ChatRow["message"]; streaming: boolean; row: ChatRow }>()
   );
@@ -93,7 +95,9 @@ export function ChatPanel() {
       if (!nextContainer || !stickToBottomRef.current) {
         return;
       }
+      programmaticScrollRef.current = true;
       nextContainer.scrollTop = nextContainer.scrollHeight;
+      lastScrollTopRef.current = nextContainer.scrollTop;
     };
 
     if (frameRef.current !== null) {
@@ -121,9 +125,26 @@ export function ChatPanel() {
     }
 
     const handleScroll = () => {
+      const nextScrollTop = container.scrollTop;
       const distanceToBottom =
-        container.scrollHeight - container.scrollTop - container.clientHeight;
-      stickToBottomRef.current = distanceToBottom <= AUTO_SCROLL_THRESHOLD;
+        container.scrollHeight - nextScrollTop - container.clientHeight;
+
+      if (programmaticScrollRef.current) {
+        programmaticScrollRef.current = false;
+        lastScrollTopRef.current = nextScrollTop;
+        stickToBottomRef.current = distanceToBottom <= AUTO_SCROLL_THRESHOLD;
+        return;
+      }
+
+      const scrolledUp = nextScrollTop < lastScrollTopRef.current;
+      lastScrollTopRef.current = nextScrollTop;
+
+      if (scrolledUp) {
+        stickToBottomRef.current = false;
+      } else if (distanceToBottom <= AUTO_SCROLL_THRESHOLD) {
+        stickToBottomRef.current = true;
+      }
+
       if (!stickToBottomRef.current && frameRef.current !== null) {
         window.cancelAnimationFrame(frameRef.current);
         frameRef.current = null;
