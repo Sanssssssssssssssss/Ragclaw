@@ -84,7 +84,14 @@ export function ChatPanel() {
     setEditError("");
   }, [pendingHitl]);
 
-  const syncToBottom = (defer = true) => {
+  const cancelScheduledScroll = useCallback(() => {
+    if (frameRef.current !== null) {
+      window.cancelAnimationFrame(frameRef.current);
+      frameRef.current = null;
+    }
+  }, []);
+
+  const syncToBottom = useCallback((defer = true) => {
     const container = scrollRef.current;
     if (!container || !stickToBottomRef.current) {
       return;
@@ -100,10 +107,7 @@ export function ChatPanel() {
       lastScrollTopRef.current = nextContainer.scrollTop;
     };
 
-    if (frameRef.current !== null) {
-      window.cancelAnimationFrame(frameRef.current);
-      frameRef.current = null;
-    }
+    cancelScheduledScroll();
 
     if (!defer) {
       run();
@@ -111,12 +115,10 @@ export function ChatPanel() {
     }
 
     frameRef.current = window.requestAnimationFrame(() => {
-      frameRef.current = window.requestAnimationFrame(() => {
-        frameRef.current = null;
-        run();
-      });
+      frameRef.current = null;
+      run();
     });
-  };
+  }, [cancelScheduledScroll]);
 
   useLayoutEffect(() => {
     const container = scrollRef.current;
@@ -141,45 +143,62 @@ export function ChatPanel() {
 
       if (scrolledUp) {
         stickToBottomRef.current = false;
+        cancelScheduledScroll();
       } else if (distanceToBottom <= AUTO_SCROLL_THRESHOLD) {
         stickToBottomRef.current = true;
       }
 
-      if (!stickToBottomRef.current && frameRef.current !== null) {
-        window.cancelAnimationFrame(frameRef.current);
-        frameRef.current = null;
+      if (!stickToBottomRef.current) {
+        cancelScheduledScroll();
       }
+    };
+
+    const handleWheel = (event: WheelEvent) => {
+      if (event.deltaY < 0) {
+        stickToBottomRef.current = false;
+        cancelScheduledScroll();
+      }
+    };
+
+    const handlePointerDown = () => {
+      cancelScheduledScroll();
     };
 
     handleScroll();
     container.addEventListener("scroll", handleScroll, { passive: true });
-    return () => container.removeEventListener("scroll", handleScroll);
-  }, []);
+    container.addEventListener("wheel", handleWheel, { passive: true });
+    container.addEventListener("pointerdown", handlePointerDown, { passive: true });
+    return () => {
+      container.removeEventListener("scroll", handleScroll);
+      container.removeEventListener("wheel", handleWheel);
+      container.removeEventListener("pointerdown", handlePointerDown);
+    };
+  }, [cancelScheduledScroll, syncToBottom]);
 
   useLayoutEffect(() => {
     if (!renderableMessages.length) {
       return;
     }
     syncToBottom(false);
-  }, [renderableMessages.length]);
+  }, [renderableMessages.length, syncToBottom]);
 
   useLayoutEffect(() => {
     stickToBottomRef.current = true;
     syncToBottom(false);
-  }, [currentSessionId]);
+  }, [currentSessionId, syncToBottom]);
 
   useLayoutEffect(() => {
     if (!lastMessage) {
       return;
     }
     syncToBottom(true);
-  }, [isStreaming, lastMessage]);
+  }, [isStreaming, lastMessage, syncToBottom]);
 
   const handleTotalHeightChange = useCallback(() => {
     if (stickToBottomRef.current) {
       syncToBottom(false);
     }
-  }, []);
+  }, [syncToBottom]);
 
   const handleEditAndContinue = useCallback(() => {
     if (!pendingHitl) return;
