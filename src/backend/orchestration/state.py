@@ -49,6 +49,12 @@ class GraphState(TypedDict, total=False):
     answer_usage: dict[str, int] | None
     answer_finalized: bool
     rag_mode: bool
+    turn_id: str
+    context_call_ids: list[str]
+    selected_memory_ids: list[str]
+    selected_artifact_ids: list[str]
+    selected_evidence_ids: list[str]
+    selected_conversation_ids: list[str]
 
 
 def create_initial_graph_state(
@@ -106,4 +112,10 @@ def create_initial_graph_state(
         answer_usage=None,
         answer_finalized=False,
         rag_mode=False,
+        turn_id="",
+        context_call_ids=[],
+        selected_memory_ids=[],
+        selected_artifact_ids=[],
+        selected_evidence_ids=[],
+        selected_conversation_ids=[],
     )

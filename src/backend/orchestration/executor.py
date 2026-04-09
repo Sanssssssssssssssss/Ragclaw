@@ -10,7 +10,7 @@ from langgraph.types import Command, interrupt
 from src.backend.capabilities.invocation import CapabilityRuntimeContext, GovernedCapabilityTool, capability_runtime_scope, invoke_capability
 from src.backend.capabilities.types import CapabilityResult
 from src.backend.context import ContextAssembler, ContextWriter
-from src.backend.context.models import ContextAssembly, ContextTurnSnapshot
+from src.backend.context.models import ContextAssembly, ContextModelCallSnapshot, ContextTurnSnapshot
 from src.backend.context.store import context_store
 from src.backend.decision.skill_gate import SkillDecision, skill_instruction
 from src.backend.observability.types import AnswerRecord, RetrievalRecord, RouteDecisionRecord, SkillDecisionRecord, ToolCallRecord
@@ -159,8 +159,13 @@ class HarnessLangGraphOrchestrator:
             "augmented_history": list(state.get("history", [])),
             "rag_mode": self._agent._runtime_rag_mode(),
             "governor_snapshot": bindings.runtime.governor_for(bindings.handle.run_id).snapshot(),
+            "turn_id": self._current_turn_id(state),
         }
-        context_updates = self._context_writer.snapshot(base_state, updated_at=bindings.runtime.now())
+        _payload, context_updates = self._write_context_snapshot(
+            state=state,
+            result=base_state,
+            turn_id=base_state["turn_id"],
+        )
         return {
             "augmented_history": list(state.get("history", [])),
             "rag_mode": self._agent._runtime_rag_mode(),
@@ -172,6 +177,14 @@ class HarnessLangGraphOrchestrator:
     async def route_node(self, state: GraphState) -> dict[str, Any]:
         bindings = self._bindings_or_raise()
         route_context = self._context_assembler.assemble(path_kind="direct_answer", state=state, call_site="route")
+        turn_id = self._current_turn_id(state)
+        route_call_id = self._record_model_call_snapshot(
+            state=state,
+            assembly=route_context,
+            call_site="route",
+            call_type="router_call",
+            turn_id=turn_id,
+        )
         strategy, decision = await self._agent.resolve_routing(state["user_message"], list(route_context.history_messages))
         await bindings.runtime.emit(
             bindings.handle,
@@ -190,7 +203,17 @@ class HarnessLangGraphOrchestrator:
                 model_name=decision.model_name,
             ).to_dict(),
         )
-        return {"execution_strategy": strategy, "route_decision": decision, "path_kind": self._path_kind_from_decision(decision)}
+        return {
+            "execution_strategy": strategy,
+            "route_decision": decision,
+            "path_kind": self._path_kind_from_decision(decision),
+            "turn_id": turn_id,
+            "context_call_ids": self._context_call_ids(state, route_call_id),
+            "selected_memory_ids": list(route_context.decision.selected_memory_ids),
+            "selected_artifact_ids": list(route_context.decision.selected_artifact_ids),
+            "selected_evidence_ids": list(route_context.decision.selected_evidence_ids),
+            "selected_conversation_ids": list(route_context.decision.selected_conversation_ids),
+        }
 
     async def skill_node(self, state: GraphState) -> dict[str, Any]:
         bindings = self._bindings_or_raise()
@@ -202,6 +225,14 @@ class HarnessLangGraphOrchestrator:
             path_kind=self._path_kind_from_decision(decision),
             state=state,
             call_site="skill",
+        )
+        turn_id = self._current_turn_id(state)
+        skill_call_id = self._record_model_call_snapshot(
+            state=state,
+            assembly=skill_context,
+            call_site="skill",
+            call_type="capability_selection_call",
+            turn_id=turn_id,
         )
         skill = self._agent.decide_skill(state["user_message"], list(skill_context.history_messages), strategy, decision)
         if skill.use_skill:
@@ -216,19 +247,30 @@ class HarnessLangGraphOrchestrator:
                 reason_short=skill.reason_short,
             ).to_dict(),
         )
-        updates = self._context_writer.snapshot({**dict(state), "skill_decision": skill}, updated_at=bindings.runtime.now())
-        return {"skill_decision": skill, **updates}
+        result = {
+            "skill_decision": skill,
+            "turn_id": turn_id,
+            "context_call_ids": self._context_call_ids(state, skill_call_id),
+            "selected_memory_ids": list(skill_context.decision.selected_memory_ids),
+            "selected_artifact_ids": list(skill_context.decision.selected_artifact_ids),
+            "selected_evidence_ids": list(skill_context.decision.selected_evidence_ids),
+            "selected_conversation_ids": list(skill_context.decision.selected_conversation_ids),
+        }
+        _payload, updates = self._write_context_snapshot(state=state, result=result, assembly=skill_context, turn_id=turn_id, call_ids=result["context_call_ids"])
+        return {**result, **updates}
 
     async def memory_retrieval_node(self, state: GraphState) -> dict[str, Any]:
         bindings = self._bindings_or_raise()
         strategy = state.get("execution_strategy")
         if not state.get("rag_mode") or strategy is None or not strategy.allow_retrieval:
-            updates = self._context_writer.snapshot({**dict(state), "memory_retrieval": []}, updated_at=bindings.runtime.now())
+            result = {"memory_retrieval": [], "turn_id": self._current_turn_id(state)}
+            _payload, updates = self._write_context_snapshot(state=state, result=result, turn_id=result["turn_id"])
             return {"memory_retrieval": [], **updates}
         await bindings.runtime.emit(bindings.handle, "retrieval.started", {"kind": "memory", "stage": "memory", "title": "Memory retrieval", "message": ""})
         retrievals = self._memory_retrieve(state["user_message"])
         if not retrievals:
-            updates = self._context_writer.snapshot({**dict(state), "memory_retrieval": []}, updated_at=bindings.runtime.now())
+            result = {"memory_retrieval": [], "turn_id": self._current_turn_id(state)}
+            _payload, updates = self._write_context_snapshot(state=state, result=result, turn_id=result["turn_id"])
             return {"memory_retrieval": [], **updates}
         step = self._agent._format_memory_retrieval_step(retrievals)
         await bindings.runtime.emit(
@@ -242,24 +284,60 @@ class HarnessLangGraphOrchestrator:
                 results=tuple(self._agent._harness_retrieval_evidence_records(step["results"])),
             ).to_dict(),
         )
-        updates = self._context_writer.snapshot(
-            {**dict(state), "memory_retrieval": retrievals},
-            updated_at=bindings.runtime.now(),
+        result = {
+            "memory_retrieval": retrievals,
+            "turn_id": self._current_turn_id(state),
+        }
+        _payload, updates = self._write_context_snapshot(
+            state=state,
+            result=result,
+            turn_id=result["turn_id"],
         )
         return {"memory_retrieval": retrievals, **updates}
 
     async def direct_answer_node(self, state: GraphState) -> dict[str, Any]:
         strategy = state.get("execution_strategy")
         assembly = self._context_assembler.assemble(path_kind="direct_answer", state=state, call_site="direct_answer")
-        self._record_turn_context_snapshot(state=state, assembly=assembly, call_site="direct_answer", model_invoked=True)
+        turn_id = self._current_turn_id(state)
+        call_type = "resume_after_hitl_call" if assembly.path_kind == "resumed_hitl" else "final_answer_call"
+        answer_call_id = self._record_model_call_snapshot(
+            state=state,
+            assembly=assembly,
+            call_site="direct_answer",
+            call_type=call_type,
+            turn_id=turn_id,
+        )
+        call_ids = self._context_call_ids(state, answer_call_id)
         messages = list(assembly.history_messages)
         messages.append({"role": "user", "content": state["user_message"]})
         extra_instructions = list(assembly.extra_instructions)
         if strategy is not None:
             extra_instructions.extend(strategy.to_instructions())
         answer, usage = await self._stream_model_answer(messages, extra_instructions=extra_instructions or None)
-        result = {"final_answer": answer, "answer_usage": usage, "answer_finalized": True, "answer_segments": [answer] if answer else []}
-        updates = self._context_writer.snapshot({**dict(state), **result}, updated_at=self._bindings_or_raise().runtime.now())
+        result = {
+            "final_answer": answer,
+            "answer_usage": usage,
+            "answer_finalized": True,
+            "answer_segments": [answer] if answer else [],
+            "turn_id": turn_id,
+            "context_call_ids": call_ids,
+        }
+        final_state, updates = self._write_context_snapshot(
+            state=state,
+            result=result,
+            assembly=assembly,
+            turn_id=turn_id,
+            call_ids=call_ids,
+        )
+        self._record_post_turn_snapshot(
+            state=final_state,
+            assembly=assembly,
+            call_site="direct_answer",
+            model_invoked=True,
+            updates=updates,
+            turn_id=turn_id,
+            call_ids=call_ids,
+        )
         return {**result, **updates}
 
     async def knowledge_retrieval_node(self, state: GraphState) -> dict[str, Any]:
@@ -284,16 +362,29 @@ class HarnessLangGraphOrchestrator:
                         reason=getattr(result, "reason", ""),
                     ).to_dict(),
                 )
-        updates = self._context_writer.snapshot(
-            {**dict(state), "knowledge_retrieval": result},
-            updated_at=bindings.runtime.now(),
+        result_payload = {
+            "knowledge_retrieval": result,
+            "turn_id": self._current_turn_id(state),
+        }
+        _payload, updates = self._write_context_snapshot(
+            state=state,
+            result=result_payload,
+            turn_id=result_payload["turn_id"],
         )
         return {"knowledge_retrieval": result, **updates}
 
     async def knowledge_synthesis_node(self, state: GraphState) -> dict[str, Any]:
         result = state.get("knowledge_retrieval")
         assembly = self._context_assembler.assemble(path_kind="knowledge_qa", state=state, call_site="knowledge_synthesis")
-        self._record_turn_context_snapshot(state=state, assembly=assembly, call_site="knowledge_synthesis", model_invoked=True)
+        turn_id = self._current_turn_id(state)
+        call_id = self._record_model_call_snapshot(
+            state=state,
+            assembly=assembly,
+            call_site="knowledge_synthesis",
+            call_type="knowledge_synthesis_call",
+            turn_id=turn_id,
+        )
+        call_ids = self._context_call_ids(state, call_id)
         messages = list(assembly.history_messages)
         messages.append({"role": "user", "content": state["user_message"]})
         extra_instructions = list(assembly.extra_instructions)
@@ -305,8 +396,23 @@ class HarnessLangGraphOrchestrator:
             system_prompt_override=self._agent._knowledge_system_prompt(),
             stream_deltas=False,
         )
-        result_payload = {"final_answer": answer, "answer_usage": usage}
-        updates = self._context_writer.snapshot({**dict(state), **result_payload}, updated_at=self._bindings_or_raise().runtime.now())
+        result_payload = {
+            "final_answer": answer,
+            "answer_usage": usage,
+            "turn_id": turn_id,
+            "context_call_ids": call_ids,
+            "selected_memory_ids": list(assembly.decision.selected_memory_ids),
+            "selected_artifact_ids": list(assembly.decision.selected_artifact_ids),
+            "selected_evidence_ids": list(assembly.decision.selected_evidence_ids),
+            "selected_conversation_ids": list(assembly.decision.selected_conversation_ids),
+        }
+        _payload, updates = self._write_context_snapshot(
+            state=state,
+            result=result_payload,
+            assembly=assembly,
+            turn_id=turn_id,
+            call_ids=call_ids,
+        )
         return {**result_payload, **updates}
 
     async def knowledge_guard_node(self, state: GraphState) -> dict[str, Any]:
@@ -321,16 +427,42 @@ class HarnessLangGraphOrchestrator:
             if guard_result is not None:
                 await bindings.runtime.emit(bindings.handle, "guard.failed", guard_result.to_dict())
         await self._emit_final_answer(answer, usage=state.get("answer_usage"))
-        result_payload = {"final_answer": answer, "guard_result": guard_result, "answer_finalized": True, "answer_segments": [answer] if answer else []}
-        updates = self._context_writer.snapshot({**dict(state), **result_payload}, updated_at=bindings.runtime.now())
+        assembly = self._context_assembler.assemble(path_kind="knowledge_qa", state=state, call_site="knowledge_synthesis")
+        turn_id = self._current_turn_id(state)
+        call_ids = self._context_call_ids(state)
+        result_payload = {
+            "final_answer": answer,
+            "guard_result": guard_result,
+            "answer_finalized": True,
+            "answer_segments": [answer] if answer else [],
+            "turn_id": turn_id,
+            "context_call_ids": call_ids,
+        }
+        final_state, updates = self._write_context_snapshot(
+            state=state,
+            result=result_payload,
+            assembly=assembly,
+            turn_id=turn_id,
+            call_ids=call_ids,
+        )
+        self._record_post_turn_snapshot(
+            state=final_state,
+            assembly=assembly,
+            call_site="knowledge_synthesis",
+            model_invoked=True,
+            updates=updates,
+            turn_id=turn_id,
+            call_ids=call_ids,
+        )
         return {**result_payload, **updates}
 
     async def capability_selection_node(self, state: GraphState) -> dict[str, Any]:
         bindings = self._bindings_or_raise()
         strategy = state.get("execution_strategy")
         if strategy is None:
-            updates = self._context_writer.snapshot({**dict(state), "selected_capabilities": []}, updated_at=bindings.runtime.now())
-            return {"selected_capabilities": [], **updates}
+            result = {"selected_capabilities": [], "turn_id": self._current_turn_id(state)}
+            _payload, updates = self._write_context_snapshot(state=state, result=result, turn_id=result["turn_id"])
+            return {**result, **updates}
         decision = state.get("route_decision")
         tools = self._agent._resolve_tools_for_strategy(strategy)
         if decision is not None and decision.allowed_tools:
@@ -343,7 +475,7 @@ class HarnessLangGraphOrchestrator:
             "explicit_capability_payload": explicit_payload,
             "path_kind": "capability_path",
         }
-        updates = self._context_writer.snapshot({**dict(state), **result}, updated_at=bindings.runtime.now())
+        _payload, updates = self._write_context_snapshot(state=state, result=result, turn_id=self._current_turn_id(state))
         return {**result, **updates}
 
     async def capability_approval_node(self, state: GraphState) -> dict[str, Any]:
@@ -435,8 +567,9 @@ class HarnessLangGraphOrchestrator:
                 "interrupt_request": request,
                 "approval_decision": "approve",
                 "recovery_action": "",
+                "turn_id": self._current_turn_id(state),
             }
-            updates = self._context_writer.snapshot({**dict(state), **result}, updated_at=bindings.runtime.now())
+            _payload, updates = self._write_context_snapshot(state=state, result=result, turn_id=result["turn_id"])
             return {**result, **updates}
         if decision == "edit":
             bindings.context.approval_overrides.add(str(request["capability_id"]))
@@ -446,8 +579,9 @@ class HarnessLangGraphOrchestrator:
                 "explicit_capability_id": str(request["capability_id"]),
                 "explicit_capability_payload": dict(payload.get("edited_input_snapshot", {}) or request["proposed_input"]),
                 "recovery_action": "",
+                "turn_id": self._current_turn_id(state),
             }
-            updates = self._context_writer.snapshot({**dict(state), **result}, updated_at=bindings.runtime.now())
+            _payload, updates = self._write_context_snapshot(state=state, result=result, turn_id=result["turn_id"])
             return {**result, **updates}
 
         blocked_result = CapabilityResult(
@@ -497,12 +631,7 @@ class HarnessLangGraphOrchestrator:
             state=state,
             call_site="hitl_rejection",
         )
-        self._record_turn_context_snapshot(
-            state=state,
-            assembly=rejection_context,
-            call_site="hitl_rejection",
-            model_invoked=False,
-        )
+        turn_id = self._current_turn_id(state)
         await self._emit_final_answer(rejection_answer)
         result = {
             "interrupt_request": request,
@@ -522,8 +651,25 @@ class HarnessLangGraphOrchestrator:
             "answer_finalized": True,
             "needs_answer_synthesis": False,
             "recovery_action": "",
+            "turn_id": turn_id,
+            "context_call_ids": self._context_call_ids(state),
         }
-        updates = self._context_writer.snapshot({**dict(state), **result}, updated_at=bindings.runtime.now())
+        final_state, updates = self._write_context_snapshot(
+            state=state,
+            result=result,
+            assembly=rejection_context,
+            turn_id=turn_id,
+            call_ids=result["context_call_ids"],
+        )
+        self._record_post_turn_snapshot(
+            state=final_state,
+            assembly=rejection_context,
+            call_site="hitl_rejection",
+            model_invoked=False,
+            updates=updates,
+            turn_id=turn_id,
+            call_ids=result["context_call_ids"],
+        )
         return {**result, **updates}
 
     async def capability_invoke_node(self, state: GraphState) -> dict[str, Any]:
@@ -540,8 +686,9 @@ class HarnessLangGraphOrchestrator:
                 if str(getattr(tool, "name", "") or "") in selected_capabilities
             ]
         if not tools:
-            updates = self._context_writer.snapshot({**dict(state), "selected_capabilities": []}, updated_at=bindings.runtime.now())
-            return {"selected_capabilities": [], **updates}
+            result = {"selected_capabilities": [], "turn_id": self._current_turn_id(state)}
+            _payload, updates = self._write_context_snapshot(state=state, result=result, turn_id=result["turn_id"])
+            return {**result, **updates}
         explicit_id = str(state.get("explicit_capability_id", "") or "")
         explicit_payload = state.get("explicit_capability_payload")
         if explicit_id and explicit_payload is not None:
@@ -572,12 +719,7 @@ class HarnessLangGraphOrchestrator:
                     state=state,
                     call_site="capability_direct_output",
                 )
-                self._record_turn_context_snapshot(
-                    state=state,
-                    assembly=direct_output_context,
-                    call_site="capability_direct_output",
-                    model_invoked=False,
-                )
+                turn_id = self._current_turn_id(state)
                 await self._emit_final_answer(rendered)
                 result_payload = {
                     "recorded_tools": [{"tool": explicit_id, "input": tool_input, "output": rendered, "call_id": call_id}],
@@ -589,8 +731,25 @@ class HarnessLangGraphOrchestrator:
                     "last_failure": None,
                     "recovery_action": "",
                     "recovered_from_failure": bool(state.get("last_failure")),
+                    "turn_id": turn_id,
+                    "context_call_ids": self._context_call_ids(state),
                 }
-                updates = self._context_writer.snapshot({**dict(state), **result_payload}, updated_at=bindings.runtime.now())
+                final_state, updates = self._write_context_snapshot(
+                    state=state,
+                    result=result_payload,
+                    assembly=direct_output_context,
+                    turn_id=turn_id,
+                    call_ids=result_payload["context_call_ids"],
+                )
+                self._record_post_turn_snapshot(
+                    state=final_state,
+                    assembly=direct_output_context,
+                    call_site="capability_direct_output",
+                    model_invoked=False,
+                    updates=updates,
+                    turn_id=turn_id,
+                    call_ids=result_payload["context_call_ids"],
+                )
                 return {**result_payload, **updates}
             result_payload = {
                 "recorded_tools": [{"tool": explicit_id, "input": tool_input, "output": rendered, "call_id": call_id}],
@@ -602,8 +761,9 @@ class HarnessLangGraphOrchestrator:
                 "last_failure": result_entry,
                 "recovery_action": "",
                 "recovered_from_failure": False,
+                "turn_id": self._current_turn_id(state),
             }
-            updates = self._context_writer.snapshot({**dict(state), **result_payload}, updated_at=bindings.runtime.now())
+            _payload, updates = self._write_context_snapshot(state=state, result=result_payload, turn_id=result_payload["turn_id"])
             return {**result_payload, **updates}
         return await self._invoke_tool_path(
             state=state,
@@ -621,8 +781,9 @@ class HarnessLangGraphOrchestrator:
                 "last_failure": None,
                 "recovery_action": "",
                 "recovery_metadata": dict(state.get("recovery_metadata", {}) or {}),
+                "turn_id": self._current_turn_id(state),
             }
-            updates = self._context_writer.snapshot({**dict(state), **result}, updated_at=bindings.runtime.now())
+            _payload, updates = self._write_context_snapshot(state=state, result=result, turn_id=result["turn_id"])
             return {**result, **updates}
 
         spec = self._agent.get_capability_registry().get(failure.capability_id)
@@ -676,8 +837,9 @@ class HarnessLangGraphOrchestrator:
                 },
                 "answer_finalized": False,
                 "approval_decision": "",
+                "turn_id": self._current_turn_id(state),
             }
-            updates = self._context_writer.snapshot({**dict(state), **result}, updated_at=bindings.runtime.now())
+            _payload, updates = self._write_context_snapshot(state=state, result=result, turn_id=result["turn_id"])
             return {**result, **updates}
 
         if decision.action == "escalate_to_hitl":
@@ -708,8 +870,9 @@ class HarnessLangGraphOrchestrator:
                     "last_failure_key": failure.failure_key,
                 },
                 "answer_finalized": False,
+                "turn_id": self._current_turn_id(state),
             }
-            updates = self._context_writer.snapshot({**dict(state), **result}, updated_at=bindings.runtime.now())
+            _payload, updates = self._write_context_snapshot(state=state, result=result, turn_id=result["turn_id"])
             return {**result, **updates}
 
         fail_fast = decision.action == "fail_fast"
@@ -731,12 +894,7 @@ class HarnessLangGraphOrchestrator:
             state=state,
             call_site="recovery_fallback",
         )
-        self._record_turn_context_snapshot(
-            state=state,
-            assembly=recovery_context,
-            call_site="recovery_fallback",
-            model_invoked=False,
-        )
+        turn_id = self._current_turn_id(state)
         await self._emit_final_answer(answer)
         result = {
             "final_answer": answer,
@@ -750,8 +908,25 @@ class HarnessLangGraphOrchestrator:
                 "last_decision_reason": decision.reason,
                 "last_failure_key": failure.failure_key,
             },
+            "turn_id": turn_id,
+            "context_call_ids": self._context_call_ids(state),
         }
-        updates = self._context_writer.snapshot({**dict(state), **result}, updated_at=bindings.runtime.now())
+        final_state, updates = self._write_context_snapshot(
+            state=state,
+            result=result,
+            assembly=recovery_context,
+            turn_id=turn_id,
+            call_ids=result["context_call_ids"],
+        )
+        self._record_post_turn_snapshot(
+            state=final_state,
+            assembly=recovery_context,
+            call_site="recovery_fallback",
+            model_invoked=False,
+            updates=updates,
+            turn_id=turn_id,
+            call_ids=result["context_call_ids"],
+        )
         return {**result, **updates}
 
     async def capability_synthesis_node(self, state: GraphState) -> dict[str, Any]:
@@ -780,27 +955,49 @@ class HarnessLangGraphOrchestrator:
                     state=state,
                     call_site="capability_output_join",
                 )
-                self._record_turn_context_snapshot(
+            else:
+                synthesis_context = self._context_assembler.assemble(
+                    path_kind="capability_path",
                     state=state,
-                    assembly=synthesis_context,
-                    call_site="capability_output_join",
-                    model_invoked=False,
+                    call_site="tool_result_fallback",
                 )
             await bindings.runtime.emit(bindings.handle, "answer.completed", AnswerRecord(content=final_answer, segment_index=bindings.runtime.current_segment_index(bindings.handle), final=True).to_dict())
-        result = {"final_answer": final_answer, "answer_finalized": True}
-        updates = self._context_writer.snapshot({**dict(state), **result}, updated_at=bindings.runtime.now())
+        else:
+            synthesis_context = self._context_assembler.assemble(
+                path_kind="capability_path",
+                state=state,
+                call_site="capability_output_join",
+            )
+        turn_id = self._current_turn_id(state)
+        call_ids = self._context_call_ids(state)
+        result = {"final_answer": final_answer, "answer_finalized": True, "turn_id": turn_id, "context_call_ids": call_ids}
+        final_state, updates = self._write_context_snapshot(
+            state=state,
+            result=result,
+            assembly=synthesis_context,
+            turn_id=turn_id,
+            call_ids=call_ids,
+        )
+        self._record_post_turn_snapshot(
+            state=final_state,
+            assembly=synthesis_context,
+            call_site="tool_result_fallback" if state.get("needs_answer_synthesis") else "capability_output_join",
+            model_invoked=bool(state.get("needs_answer_synthesis")),
+            updates=updates,
+            turn_id=turn_id,
+            call_ids=call_ids,
+        )
         return {**result, **updates}
 
     async def capability_guard_node(self, state: GraphState) -> dict[str, Any]:
-        bindings = self._bindings_or_raise()
         result = {"guard_result": None}
-        updates = self._context_writer.snapshot({**dict(state), **result}, updated_at=bindings.runtime.now())
+        _payload, updates = self._write_context_snapshot(state=state, result=result, turn_id=self._current_turn_id(state))
         return {**result, **updates}
 
     async def finalize_node(self, state: GraphState) -> dict[str, Any]:
         bindings = self._bindings_or_raise()
         result = {"governor_snapshot": bindings.runtime.governor_for(bindings.handle.run_id).snapshot()}
-        updates = self._context_writer.snapshot({**dict(state), **result}, updated_at=bindings.runtime.now())
+        _payload, updates = self._write_context_snapshot(state=state, result=result, turn_id=self._current_turn_id(state))
         return {**result, **updates}
 
     def _thread_id_for(self, handle: "RuntimeRunHandle") -> str:
@@ -1030,6 +1227,15 @@ class HarnessLangGraphOrchestrator:
             state=state,
             call_site="tool_agent",
         )
+        turn_id = self._current_turn_id(state)
+        tool_agent_call_id = self._record_model_call_snapshot(
+            state=state,
+            assembly=assembly,
+            call_site="tool_agent",
+            call_type="final_answer_call",
+            turn_id=turn_id,
+        )
+        call_ids = self._context_call_ids(state, tool_agent_call_id)
         extra_instructions = list(assembly.extra_instructions)
         extra_instructions.extend(self._execution.tool_agent_instructions(strategy, skill_decision or SkillDecision(False, "", 0.0, "")))
         agent = self._execution.build_tool_agent(
@@ -1109,15 +1315,16 @@ class HarnessLangGraphOrchestrator:
             "last_failure": last_failure.to_dict() if last_failure is not None else None,
             "recovery_action": "",
             "recovered_from_failure": False,
+            "turn_id": turn_id,
+            "context_call_ids": call_ids,
         }
-        if final_answer and not result["needs_answer_synthesis"]:
-            self._record_turn_context_snapshot(
-                state=state,
-                assembly=assembly,
-                call_site="tool_agent",
-                model_invoked=True,
-            )
-        updates = self._context_writer.snapshot({**dict(state), **result}, updated_at=bindings.runtime.now())
+        _payload, updates = self._write_context_snapshot(
+            state=state,
+            result=result,
+            assembly=assembly,
+            turn_id=turn_id,
+            call_ids=call_ids,
+        )
         return {**result, **updates}
 
     def _consume_captured_result(self, context: CapabilityRuntimeContext, capability_id: str) -> dict[str, Any] | None:
@@ -1132,12 +1339,16 @@ class HarnessLangGraphOrchestrator:
             state=state,
             call_site="tool_result_fallback",
         )
-        self._record_turn_context_snapshot(
+        turn_id = self._current_turn_id(state)
+        call_id = self._record_model_call_snapshot(
             state=state,
             assembly=assembly,
             call_site="tool_result_fallback",
-            model_invoked=True,
+            call_type="final_answer_call",
+            turn_id=turn_id,
         )
+        state["turn_id"] = turn_id
+        state["context_call_ids"] = self._context_call_ids(state, call_id)
         fallback_messages = list(assembly.history_messages)
         fallback_messages.append({"role": "assistant", "content": self._execution.tool_results_context(recorded_tools)})
         fallback_messages.append({"role": "user", "content": user_message})
@@ -1158,38 +1369,169 @@ class HarnessLangGraphOrchestrator:
         await self._emit_final_answer(fallback)
         return fallback
 
-    def _record_turn_context_snapshot(
+    def _current_turn_id(self, state: GraphState, *, segment_index: int | None = None) -> str:
+        explicit = str(state.get("turn_id", "") or "").strip()
+        if explicit:
+            return explicit
+        bindings = self._bindings_or_raise()
+        run_id = str(state.get("run_id", "") or bindings.handle.run_id).strip()
+        resolved_segment = bindings.runtime.current_segment_index(bindings.handle) if segment_index is None else int(segment_index)
+        return f"{run_id}:{resolved_segment}"
+
+    def _context_call_ids(self, state: GraphState, *extra: str) -> list[str]:
+        ordered: list[str] = []
+        for item in list(state.get("context_call_ids", []) or []):
+            value = str(item or "").strip()
+            if value and value not in ordered:
+                ordered.append(value)
+        for item in extra:
+            value = str(item or "").strip()
+            if value and value not in ordered:
+                ordered.append(value)
+        return ordered
+
+    def _context_budget_report(self, assembly: ContextAssembly) -> dict[str, Any]:
+        return {
+            "allocated": assembly.budget.to_dict(),
+            "used": dict(assembly.budget_used),
+            "excluded_from_prompt": list(assembly.excluded_from_prompt),
+        }
+
+    def _run_context_meta(self, state: GraphState, *, assembly: ContextAssembly | None = None) -> dict[str, Any]:
+        bindings = self._bindings_or_raise()
+        checkpoint_meta = dict(state.get("checkpoint_meta", {}) or {})
+        thread_id = str(state.get("thread_id", "") or state.get("session_id", "") or "").strip() or self._thread_id_for(bindings.handle)
+        run_status = str(
+            checkpoint_meta.get("run_status", "")
+            or getattr(bindings.handle.metadata, "run_status", "")
+            or ("recovery" if assembly is not None and assembly.path_kind == "recovery_path" else "fresh")
+        )
+        return {
+            "thread_id": thread_id,
+            "run_id": str(state.get("run_id", "") or bindings.handle.run_id).strip(),
+            "session_id": str(state.get("session_id", "") or getattr(bindings.handle.metadata, "session_id", "") or "").strip() or None,
+            "run_status": run_status,
+            "resume_source": str(
+                checkpoint_meta.get("resume_source", "")
+                or getattr(bindings.handle.metadata, "resume_source", "")
+                or self._resume_source
+                or ""
+            ),
+            "checkpoint_id": str(
+                checkpoint_meta.get("checkpoint_id", "")
+                or getattr(bindings.handle.metadata, "checkpoint_id", "")
+                or self._resume_checkpoint_id
+                or ""
+            ),
+            "orchestration_engine": str(
+                checkpoint_meta.get("orchestration_engine", "")
+                or getattr(bindings.handle.metadata, "orchestration_engine", "")
+                or "langgraph"
+            ),
+        }
+
+    def _write_context_snapshot(
+        self,
+        *,
+        state: GraphState,
+        result: dict[str, Any] | None = None,
+        assembly: ContextAssembly | None = None,
+        turn_id: str | None = None,
+        call_ids: list[str] | None = None,
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
+        bindings = self._bindings_or_raise()
+        resolved_turn_id = str(turn_id or self._current_turn_id(state)).strip()
+        payload = {
+            **dict(state),
+            **dict(result or {}),
+            "turn_id": resolved_turn_id,
+            "context_call_ids": list(call_ids if call_ids is not None else self._context_call_ids(state)),
+        }
+        if assembly is not None:
+            payload["selected_memory_ids"] = list(assembly.decision.selected_memory_ids)
+            payload["selected_artifact_ids"] = list(assembly.decision.selected_artifact_ids)
+            payload["selected_evidence_ids"] = list(assembly.decision.selected_evidence_ids)
+            payload["selected_conversation_ids"] = list(assembly.decision.selected_conversation_ids)
+        updates = self._context_writer.snapshot(payload, updated_at=bindings.runtime.now())
+        return payload, updates
+
+    def _record_model_call_snapshot(
+        self,
+        *,
+        state: GraphState,
+        assembly: ContextAssembly,
+        call_site: str,
+        call_type: str,
+        turn_id: str | None = None,
+    ) -> str:
+        bindings = self._bindings_or_raise()
+        meta = self._run_context_meta(state, assembly=assembly)
+        resolved_turn_id = str(turn_id or self._current_turn_id(state)).strip()
+        call_id = f"{resolved_turn_id}:{call_site}"
+        snapshot = ContextModelCallSnapshot(
+            call_id=call_id,
+            session_id=meta["session_id"],
+            run_id=meta["run_id"],
+            thread_id=meta["thread_id"],
+            turn_id=resolved_turn_id,
+            call_type=call_type,
+            call_site=call_site,
+            path_type=assembly.path_kind,
+            user_query=str(state.get("user_message", "") or ""),
+            context_envelope=assembly.envelope,
+            assembly_decision=assembly.decision,
+            budget_report=self._context_budget_report(assembly),
+            selected_memory_ids=assembly.decision.selected_memory_ids,
+            selected_artifact_ids=assembly.decision.selected_artifact_ids,
+            selected_evidence_ids=assembly.decision.selected_evidence_ids,
+            selected_conversation_ids=assembly.decision.selected_conversation_ids,
+            dropped_items=assembly.decision.dropped_items,
+            truncation_reason=assembly.decision.truncation_reason,
+            run_status=meta["run_status"],
+            resume_source=meta["resume_source"],
+            checkpoint_id=meta["checkpoint_id"],
+            orchestration_engine=meta["orchestration_engine"],
+            created_at=bindings.runtime.now(),
+        )
+        try:
+            context_store.record_context_model_call(snapshot)
+        except Exception:
+            return ""
+        return call_id
+
+    def _post_turn_state_snapshot(self, *, state: dict[str, Any], updates: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "working_memory": dict(updates.get("working_memory", {}) or {}),
+            "episodic_summary": dict(updates.get("episodic_summary", {}) or {}),
+            "checkpoint_meta": dict(updates.get("checkpoint_meta", {}) or state.get("checkpoint_meta", {}) or {}),
+            "latest_consolidation": dict(updates.get("latest_consolidation", {}) or {}),
+            "final_answer": str(state.get("final_answer", "") or ""),
+            "answer_finalized": bool(state.get("answer_finalized", False)),
+            "last_failure": dict(state.get("last_failure", {}) or {}),
+            "recovery_action": str(state.get("recovery_action", "") or ""),
+            "approval_decision": str(state.get("approval_decision", "") or ""),
+        }
+
+    def _record_post_turn_snapshot(
         self,
         *,
         state: GraphState,
         assembly: ContextAssembly,
         call_site: str,
         model_invoked: bool,
+        updates: dict[str, Any],
+        turn_id: str | None = None,
+        call_ids: list[str] | None = None,
     ) -> None:
         bindings = self._bindings_or_raise()
-        thread_id = str(state.get("thread_id", "") or state.get("session_id", "") or "").strip()
-        if not thread_id:
-            thread_id = self._thread_id_for(bindings.handle)
-        run_id = str(state.get("run_id", "") or bindings.handle.run_id).strip()
-        session_id = str(state.get("session_id", "") or getattr(bindings.handle.metadata, "session_id", "") or "").strip() or None
-        segment_index = bindings.runtime.current_segment_index(bindings.handle)
-        turn_id = f"{run_id}:{segment_index}"
-        checkpoint_meta = dict(state.get("checkpoint_meta", {}) or {})
-        run_status = str(
-            checkpoint_meta.get("run_status", "")
-            or getattr(bindings.handle.metadata, "run_status", "")
-            or ("recovery" if assembly.path_kind == "recovery_path" else "fresh")
-        )
-        budget_report = {
-            "allocated": assembly.budget.to_dict(),
-            "used": dict(assembly.budget_used),
-            "excluded_from_prompt": list(assembly.excluded_from_prompt),
-        }
+        meta = self._run_context_meta(state, assembly=assembly)
+        resolved_turn_id = str(turn_id or self._current_turn_id(state)).strip()
+        segment_index = int(str(resolved_turn_id).rsplit(":", 1)[-1]) if ":" in resolved_turn_id else bindings.runtime.current_segment_index(bindings.handle)
         snapshot = ContextTurnSnapshot(
-            turn_id=turn_id,
-            session_id=session_id,
-            run_id=run_id,
-            thread_id=thread_id,
+            turn_id=resolved_turn_id,
+            session_id=meta["session_id"],
+            run_id=meta["run_id"],
+            thread_id=meta["thread_id"],
             assistant_message_id=None,
             segment_index=segment_index,
             call_site=call_site,
@@ -1197,32 +1539,20 @@ class HarnessLangGraphOrchestrator:
             user_query=str(state.get("user_message", "") or ""),
             context_envelope=assembly.envelope,
             assembly_decision=assembly.decision,
-            budget_report=budget_report,
+            budget_report=self._context_budget_report(assembly),
             selected_memory_ids=assembly.decision.selected_memory_ids,
             selected_artifact_ids=assembly.decision.selected_artifact_ids,
             selected_evidence_ids=assembly.decision.selected_evidence_ids,
             selected_conversation_ids=assembly.decision.selected_conversation_ids,
             dropped_items=assembly.decision.dropped_items,
             truncation_reason=assembly.decision.truncation_reason,
-            run_status=run_status,
-            resume_source=str(
-                checkpoint_meta.get("resume_source", "")
-                or getattr(bindings.handle.metadata, "resume_source", "")
-                or self._resume_source
-                or ""
-            ),
-            checkpoint_id=str(
-                checkpoint_meta.get("checkpoint_id", "")
-                or getattr(bindings.handle.metadata, "checkpoint_id", "")
-                or self._resume_checkpoint_id
-                or ""
-            ),
-            orchestration_engine=str(
-                checkpoint_meta.get("orchestration_engine", "")
-                or getattr(bindings.handle.metadata, "orchestration_engine", "")
-                or "langgraph"
-            ),
+            run_status=meta["run_status"],
+            resume_source=meta["resume_source"],
+            checkpoint_id=meta["checkpoint_id"],
+            orchestration_engine=meta["orchestration_engine"],
             model_invoked=model_invoked,
+            call_ids=tuple(call_ids if call_ids is not None else self._context_call_ids(state)),
+            post_turn_state_snapshot=self._post_turn_state_snapshot(state=state, updates=updates),
             created_at=bindings.runtime.now(),
         )
         try:

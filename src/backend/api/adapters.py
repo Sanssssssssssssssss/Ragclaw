@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from typing import Any
+from uuid import uuid4
 
 from src.backend.observability.types import HarnessEvent
 
@@ -35,6 +36,7 @@ class LegacyChatAccumulator:
     final_answer: str = ""
     last_done_payload: dict[str, Any] = field(default_factory=dict)
     run_meta: dict[str, Any] = field(default_factory=dict)
+    run_id: str = ""
     checkpoint_events: list[dict[str, Any]] = field(default_factory=list)
     hitl_events: list[dict[str, Any]] = field(default_factory=list)
 
@@ -125,6 +127,7 @@ class LegacyChatAccumulator:
 
     def consume(self, event: HarnessEvent) -> list[tuple[str, dict[str, Any]]]:
         payload = dict(event.payload)
+        self.run_id = event.run_id
         legacy_events: list[tuple[str, dict[str, Any]]] = []
 
         if event.name == "run.started":
@@ -301,8 +304,15 @@ class LegacyChatAccumulator:
 
         self._commit_current_segment()
         if persist_user_message:
-            session_manager.save_message(session_id, "user", user_message)
-        for segment in self.segments:
+            session_manager.save_message(
+                session_id,
+                "user",
+                user_message,
+                message_id=f"msg-{uuid4().hex}",
+                run_id=self.run_id or None,
+            )
+        for index, segment in enumerate(self.segments):
+            turn_id = f"{self.run_id}:{index}" if self.run_id else ""
             session_manager.save_message(
                 session_id,
                 "assistant",
@@ -313,4 +323,7 @@ class LegacyChatAccumulator:
                 run_meta=segment.get("run_meta") or None,
                 checkpoint_events=segment.get("checkpoint_events") or None,
                 hitl_events=segment.get("hitl_events") or None,
+                message_id=f"msg-{uuid4().hex}",
+                turn_id=turn_id or None,
+                run_id=self.run_id or None,
             )

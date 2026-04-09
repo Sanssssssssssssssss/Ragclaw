@@ -17,7 +17,7 @@ MemoryType = Literal[
     "session_episode",
 ]
 MemoryScope = Literal["user", "project", "thread", "global"]
-MemoryStatus = Literal["active", "stale", "superseded", "dropped"]
+MemoryStatus = Literal["active", "stale", "superseded", "dropped", "invalidated"]
 FreshnessState = Literal["fresh", "aging", "stale"]
 
 
@@ -157,6 +157,11 @@ class MemoryManifest:
     promotion_priority: int = 0
     conflict_flag: bool = False
     conflict_with: tuple[str, ...] = ()
+    source_turn_ids: tuple[str, ...] = ()
+    source_run_ids: tuple[str, ...] = ()
+    source_memory_ids: tuple[str, ...] = ()
+    generated_by: str = ""
+    generated_at: str = ""
     fingerprint: str = ""
     metadata: dict[str, Any] = field(default_factory=dict)
 
@@ -165,6 +170,9 @@ class MemoryManifest:
         payload["tags"] = list(self.tags)
         payload["supersedes"] = list(self.supersedes)
         payload["conflict_with"] = list(self.conflict_with)
+        payload["source_turn_ids"] = list(self.source_turn_ids)
+        payload["source_run_ids"] = list(self.source_run_ids)
+        payload["source_memory_ids"] = list(self.source_memory_ids)
         payload["applicability"] = dict(self.applicability)
         payload["metadata"] = dict(self.metadata)
         return payload
@@ -204,6 +212,11 @@ class StoredMemory(MemoryManifest):
             promotion_priority=self.promotion_priority,
             conflict_flag=self.conflict_flag,
             conflict_with=self.conflict_with,
+            source_turn_ids=self.source_turn_ids,
+            source_run_ids=self.source_run_ids,
+            source_memory_ids=self.source_memory_ids,
+            generated_by=self.generated_by,
+            generated_at=self.generated_at,
             fingerprint=self.fingerprint,
             metadata=self.metadata,
         )
@@ -230,6 +243,11 @@ class MemoryCandidate:
     applicability: dict[str, Any] = field(default_factory=dict)
     direct_prompt: bool = False
     promotion_priority: int = 0
+    source_turn_ids: tuple[str, ...] = ()
+    source_run_ids: tuple[str, ...] = ()
+    source_memory_ids: tuple[str, ...] = ()
+    generated_by: str = ""
+    generated_at: str = ""
     fingerprint: str = ""
     conflict_key: str = ""
 
@@ -238,6 +256,9 @@ class MemoryCandidate:
         payload["tags"] = list(self.tags)
         payload["metadata"] = dict(self.metadata)
         payload["supersedes"] = list(self.supersedes)
+        payload["source_turn_ids"] = list(self.source_turn_ids)
+        payload["source_run_ids"] = list(self.source_run_ids)
+        payload["source_memory_ids"] = list(self.source_memory_ids)
         payload["applicability"] = dict(self.applicability)
         return payload
 
@@ -305,6 +326,11 @@ class ContextTurnSnapshot:
     checkpoint_id: str = ""
     orchestration_engine: str = "langgraph"
     model_invoked: bool = True
+    excluded_from_context: bool = False
+    excluded_at: str = ""
+    exclusion_reason: str = ""
+    call_ids: tuple[str, ...] = ()
+    post_turn_state_snapshot: dict[str, Any] = field(default_factory=dict)
     created_at: str = ""
 
     def to_dict(self) -> dict[str, Any]:
@@ -332,6 +358,11 @@ class ContextTurnSnapshot:
             "checkpoint_id": self.checkpoint_id,
             "orchestration_engine": self.orchestration_engine,
             "model_invoked": self.model_invoked,
+            "excluded_from_context": self.excluded_from_context,
+            "excluded_at": self.excluded_at,
+            "exclusion_reason": self.exclusion_reason,
+            "call_ids": list(self.call_ids),
+            "post_turn_state_snapshot": dict(self.post_turn_state_snapshot),
             "created_at": self.created_at,
         }
 
@@ -358,6 +389,77 @@ class ContextTurnSnapshot:
             "checkpoint_id": self.checkpoint_id,
             "orchestration_engine": self.orchestration_engine,
             "model_invoked": self.model_invoked,
+            "excluded_from_context": self.excluded_from_context,
+            "excluded_at": self.excluded_at,
+            "exclusion_reason": self.exclusion_reason,
+            "call_ids": list(self.call_ids),
+            "created_at": self.created_at,
+        }
+
+
+@dataclass(frozen=True)
+class ContextModelCallSnapshot:
+    call_id: str
+    session_id: str | None
+    run_id: str
+    thread_id: str
+    turn_id: str
+    call_type: str
+    call_site: str
+    path_type: ContextPathKind
+    user_query: str
+    context_envelope: ContextEnvelope
+    assembly_decision: ContextAssemblyDecision
+    budget_report: dict[str, Any] = field(default_factory=dict)
+    selected_memory_ids: tuple[str, ...] = ()
+    selected_artifact_ids: tuple[str, ...] = ()
+    selected_evidence_ids: tuple[str, ...] = ()
+    selected_conversation_ids: tuple[str, ...] = ()
+    dropped_items: tuple[str, ...] = ()
+    truncation_reason: str = ""
+    run_status: str = "fresh"
+    resume_source: str = ""
+    checkpoint_id: str = ""
+    orchestration_engine: str = "langgraph"
+    created_at: str = ""
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "call_id": self.call_id,
+            "session_id": self.session_id,
+            "run_id": self.run_id,
+            "thread_id": self.thread_id,
+            "turn_id": self.turn_id,
+            "call_type": self.call_type,
+            "call_site": self.call_site,
+            "path_type": self.path_type,
+            "user_query": self.user_query,
+            "context_envelope": self.context_envelope.to_dict(),
+            "assembly_decision": self.assembly_decision.to_dict(),
+            "budget_report": dict(self.budget_report),
+            "selected_memory_ids": list(self.selected_memory_ids),
+            "selected_artifact_ids": list(self.selected_artifact_ids),
+            "selected_evidence_ids": list(self.selected_evidence_ids),
+            "selected_conversation_ids": list(self.selected_conversation_ids),
+            "dropped_items": list(self.dropped_items),
+            "truncation_reason": self.truncation_reason,
+            "run_status": self.run_status,
+            "resume_source": self.resume_source,
+            "checkpoint_id": self.checkpoint_id,
+            "orchestration_engine": self.orchestration_engine,
+            "created_at": self.created_at,
+        }
+
+    def to_summary_dict(self) -> dict[str, Any]:
+        return {
+            "call_id": self.call_id,
+            "turn_id": self.turn_id,
+            "call_type": self.call_type,
+            "call_site": self.call_site,
+            "path_type": self.path_type,
+            "run_status": self.run_status,
+            "resume_source": self.resume_source,
+            "checkpoint_id": self.checkpoint_id,
             "created_at": self.created_at,
         }
 
@@ -374,6 +476,12 @@ class ConversationRecallRecord:
     summary: str
     tags: tuple[str, ...] = ()
     metadata: dict[str, Any] = field(default_factory=dict)
+    source_turn_ids: tuple[str, ...] = ()
+    source_run_ids: tuple[str, ...] = ()
+    source_memory_ids: tuple[str, ...] = ()
+    generated_by: str = ""
+    generated_at: str = ""
+    status: str = "active"
     created_at: str = ""
     updated_at: str = ""
     fingerprint: str = ""
@@ -382,7 +490,34 @@ class ConversationRecallRecord:
         payload = asdict(self)
         payload["tags"] = list(self.tags)
         payload["metadata"] = dict(self.metadata)
+        payload["source_turn_ids"] = list(self.source_turn_ids)
+        payload["source_run_ids"] = list(self.source_run_ids)
+        payload["source_memory_ids"] = list(self.source_memory_ids)
         return payload
+
+
+@dataclass(frozen=True)
+class ContextAuditRecord:
+    audit_id: str
+    event_type: str
+    session_id: str | None
+    thread_id: str
+    run_id: str = ""
+    turn_id: str = ""
+    created_at: str = ""
+    payload: dict[str, Any] = field(default_factory=dict)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "audit_id": self.audit_id,
+            "event_type": self.event_type,
+            "session_id": self.session_id,
+            "thread_id": self.thread_id,
+            "run_id": self.run_id,
+            "turn_id": self.turn_id,
+            "created_at": self.created_at,
+            "payload": dict(self.payload),
+        }
 
 
 @dataclass(frozen=True)

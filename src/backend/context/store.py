@@ -13,7 +13,9 @@ from src.backend.context.models import (
     ConsolidationRunSummary,
     ContextAssembly,
     ContextAssemblyDecision,
+    ContextAuditRecord,
     ContextEnvelope,
+    ContextModelCallSnapshot,
     ContextTurnSnapshot,
     ConversationRecallRecord,
     EpisodicSummary,
@@ -157,6 +159,37 @@ class ContextStore:
                 checkpoint_id TEXT NOT NULL DEFAULT '',
                 orchestration_engine TEXT NOT NULL DEFAULT 'langgraph',
                 model_invoked INTEGER NOT NULL DEFAULT 1,
+                excluded_from_context INTEGER NOT NULL DEFAULT 0,
+                excluded_at TEXT NOT NULL DEFAULT '',
+                exclusion_reason TEXT NOT NULL DEFAULT '',
+                call_ids_json TEXT NOT NULL DEFAULT '[]',
+                post_state_json TEXT NOT NULL DEFAULT '{}',
+                created_at TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS context_model_calls (
+                call_id TEXT PRIMARY KEY,
+                session_id TEXT,
+                run_id TEXT NOT NULL,
+                thread_id TEXT NOT NULL,
+                turn_id TEXT NOT NULL,
+                call_type TEXT NOT NULL,
+                call_site TEXT NOT NULL,
+                path_type TEXT NOT NULL,
+                user_query TEXT NOT NULL,
+                context_envelope_json TEXT NOT NULL,
+                assembly_decision_json TEXT NOT NULL,
+                budget_report_json TEXT NOT NULL,
+                selected_memory_ids_json TEXT NOT NULL,
+                selected_artifact_ids_json TEXT NOT NULL,
+                selected_evidence_ids_json TEXT NOT NULL,
+                selected_conversation_ids_json TEXT NOT NULL,
+                dropped_items_json TEXT NOT NULL,
+                truncation_reason TEXT NOT NULL,
+                run_status TEXT NOT NULL DEFAULT 'fresh',
+                resume_source TEXT NOT NULL DEFAULT '',
+                checkpoint_id TEXT NOT NULL DEFAULT '',
+                orchestration_engine TEXT NOT NULL DEFAULT 'langgraph',
                 created_at TEXT NOT NULL
             );
 
@@ -171,9 +204,26 @@ class ContextStore:
                 summary TEXT NOT NULL,
                 tags_json TEXT NOT NULL,
                 metadata_json TEXT NOT NULL,
+                source_turn_ids_json TEXT NOT NULL DEFAULT '[]',
+                source_run_ids_json TEXT NOT NULL DEFAULT '[]',
+                source_memory_ids_json TEXT NOT NULL DEFAULT '[]',
+                generated_by TEXT NOT NULL DEFAULT '',
+                generated_at TEXT NOT NULL DEFAULT '',
+                status TEXT NOT NULL DEFAULT 'active',
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL,
                 fingerprint TEXT NOT NULL UNIQUE
+            );
+
+            CREATE TABLE IF NOT EXISTS context_audit (
+                audit_id TEXT PRIMARY KEY,
+                event_type TEXT NOT NULL,
+                session_id TEXT,
+                thread_id TEXT NOT NULL,
+                run_id TEXT NOT NULL DEFAULT '',
+                turn_id TEXT NOT NULL DEFAULT '',
+                payload_json TEXT NOT NULL,
+                created_at TEXT NOT NULL
             );
 
             CREATE TABLE IF NOT EXISTS consolidation_runs (
@@ -196,7 +246,10 @@ class ContextStore:
             CREATE INDEX IF NOT EXISTS idx_context_turns_session_created ON context_turns(session_id, created_at DESC);
             CREATE INDEX IF NOT EXISTS idx_context_turns_thread_created ON context_turns(thread_id, created_at DESC);
             CREATE INDEX IF NOT EXISTS idx_context_turns_run_segment ON context_turns(run_id, segment_index DESC);
+            CREATE INDEX IF NOT EXISTS idx_context_model_calls_turn_created ON context_model_calls(turn_id, created_at ASC);
+            CREATE INDEX IF NOT EXISTS idx_context_model_calls_session_created ON context_model_calls(session_id, created_at DESC);
             CREATE INDEX IF NOT EXISTS idx_conversation_recall_thread ON conversation_recall(thread_id, updated_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_context_audit_thread_created ON context_audit(thread_id, created_at DESC);
             CREATE INDEX IF NOT EXISTS idx_consolidation_runs_created ON consolidation_runs(created_at DESC);
             """
         )
@@ -219,6 +272,11 @@ class ContextStore:
             "conflict_flag": "INTEGER NOT NULL DEFAULT 0",
             "conflict_with_json": "TEXT NOT NULL DEFAULT '[]'",
             "conflict_key": "TEXT NOT NULL DEFAULT ''",
+            "source_turn_ids_json": "TEXT NOT NULL DEFAULT '[]'",
+            "source_run_ids_json": "TEXT NOT NULL DEFAULT '[]'",
+            "source_memory_ids_json": "TEXT NOT NULL DEFAULT '[]'",
+            "generated_by": "TEXT NOT NULL DEFAULT ''",
+            "generated_at": "TEXT NOT NULL DEFAULT ''",
         }
         for column_name, ddl in desired.items():
             if column_name not in columns:
@@ -344,6 +402,11 @@ class ContextStore:
         direct_prompt: bool = False,
         promotion_priority: int = 0,
         conflict_key: str = "",
+        source_turn_ids: list[str] | tuple[str, ...] = (),
+        source_run_ids: list[str] | tuple[str, ...] = (),
+        source_memory_ids: list[str] | tuple[str, ...] = (),
+        generated_by: str = "",
+        generated_at: str = "",
     ) -> StoredMemory:
         candidate = MemoryCandidate(
             kind=kind,
@@ -365,6 +428,11 @@ class ContextStore:
             applicability=dict(applicability or {}),
             direct_prompt=bool(direct_prompt),
             promotion_priority=int(promotion_priority),
+            source_turn_ids=tuple(str(item) for item in source_turn_ids),
+            source_run_ids=tuple(str(item) for item in source_run_ids),
+            source_memory_ids=tuple(str(item) for item in source_memory_ids),
+            generated_by=generated_by,
+            generated_at=generated_at,
             fingerprint=fingerprint,
             conflict_key=conflict_key,
         )
@@ -382,7 +450,8 @@ class ContextStore:
                 conn.execute(
                     """
                     UPDATE memories
-                    SET updated_at = ?, confidence = ?, metadata_json = ?, summary = ?, content = ?, status = ?, enabled = 1
+                    SET updated_at = ?, confidence = ?, metadata_json = ?, summary = ?, content = ?, status = ?, enabled = 1,
+                        source_turn_ids_json = ?, source_run_ids_json = ?, source_memory_ids_json = ?, generated_by = ?, generated_at = ?
                     WHERE fingerprint = ?
                     """,
                     (
@@ -392,6 +461,11 @@ class ContextStore:
                         candidate.summary,
                         candidate.content,
                         candidate.status,
+                        json.dumps(list(candidate.source_turn_ids), ensure_ascii=False),
+                        json.dumps(list(candidate.source_run_ids), ensure_ascii=False),
+                        json.dumps(list(candidate.source_memory_ids), ensure_ascii=False),
+                        candidate.generated_by,
+                        candidate.generated_at,
                         candidate.fingerprint,
                     ),
                 )
@@ -462,8 +536,9 @@ class ContextStore:
                     memory_id, kind, namespace, memory_type, scope, title, content, summary, tags_json,
                     metadata_json, source, created_at, updated_at, confidence, freshness, stale_after, status,
                     supersedes_json, applicability_json, direct_prompt, promotion_priority, conflict_flag,
-                    conflict_with_json, enabled, fingerprint, conflict_key
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
+                    conflict_with_json, enabled, fingerprint, conflict_key, source_turn_ids_json,
+                    source_run_ids_json, source_memory_ids_json, generated_by, generated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     memory_id,
@@ -491,6 +566,11 @@ class ContextStore:
                     json.dumps(list(dict.fromkeys(conflict_with_ids)), ensure_ascii=False),
                     candidate.fingerprint,
                     candidate.conflict_key,
+                    json.dumps(list(candidate.source_turn_ids), ensure_ascii=False),
+                    json.dumps(list(candidate.source_run_ids), ensure_ascii=False),
+                    json.dumps(list(candidate.source_memory_ids), ensure_ascii=False),
+                    candidate.generated_by,
+                    candidate.generated_at,
                 ),
             )
             conn.commit()
@@ -530,6 +610,11 @@ class ContextStore:
         supersedes: list[str] | tuple[str, ...] | None = None,
         conflict_flag: bool | None = None,
         conflict_with: list[str] | tuple[str, ...] | None = None,
+        source_turn_ids: list[str] | tuple[str, ...] | None = None,
+        source_run_ids: list[str] | tuple[str, ...] | None = None,
+        source_memory_ids: list[str] | tuple[str, ...] | None = None,
+        generated_by: str | None = None,
+        generated_at: str | None = None,
     ) -> StoredMemory | None:
         current = self.get_memory(memory_id=memory_id)
         if current is None:
@@ -545,7 +630,9 @@ class ContextStore:
                 UPDATE memories
                 SET title = ?, content = ?, summary = ?, tags_json = ?, metadata_json = ?, updated_at = ?,
                     confidence = ?, stale_after = ?, freshness = ?, status = ?, supersedes_json = ?,
-                    conflict_flag = ?, conflict_with_json = ?, enabled = CASE WHEN ? = 'dropped' THEN 0 ELSE enabled END
+                    conflict_flag = ?, conflict_with_json = ?, source_turn_ids_json = ?, source_run_ids_json = ?,
+                    source_memory_ids_json = ?, generated_by = ?, generated_at = ?,
+                    enabled = CASE WHEN ? = 'dropped' THEN 0 ELSE enabled END
                 WHERE memory_id = ?
                 """,
                 (
@@ -562,6 +649,11 @@ class ContextStore:
                     json.dumps(list(supersedes if supersedes is not None else current.supersedes), ensure_ascii=False),
                     1 if (current.conflict_flag if conflict_flag is None else conflict_flag) else 0,
                     json.dumps(list(conflict_with if conflict_with is not None else current.conflict_with), ensure_ascii=False),
+                    json.dumps(list(source_turn_ids if source_turn_ids is not None else current.source_turn_ids), ensure_ascii=False),
+                    json.dumps(list(source_run_ids if source_run_ids is not None else current.source_run_ids), ensure_ascii=False),
+                    json.dumps(list(source_memory_ids if source_memory_ids is not None else current.source_memory_ids), ensure_ascii=False),
+                    str(generated_by if generated_by is not None else current.generated_by),
+                    str(generated_at if generated_at is not None else current.generated_at),
                     next_status,
                     memory_id,
                 ),
@@ -598,6 +690,15 @@ class ContextStore:
             self._conn_or_raise().commit()
         return bool(cursor.rowcount)
 
+    def delete_memory(self, *, memory_id: str) -> bool:
+        with self._lock:
+            cursor = self._conn_or_raise().execute(
+                "DELETE FROM memories WHERE memory_id = ?",
+                (memory_id,),
+            )
+            self._conn_or_raise().commit()
+        return bool(cursor.rowcount)
+
     def list_memories(
         self,
         *,
@@ -612,7 +713,7 @@ class ContextStore:
             query = "SELECT * FROM memories WHERE 1 = 1"
             params: list[Any] = []
             if not include_inactive:
-                query += " AND enabled = 1 AND status != 'dropped'"
+                query += " AND enabled = 1 AND status NOT IN ('dropped', 'invalidated')"
             if kind is not None:
                 query += " AND kind = ?"
                 params.append(kind)
@@ -639,7 +740,7 @@ class ContextStore:
             query = "SELECT * FROM memories WHERE enabled = 1"
             params: list[Any] = []
             if not include_dropped:
-                query += " AND status != 'dropped'"
+                query += " AND status NOT IN ('dropped', 'invalidated')"
             if kind is not None:
                 query += " AND kind = ?"
                 params.append(kind)
@@ -685,7 +786,7 @@ class ContextStore:
         with self._lock:
             conn = self._conn_or_raise()
             self._refresh_staleness_locked(conn)
-            sql = "SELECT * FROM memories WHERE enabled = 1 AND status != 'dropped'"
+            sql = "SELECT * FROM memories WHERE enabled = 1 AND status NOT IN ('dropped', 'invalidated')"
             params: list[Any] = []
             if kind is not None:
                 sql += " AND kind = ?"
@@ -719,6 +820,12 @@ class ContextStore:
         summary: str,
         tags: list[str] | tuple[str, ...] = (),
         metadata: dict[str, Any] | None = None,
+        source_turn_ids: list[str] | tuple[str, ...] = (),
+        source_run_ids: list[str] | tuple[str, ...] = (),
+        source_memory_ids: list[str] | tuple[str, ...] = (),
+        generated_by: str = "",
+        generated_at: str = "",
+        status: str = "active",
         created_at: str,
     ) -> ConversationRecallRecord:
         fingerprint = f"{thread_id}|{source_message_id}|{snippet.strip()}".strip()
@@ -735,8 +842,9 @@ class ContextStore:
                 """
                 INSERT INTO conversation_recall (
                     chunk_id, thread_id, session_id, run_id, role, source_message_id, snippet, summary, tags_json,
-                    metadata_json, created_at, updated_at, fingerprint
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    metadata_json, source_turn_ids_json, source_run_ids_json, source_memory_ids_json,
+                    generated_by, generated_at, status, created_at, updated_at, fingerprint
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     chunk_id,
@@ -749,6 +857,12 @@ class ContextStore:
                     summary,
                     json.dumps(list(tags), ensure_ascii=False),
                     json.dumps(dict(metadata or {}), ensure_ascii=False),
+                    json.dumps(list(source_turn_ids), ensure_ascii=False),
+                    json.dumps(list(source_run_ids), ensure_ascii=False),
+                    json.dumps(list(source_memory_ids), ensure_ascii=False),
+                    generated_by,
+                    generated_at,
+                    status,
                     created_at,
                     created_at,
                     fingerprint,
@@ -765,15 +879,23 @@ class ContextStore:
             ).fetchone()
         return self._conversation_from_row(row) if row is not None else None
 
-    def list_conversation_chunks(self, *, thread_id: str, limit: int = 20) -> list[ConversationRecallRecord]:
+    def list_conversation_chunks(
+        self,
+        *,
+        thread_id: str,
+        limit: int = 20,
+        include_inactive: bool = False,
+    ) -> list[ConversationRecallRecord]:
+        query = """
+            SELECT * FROM conversation_recall
+            WHERE thread_id = ?
+        """
+        if not include_inactive:
+            query += " AND status = 'active'"
+        query += "\nORDER BY updated_at DESC\nLIMIT ?"
         with self._lock:
             rows = self._conn_or_raise().execute(
-                """
-                SELECT * FROM conversation_recall
-                WHERE thread_id = ?
-                ORDER BY updated_at DESC
-                LIMIT ?
-                """,
+                query,
                 (thread_id, max(1, int(limit))),
             ).fetchall()
         return [self._conversation_from_row(row) for row in rows]
@@ -789,7 +911,7 @@ class ContextStore:
             rows = self._conn_or_raise().execute(
                 """
                 SELECT * FROM conversation_recall
-                WHERE thread_id = ?
+                WHERE thread_id = ? AND status = 'active'
                 ORDER BY updated_at DESC
                 LIMIT 60
                 """,
@@ -804,6 +926,51 @@ class ContextStore:
                 scored.append((score, record))
         scored.sort(key=lambda item: (-item[0], item[1].updated_at))
         return [record for _, record in scored[: max(1, int(limit))]]
+
+    def update_conversation_chunk_status(
+        self,
+        *,
+        chunk_id: str,
+        status: str,
+        updated_at: str,
+    ) -> ConversationRecallRecord | None:
+        with self._lock:
+            self._conn_or_raise().execute(
+                "UPDATE conversation_recall SET status = ?, updated_at = ? WHERE chunk_id = ?",
+                (status, updated_at, chunk_id),
+            )
+            self._conn_or_raise().commit()
+        return self.get_conversation_chunk(chunk_id=chunk_id)
+
+    def clear_conversation_chunks(self, *, thread_id: str) -> None:
+        with self._lock:
+            self._conn_or_raise().execute(
+                "DELETE FROM conversation_recall WHERE thread_id = ?",
+                (thread_id,),
+            )
+            self._conn_or_raise().commit()
+
+    def delete_conversation_chunks_by_provenance(
+        self,
+        *,
+        turn_id: str = "",
+        run_id: str = "",
+        thread_id: str | None = None,
+    ) -> int:
+        matches = self.list_conversation_chunks_by_provenance(
+            turn_id=turn_id,
+            run_id=run_id,
+            thread_id=thread_id,
+            limit=500,
+        )
+        if not matches:
+            return 0
+        with self._lock:
+            conn = self._conn_or_raise()
+            for record in matches:
+                conn.execute("DELETE FROM conversation_recall WHERE chunk_id = ?", (record.chunk_id,))
+            conn.commit()
+        return len(matches)
 
     def record_consolidation_run(
         self,
@@ -957,8 +1124,9 @@ class ContextStore:
                     path_type, user_query, context_envelope_json, assembly_decision_json, budget_report_json,
                     selected_memory_ids_json, selected_artifact_ids_json, selected_evidence_ids_json,
                     selected_conversation_ids_json, dropped_items_json, truncation_reason, run_status,
-                    resume_source, checkpoint_id, orchestration_engine, model_invoked, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    resume_source, checkpoint_id, orchestration_engine, model_invoked, excluded_from_context,
+                    excluded_at, exclusion_reason, call_ids_json, post_state_json, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(turn_id) DO UPDATE SET
                     session_id = excluded.session_id,
                     assistant_message_id = excluded.assistant_message_id,
@@ -978,6 +1146,11 @@ class ContextStore:
                     checkpoint_id = excluded.checkpoint_id,
                     orchestration_engine = excluded.orchestration_engine,
                     model_invoked = excluded.model_invoked,
+                    excluded_from_context = excluded.excluded_from_context,
+                    excluded_at = excluded.excluded_at,
+                    exclusion_reason = excluded.exclusion_reason,
+                    call_ids_json = excluded.call_ids_json,
+                    post_state_json = excluded.post_state_json,
                     created_at = excluded.created_at
                 """,
                 (
@@ -1004,6 +1177,11 @@ class ContextStore:
                     snapshot.checkpoint_id,
                     snapshot.orchestration_engine,
                     1 if snapshot.model_invoked else 0,
+                    1 if snapshot.excluded_from_context else 0,
+                    snapshot.excluded_at,
+                    snapshot.exclusion_reason,
+                    json.dumps(list(snapshot.call_ids), ensure_ascii=False),
+                    json.dumps(dict(snapshot.post_turn_state_snapshot), ensure_ascii=False),
                     snapshot.created_at,
                 ),
             )
@@ -1048,6 +1226,230 @@ class ContextStore:
         with self._lock:
             row = self._conn_or_raise().execute(query, tuple(params)).fetchone()
         return self._context_turn_from_row(row) if row is not None else None
+
+    def update_context_turn_exclusion(
+        self,
+        *,
+        turn_id: str,
+        excluded_from_context: bool,
+        excluded_at: str,
+        exclusion_reason: str,
+    ) -> ContextTurnSnapshot | None:
+        with self._lock:
+            self._conn_or_raise().execute(
+                """
+                UPDATE context_turns
+                SET excluded_from_context = ?, excluded_at = ?, exclusion_reason = ?
+                WHERE turn_id = ?
+                """,
+                (1 if excluded_from_context else 0, excluded_at, exclusion_reason, turn_id),
+            )
+            self._conn_or_raise().commit()
+        return self.get_context_turn_snapshot(turn_id=turn_id)
+
+    def delete_context_turn_snapshot(self, *, turn_id: str) -> None:
+        with self._lock:
+            self._conn_or_raise().execute("DELETE FROM context_turns WHERE turn_id = ?", (turn_id,))
+            self._conn_or_raise().execute("DELETE FROM context_model_calls WHERE turn_id = ?", (turn_id,))
+            self._conn_or_raise().commit()
+
+    def record_context_model_call(self, snapshot: ContextModelCallSnapshot) -> None:
+        with self._lock:
+            self._conn_or_raise().execute(
+                """
+                INSERT INTO context_model_calls (
+                    call_id, session_id, run_id, thread_id, turn_id, call_type, call_site, path_type, user_query,
+                    context_envelope_json, assembly_decision_json, budget_report_json, selected_memory_ids_json,
+                    selected_artifact_ids_json, selected_evidence_ids_json, selected_conversation_ids_json,
+                    dropped_items_json, truncation_reason, run_status, resume_source, checkpoint_id,
+                    orchestration_engine, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(call_id) DO UPDATE SET
+                    session_id = excluded.session_id,
+                    turn_id = excluded.turn_id,
+                    call_type = excluded.call_type,
+                    call_site = excluded.call_site,
+                    path_type = excluded.path_type,
+                    user_query = excluded.user_query,
+                    context_envelope_json = excluded.context_envelope_json,
+                    assembly_decision_json = excluded.assembly_decision_json,
+                    budget_report_json = excluded.budget_report_json,
+                    selected_memory_ids_json = excluded.selected_memory_ids_json,
+                    selected_artifact_ids_json = excluded.selected_artifact_ids_json,
+                    selected_evidence_ids_json = excluded.selected_evidence_ids_json,
+                    selected_conversation_ids_json = excluded.selected_conversation_ids_json,
+                    dropped_items_json = excluded.dropped_items_json,
+                    truncation_reason = excluded.truncation_reason,
+                    run_status = excluded.run_status,
+                    resume_source = excluded.resume_source,
+                    checkpoint_id = excluded.checkpoint_id,
+                    orchestration_engine = excluded.orchestration_engine,
+                    created_at = excluded.created_at
+                """,
+                (
+                    snapshot.call_id,
+                    snapshot.session_id,
+                    snapshot.run_id,
+                    snapshot.thread_id,
+                    snapshot.turn_id,
+                    snapshot.call_type,
+                    snapshot.call_site,
+                    snapshot.path_type,
+                    snapshot.user_query,
+                    json.dumps(snapshot.context_envelope.to_dict(), ensure_ascii=False),
+                    json.dumps(snapshot.assembly_decision.to_dict(), ensure_ascii=False),
+                    json.dumps(dict(snapshot.budget_report), ensure_ascii=False),
+                    json.dumps(list(snapshot.selected_memory_ids), ensure_ascii=False),
+                    json.dumps(list(snapshot.selected_artifact_ids), ensure_ascii=False),
+                    json.dumps(list(snapshot.selected_evidence_ids), ensure_ascii=False),
+                    json.dumps(list(snapshot.selected_conversation_ids), ensure_ascii=False),
+                    json.dumps(list(snapshot.dropped_items), ensure_ascii=False),
+                    snapshot.truncation_reason,
+                    snapshot.run_status,
+                    snapshot.resume_source,
+                    snapshot.checkpoint_id,
+                    snapshot.orchestration_engine,
+                    snapshot.created_at,
+                ),
+            )
+            self._conn_or_raise().commit()
+
+    def list_context_model_calls(self, *, turn_id: str) -> list[ContextModelCallSnapshot]:
+        with self._lock:
+            rows = self._conn_or_raise().execute(
+                """
+                SELECT * FROM context_model_calls
+                WHERE turn_id = ?
+                ORDER BY created_at ASC
+                """,
+                (turn_id,),
+            ).fetchall()
+        return [self._context_model_call_from_row(row) for row in rows]
+
+    def get_context_model_call(self, *, call_id: str, turn_id: str | None = None) -> ContextModelCallSnapshot | None:
+        query = "SELECT * FROM context_model_calls WHERE call_id = ?"
+        params: list[Any] = [call_id]
+        if turn_id is not None:
+            query += " AND turn_id = ?"
+            params.append(turn_id)
+        with self._lock:
+            row = self._conn_or_raise().execute(query, tuple(params)).fetchone()
+        return self._context_model_call_from_row(row) if row is not None else None
+
+    def delete_context_model_calls(self, *, turn_id: str) -> None:
+        with self._lock:
+            self._conn_or_raise().execute("DELETE FROM context_model_calls WHERE turn_id = ?", (turn_id,))
+            self._conn_or_raise().commit()
+
+    def record_context_event(
+        self,
+        *,
+        event_type: str,
+        session_id: str | None,
+        thread_id: str,
+        created_at: str,
+        payload: dict[str, Any] | None = None,
+        run_id: str = "",
+        turn_id: str = "",
+    ) -> ContextAuditRecord:
+        audit_id = f"ctxevt-{uuid4().hex}"
+        with self._lock:
+            self._conn_or_raise().execute(
+                """
+                INSERT INTO context_audit (
+                    audit_id, event_type, session_id, thread_id, run_id, turn_id, payload_json, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    audit_id,
+                    event_type,
+                    session_id,
+                    thread_id,
+                    run_id,
+                    turn_id,
+                    json.dumps(dict(payload or {}), ensure_ascii=False),
+                    created_at,
+                ),
+            )
+            self._conn_or_raise().commit()
+        return ContextAuditRecord(
+            audit_id=audit_id,
+            event_type=event_type,
+            session_id=session_id,
+            thread_id=thread_id,
+            run_id=run_id,
+            turn_id=turn_id,
+            created_at=created_at,
+            payload=dict(payload or {}),
+        )
+
+    def list_context_events(self, *, thread_id: str, limit: int = 40) -> list[ContextAuditRecord]:
+        with self._lock:
+            rows = self._conn_or_raise().execute(
+                """
+                SELECT * FROM context_audit
+                WHERE thread_id = ?
+                ORDER BY created_at DESC
+                LIMIT ?
+                """,
+                (thread_id, max(1, int(limit))),
+            ).fetchall()
+        return [self._audit_from_row(row) for row in rows]
+
+    def list_memories_by_provenance(
+        self,
+        *,
+        turn_id: str = "",
+        run_id: str = "",
+        include_inactive: bool = True,
+        limit: int = 200,
+    ) -> list[StoredMemory]:
+        if not turn_id and not run_id:
+            return []
+        query = "SELECT * FROM memories WHERE 1 = 1"
+        params: list[Any] = []
+        if not include_inactive:
+            query += " AND enabled = 1 AND status NOT IN ('dropped', 'invalidated')"
+        query += " ORDER BY updated_at DESC LIMIT ?"
+        params.append(max(1, int(limit)))
+        with self._lock:
+            rows = self._conn_or_raise().execute(query, tuple(params)).fetchall()
+        matches: list[StoredMemory] = []
+        for row in rows:
+            record = self._memory_from_row(row)
+            if turn_id and turn_id in record.source_turn_ids:
+                matches.append(record)
+                continue
+            if run_id and run_id in record.source_run_ids:
+                matches.append(record)
+        return matches
+
+    def list_conversation_chunks_by_provenance(
+        self,
+        *,
+        turn_id: str = "",
+        run_id: str = "",
+        thread_id: str | None = None,
+        limit: int = 200,
+    ) -> list[ConversationRecallRecord]:
+        query = "SELECT * FROM conversation_recall WHERE 1 = 1"
+        params: list[Any] = []
+        if thread_id is not None:
+            query += " AND thread_id = ?"
+            params.append(thread_id)
+        query += " ORDER BY updated_at DESC LIMIT ?"
+        params.append(max(1, int(limit)))
+        with self._lock:
+            rows = self._conn_or_raise().execute(query, tuple(params)).fetchall()
+        matches: list[ConversationRecallRecord] = []
+        for row in rows:
+            record = self._conversation_from_row(row)
+            if turn_id and turn_id in record.source_turn_ids:
+                matches.append(record)
+                continue
+            if run_id and run_id in record.source_run_ids:
+                matches.append(record)
+        return matches
 
     def _refresh_staleness_locked(self, conn: sqlite3.Connection) -> None:
         rows = conn.execute(
@@ -1121,6 +1523,11 @@ class ContextStore:
             promotion_priority=int(row["promotion_priority"] or 0),
             conflict_flag=bool(row["conflict_flag"]),
             conflict_with=tuple(json.loads(str(row["conflict_with_json"] or "[]"))),
+            source_turn_ids=tuple(json.loads(str(row["source_turn_ids_json"] or "[]"))),
+            source_run_ids=tuple(json.loads(str(row["source_run_ids_json"] or "[]"))),
+            source_memory_ids=tuple(json.loads(str(row["source_memory_ids_json"] or "[]"))),
+            generated_by=str(row["generated_by"] or ""),
+            generated_at=str(row["generated_at"] or ""),
             fingerprint=str(row["fingerprint"] or ""),
             enabled=bool(row["enabled"]),
         )
@@ -1137,6 +1544,12 @@ class ContextStore:
             summary=str(row["summary"] or ""),
             tags=tuple(json.loads(str(row["tags_json"] or "[]"))),
             metadata=dict(json.loads(str(row["metadata_json"] or "{}"))),
+            source_turn_ids=tuple(json.loads(str(row["source_turn_ids_json"] or "[]"))),
+            source_run_ids=tuple(json.loads(str(row["source_run_ids_json"] or "[]"))),
+            source_memory_ids=tuple(json.loads(str(row["source_memory_ids_json"] or "[]"))),
+            generated_by=str(row["generated_by"] or ""),
+            generated_at=str(row["generated_at"] or ""),
+            status=str(row["status"] or "active"),
             created_at=str(row["created_at"] or ""),
             updated_at=str(row["updated_at"] or ""),
             fingerprint=str(row["fingerprint"] or ""),
@@ -1189,7 +1602,73 @@ class ContextStore:
             checkpoint_id=str(row["checkpoint_id"] or ""),
             orchestration_engine=str(row["orchestration_engine"] or "langgraph"),
             model_invoked=bool(row["model_invoked"]),
+            excluded_from_context=bool(row["excluded_from_context"]),
+            excluded_at=str(row["excluded_at"] or ""),
+            exclusion_reason=str(row["exclusion_reason"] or ""),
+            call_ids=tuple(json.loads(str(row["call_ids_json"] or "[]"))),
+            post_turn_state_snapshot=dict(json.loads(str(row["post_state_json"] or "{}"))),
             created_at=str(row["created_at"] or ""),
+        )
+
+    def _context_model_call_from_row(self, row: sqlite3.Row) -> ContextModelCallSnapshot:
+        envelope_payload = dict(json.loads(str(row["context_envelope_json"] or "{}")))
+        decision_payload = dict(json.loads(str(row["assembly_decision_json"] or "{}")))
+        return ContextModelCallSnapshot(
+            call_id=str(row["call_id"] or ""),
+            session_id=str(row["session_id"]) if row["session_id"] is not None else None,
+            run_id=str(row["run_id"] or ""),
+            thread_id=str(row["thread_id"] or ""),
+            turn_id=str(row["turn_id"] or ""),
+            call_type=str(row["call_type"] or ""),
+            call_site=str(row["call_site"] or ""),
+            path_type=str(row["path_type"] or "direct_answer"),  # type: ignore[arg-type]
+            user_query=str(row["user_query"] or ""),
+            context_envelope=ContextEnvelope(
+                system_block=str(envelope_payload.get("system_block", "") or ""),
+                history_block=str(envelope_payload.get("history_block", "") or ""),
+                working_memory_block=str(envelope_payload.get("working_memory_block", "") or ""),
+                episodic_block=str(envelope_payload.get("episodic_block", "") or ""),
+                semantic_block=str(envelope_payload.get("semantic_block", "") or ""),
+                procedural_block=str(envelope_payload.get("procedural_block", "") or ""),
+                conversation_block=str(envelope_payload.get("conversation_block", "") or ""),
+                artifact_block=str(envelope_payload.get("artifact_block", "") or ""),
+                evidence_block=str(envelope_payload.get("evidence_block", "") or ""),
+                budget_report=dict(envelope_payload.get("budget_report", {}) or {}),
+            ),
+            assembly_decision=ContextAssemblyDecision(
+                path_type=str(decision_payload.get("path_type", "direct_answer")),  # type: ignore[arg-type]
+                selected_history_ids=tuple(decision_payload.get("selected_history_ids", []) or []),
+                selected_memory_ids=tuple(decision_payload.get("selected_memory_ids", []) or []),
+                selected_artifact_ids=tuple(decision_payload.get("selected_artifact_ids", []) or []),
+                selected_evidence_ids=tuple(decision_payload.get("selected_evidence_ids", []) or []),
+                selected_conversation_ids=tuple(decision_payload.get("selected_conversation_ids", []) or []),
+                dropped_items=tuple(decision_payload.get("dropped_items", []) or []),
+                truncation_reason=str(decision_payload.get("truncation_reason", "") or ""),
+            ),
+            budget_report=dict(json.loads(str(row["budget_report_json"] or "{}"))),
+            selected_memory_ids=tuple(json.loads(str(row["selected_memory_ids_json"] or "[]"))),
+            selected_artifact_ids=tuple(json.loads(str(row["selected_artifact_ids_json"] or "[]"))),
+            selected_evidence_ids=tuple(json.loads(str(row["selected_evidence_ids_json"] or "[]"))),
+            selected_conversation_ids=tuple(json.loads(str(row["selected_conversation_ids_json"] or "[]"))),
+            dropped_items=tuple(json.loads(str(row["dropped_items_json"] or "[]"))),
+            truncation_reason=str(row["truncation_reason"] or ""),
+            run_status=str(row["run_status"] or "fresh"),
+            resume_source=str(row["resume_source"] or ""),
+            checkpoint_id=str(row["checkpoint_id"] or ""),
+            orchestration_engine=str(row["orchestration_engine"] or "langgraph"),
+            created_at=str(row["created_at"] or ""),
+        )
+
+    def _audit_from_row(self, row: sqlite3.Row) -> ContextAuditRecord:
+        return ContextAuditRecord(
+            audit_id=str(row["audit_id"] or ""),
+            event_type=str(row["event_type"] or ""),
+            session_id=str(row["session_id"]) if row["session_id"] is not None else None,
+            thread_id=str(row["thread_id"] or ""),
+            run_id=str(row["run_id"] or ""),
+            turn_id=str(row["turn_id"] or ""),
+            created_at=str(row["created_at"] or ""),
+            payload=dict(json.loads(str(row["payload_json"] or "{}"))),
         )
 
     def _consolidation_from_row(self, row: sqlite3.Row) -> ConsolidationRunSummary:

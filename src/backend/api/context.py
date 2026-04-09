@@ -6,6 +6,7 @@ from fastapi import APIRouter, HTTPException, Query
 
 from src.backend.context.consolidation import AutoDreamConsolidator
 from src.backend.context.policies import project_namespace, thread_namespace, user_namespace
+from src.backend.context.quarantine import ContextQuarantineService
 from src.backend.context.procedural_memory import procedural_memory
 from src.backend.context.semantic_memory import semantic_memory
 from src.backend.context.store import context_store
@@ -28,6 +29,23 @@ def _thread_id_for(session_id: str) -> str:
 
 def _namespaces_for(base_dir, thread_id: str) -> list[str]:
     return [user_namespace(), project_namespace(base_dir), thread_namespace(thread_id)]
+
+
+def _quarantine_service_or_raise() -> ContextQuarantineService:
+    base_dir = _base_dir_or_raise()
+    session_manager = agent_manager.session_manager
+    if session_manager is None:
+        raise HTTPException(status_code=503, detail="Session manager is not initialized")
+    try:
+        runtime = agent_manager.get_harness_runtime()
+        now_factory = runtime.now
+    except Exception:  # pragma: no cover - defensive fallback for focused API tests
+        now_factory = lambda: ""
+    return ContextQuarantineService(
+        session_manager=session_manager,
+        base_dir=base_dir,
+        now_factory=now_factory,
+    )
 
 
 @router.get("/context/sessions/{session_id}")
@@ -81,7 +99,73 @@ async def get_context_turn(session_id: str, turn_id: str) -> dict[str, Any]:
     item = context_store.get_context_turn_snapshot(turn_id=turn_id, session_id=session_id)
     if item is None:
         raise HTTPException(status_code=404, detail="Context turn not found")
-    return {"session_id": session_id, "turn": item.to_dict()}
+    calls = context_store.list_context_model_calls(turn_id=turn_id)
+    return {
+        "session_id": session_id,
+        "turn": item.to_dict(),
+        "calls": [call.to_summary_dict() for call in calls],
+        "audit_events": [
+            event.to_dict()
+            for event in context_store.list_context_events(thread_id=item.thread_id, limit=80)
+            if event.turn_id == item.turn_id
+        ],
+    }
+
+
+@router.get("/context/sessions/{session_id}/turns/{turn_id}/calls/{call_id}")
+async def get_context_turn_call(session_id: str, turn_id: str, call_id: str) -> dict[str, Any]:
+    _base_dir_or_raise()
+    turn = context_store.get_context_turn_snapshot(turn_id=turn_id, session_id=session_id)
+    if turn is None:
+        raise HTTPException(status_code=404, detail="Context turn not found")
+    call = context_store.get_context_model_call(call_id=call_id, turn_id=turn_id)
+    if call is None:
+        raise HTTPException(status_code=404, detail="Context model call not found")
+    return {
+        "session_id": session_id,
+        "turn_id": turn_id,
+        "call": call.to_dict(),
+        "turn": turn.to_summary_dict(),
+    }
+
+
+@router.post("/context/sessions/{session_id}/turns/{turn_id}/exclude")
+async def exclude_context_turn(session_id: str, turn_id: str) -> dict[str, Any]:
+    _base_dir_or_raise()
+    try:
+        result = _quarantine_service_or_raise().exclude_turn(session_id=session_id, turn_id=turn_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return {"result": result.to_dict()}
+
+
+@router.get("/context/sessions/{session_id}/turns/{turn_id}/derived-memories")
+async def get_turn_derived_memories(session_id: str, turn_id: str) -> dict[str, Any]:
+    _base_dir_or_raise()
+    try:
+        return _quarantine_service_or_raise().derived_memories(session_id=session_id, turn_id=turn_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.delete("/context/sessions/{session_id}/turns/{turn_id}")
+async def hard_delete_context_turn(
+    session_id: str,
+    turn_id: str,
+    force: bool = Query(default=False),
+) -> dict[str, Any]:
+    _base_dir_or_raise()
+    try:
+        result = _quarantine_service_or_raise().hard_delete_turn(
+            session_id=session_id,
+            turn_id=turn_id,
+            force=force,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    if result.blocked_reason:
+        raise HTTPException(status_code=409, detail=result.blocked_reason)
+    return {"result": result.to_dict()}
 
 
 @router.get("/context/memories")

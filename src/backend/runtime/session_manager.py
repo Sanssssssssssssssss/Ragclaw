@@ -34,6 +34,9 @@ class SessionManager:
             "created_at": now,
             "updated_at": now,
             "compressed_context": "",
+            "excluded_turn_ids": [],
+            "excluded_run_ids": [],
+            "turn_actions": [],
             "messages": [],
         }
 
@@ -58,6 +61,9 @@ class SessionManager:
         raw.setdefault("created_at", time.time())
         raw.setdefault("updated_at", raw["created_at"])
         raw.setdefault("compressed_context", "")
+        raw.setdefault("excluded_turn_ids", [])
+        raw.setdefault("excluded_run_ids", [])
+        raw.setdefault("turn_actions", [])
         raw.setdefault("messages", [])
         return raw
 
@@ -129,6 +135,14 @@ class SessionManager:
         for message in record.get("messages", []):
             role = message.get("role", "")
             content = str(message.get("content", "") or "")
+            turn_id = str(message.get("turn_id", "") or "")
+            run_id = str(message.get("run_id", "") or "")
+            if bool(message.get("excluded_from_context")):
+                continue
+            if turn_id and turn_id in set(str(item) for item in record.get("excluded_turn_ids", []) or []):
+                continue
+            if run_id and run_id in set(str(item) for item in record.get("excluded_run_ids", []) or []):
+                continue
             if role == "assistant" and merged and merged[-1]["role"] == "assistant":
                 if content:
                     if merged[-1]["content"]:
@@ -152,6 +166,9 @@ class SessionManager:
         run_meta: dict[str, Any] | None = None,
         checkpoint_events: list[dict[str, Any]] | None = None,
         hitl_events: list[dict[str, Any]] | None = None,
+        message_id: str | None = None,
+        turn_id: str | None = None,
+        run_id: str | None = None,
     ) -> dict[str, Any]:
         """Returns one saved message payload from message fields and appends a chat turn to the session record."""
 
@@ -169,9 +186,99 @@ class SessionManager:
             message["checkpoint_events"] = checkpoint_events
         if hitl_events:
             message["hitl_events"] = hitl_events
+        if message_id:
+            message["message_id"] = message_id
+        if turn_id:
+            message["turn_id"] = turn_id
+        if run_id:
+            message["run_id"] = run_id
         record["messages"].append(message)
         self._write_session(record)
         return message
+
+    def exclude_turn_from_context(
+        self,
+        *,
+        session_id: str,
+        turn_id: str,
+        run_id: str,
+        reason: str,
+        created_at: str,
+    ) -> dict[str, Any]:
+        record = self._read_session_file(session_id)
+        excluded_turn_ids = [str(item) for item in record.get("excluded_turn_ids", []) or []]
+        excluded_run_ids = [str(item) for item in record.get("excluded_run_ids", []) or []]
+        changed = False
+        if turn_id and turn_id not in excluded_turn_ids:
+            excluded_turn_ids.append(turn_id)
+            changed = True
+        if run_id and run_id not in excluded_run_ids:
+            excluded_run_ids.append(run_id)
+            changed = True
+        for message in record.get("messages", []):
+            if run_id and str(message.get("run_id", "") or "") == run_id:
+                if not message.get("excluded_from_context"):
+                    message["excluded_from_context"] = True
+                    changed = True
+            elif turn_id and str(message.get("turn_id", "") or "") == turn_id:
+                if not message.get("excluded_from_context"):
+                    message["excluded_from_context"] = True
+                    changed = True
+        record["excluded_turn_ids"] = excluded_turn_ids
+        record["excluded_run_ids"] = excluded_run_ids
+        actions = list(record.get("turn_actions", []) or [])
+        if not any(str(item.get("turn_id", "") or "") == turn_id and str(item.get("action", "") or "") == "exclude" for item in actions if isinstance(item, dict)):
+            actions.append(
+                {
+                    "turn_id": turn_id,
+                    "run_id": run_id,
+                    "action": "exclude",
+                    "reason": reason,
+                    "created_at": created_at,
+                }
+            )
+            changed = True
+        record["turn_actions"] = actions
+        if changed:
+            self._write_session(record)
+        return record
+
+    def hard_delete_turn(
+        self,
+        *,
+        session_id: str,
+        turn_id: str,
+        run_id: str,
+        reason: str,
+        created_at: str,
+    ) -> dict[str, Any]:
+        record = self._read_session_file(session_id)
+        remaining: list[dict[str, Any]] = []
+        deleted_count = 0
+        for message in record.get("messages", []):
+            message_run_id = str(message.get("run_id", "") or "")
+            message_turn_id = str(message.get("turn_id", "") or "")
+            if (run_id and message_run_id == run_id) or (turn_id and message_turn_id == turn_id):
+                deleted_count += 1
+                continue
+            remaining.append(message)
+        record["messages"] = remaining
+        record["excluded_turn_ids"] = [item for item in list(record.get("excluded_turn_ids", []) or []) if str(item) != turn_id]
+        record["excluded_run_ids"] = [item for item in list(record.get("excluded_run_ids", []) or []) if str(item) != run_id]
+        actions = list(record.get("turn_actions", []) or [])
+        actions.append(
+            {
+                "turn_id": turn_id,
+                "run_id": run_id,
+                "action": "hard_delete",
+                "reason": reason,
+                "created_at": created_at,
+                "deleted_count": deleted_count,
+            }
+        )
+        record["turn_actions"] = actions
+        self._write_session(record)
+        return record
 
     def get_history(self, session_id: str) -> dict[str, Any]:
         """Returns one session history record from a session id input and exposes stored chat history to callers."""

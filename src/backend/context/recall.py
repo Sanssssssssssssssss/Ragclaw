@@ -26,6 +26,7 @@ class ConversationRecallService:
     def record(self, *, state: dict[str, Any], updated_at: str) -> list[ConversationRecallRecord]:
         thread_id = str(state.get("thread_id", "") or state.get("session_id", "") or state.get("run_id", "") or "").strip()
         run_id = str(state.get("run_id", "") or "").strip()
+        turn_id = str(state.get("turn_id", "") or "").strip()
         if not thread_id or not updated_at:
             return []
         history = list(state.get("history", []) or [])
@@ -47,6 +48,11 @@ class ConversationRecallService:
                 summary=content[:180],
                 tags=_tags_for(content),
                 metadata={"index": index},
+                source_turn_ids=[turn_id] if turn_id else [],
+                source_run_ids=[run_id] if run_id else [],
+                source_memory_ids=[str(item) for item in state.get("selected_memory_ids", []) or [] if str(item).strip()],
+                generated_by="conversation_recall.record",
+                generated_at=updated_at,
                 created_at=updated_at,
             )
             records.append(record)

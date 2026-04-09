@@ -158,6 +158,12 @@ export type ConversationRecallPayload = {
   summary: string;
   tags: string[];
   metadata: Record<string, unknown>;
+  source_turn_ids: string[];
+  source_run_ids: string[];
+  source_memory_ids: string[];
+  generated_by: string;
+  generated_at: string;
+  status: string;
   created_at: string;
   updated_at: string;
   fingerprint: string;
@@ -242,12 +248,91 @@ export type ContextTurnSummary = {
   checkpoint_id: string;
   orchestration_engine: string;
   model_invoked: boolean;
+  excluded_from_context: boolean;
+  excluded_at: string;
+  exclusion_reason: string;
+  call_ids: string[];
   created_at: string;
 };
 
 export type ContextTurnPayload = ContextTurnSummary & {
   context_envelope: ContextEnvelopePayload;
   assembly_decision: ContextAssemblyDecisionPayload;
+  post_turn_state_snapshot: Record<string, unknown>;
+};
+
+export type ContextModelCallSummary = {
+  call_id: string;
+  turn_id: string;
+  call_type: string;
+  call_site: string;
+  path_type: string;
+  run_status: string;
+  resume_source: string;
+  checkpoint_id: string;
+  created_at: string;
+};
+
+export type ContextModelCallPayload = ContextModelCallSummary & {
+  session_id: string | null;
+  run_id: string;
+  thread_id: string;
+  user_query: string;
+  context_envelope: ContextEnvelopePayload;
+  assembly_decision: ContextAssemblyDecisionPayload;
+  budget_report: ContextTurnBudgetReport;
+  selected_memory_ids: string[];
+  selected_artifact_ids: string[];
+  selected_evidence_ids: string[];
+  selected_conversation_ids: string[];
+  dropped_items: string[];
+  truncation_reason: string;
+  orchestration_engine: string;
+};
+
+export type ContextAuditEventPayload = {
+  audit_id: string;
+  event_type: string;
+  session_id: string | null;
+  thread_id: string;
+  run_id: string;
+  turn_id: string;
+  created_at: string;
+  payload: Record<string, unknown>;
+};
+
+export type ContextTurnDetailPayload = {
+  turn: ContextTurnPayload;
+  calls: ContextModelCallSummary[];
+  audit_events: ContextAuditEventPayload[];
+};
+
+export type DerivedTurnMemoriesPayload = {
+  session_id: string;
+  turn_id: string;
+  run_id: string;
+  thread_id: string;
+  memories: ContextMemoryRecord[];
+  conversation_recall: ConversationRecallPayload[];
+  audit_events: ContextAuditEventPayload[];
+};
+
+export type ContextQuarantineResultPayload = {
+  action: string;
+  session_id: string;
+  turn_id: string;
+  run_id: string;
+  thread_id: string;
+  changed: boolean;
+  force: boolean;
+  turn: Record<string, unknown>;
+  invalidated_memory_ids: string[];
+  deleted_memory_ids: string[];
+  invalidated_conversation_ids: string[];
+  deleted_conversation_count: number;
+  rebuilt_snapshot: Record<string, unknown>;
+  audit_event_ids: string[];
+  blocked_reason: string;
 };
 
 export type SessionContextPayload = {
@@ -552,8 +637,27 @@ export async function listContextTurns(sessionId: string, limit = 20) {
 }
 
 export async function getContextTurn(sessionId: string, turnId: string) {
-  return request<{ session_id: string; turn: ContextTurnPayload }>(
+  return request<{ session_id: string } & ContextTurnDetailPayload>(
     `/context/sessions/${encodeURIComponent(sessionId)}/turns/${encodeURIComponent(turnId)}`
+  );
+}
+
+export async function getContextTurnCall(sessionId: string, turnId: string, callId: string) {
+  return request<{ session_id: string; turn_id: string; call: ContextModelCallPayload; turn: ContextTurnSummary }>(
+    `/context/sessions/${encodeURIComponent(sessionId)}/turns/${encodeURIComponent(turnId)}/calls/${encodeURIComponent(callId)}`
+  );
+}
+
+export async function excludeContextTurn(sessionId: string, turnId: string) {
+  return request<{ result: ContextQuarantineResultPayload }>(
+    `/context/sessions/${encodeURIComponent(sessionId)}/turns/${encodeURIComponent(turnId)}/exclude`,
+    { method: "POST" }
+  );
+}
+
+export async function getTurnDerivedMemories(sessionId: string, turnId: string) {
+  return request<DerivedTurnMemoriesPayload>(
+    `/context/sessions/${encodeURIComponent(sessionId)}/turns/${encodeURIComponent(turnId)}/derived-memories`
   );
 }
 

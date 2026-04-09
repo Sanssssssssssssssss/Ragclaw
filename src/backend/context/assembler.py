@@ -366,11 +366,14 @@ class ContextAssembler:
         if not conversation_recall.should_recall(path_kind=path_kind, state=state, history_trimmed=history_trimmed):
             return []
         query = conversation_recall.query_for(state=state, working_memory=working_memory)
-        return conversation_recall.retrieve(
-            thread_id=thread_id,
-            query=query,
-            limit=self._conversation_limit(path_kind),
-        )
+        try:
+            return conversation_recall.retrieve(
+                thread_id=thread_id,
+                query=query,
+                limit=self._conversation_limit(path_kind),
+            )
+        except Exception:
+            return []
 
     def _select_memory_manifests(
         self,

@@ -15,12 +15,15 @@ export function AssetsPanel() {
     hitlAudit,
     mcpCapabilities,
     sessionContext,
+    selectedContextTurn,
+    derivedTurnMemories,
     assetsLoading,
     isStreaming,
     refreshAssets,
     triggerConsolidation,
     resumeCheckpoint,
-    submitHitlDecision
+    submitHitlDecision,
+    excludeContextTurn
   } = useChatStore();
   const { currentSessionId } = useSessionStore();
   const [editedInputText, setEditedInputText] = useState("{}");
@@ -407,6 +410,87 @@ export function AssetsPanel() {
                     <p className="text-sm text-[var(--color-ink-soft)]">No context assemblies recorded yet.</p>
                   )}
                 </div>
+              </div>
+
+              <div className="pixel-card-soft p-4">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div>
+                    <p className="pixel-label">context quarantine</p>
+                    <p className="pixel-note mt-2">Exclude one polluted turn from future context without deleting the raw session history.</p>
+                  </div>
+                  {selectedContextTurn ? (
+                    <button
+                      className="ui-button"
+                      disabled={assetsLoading || isStreaming || selectedContextTurn.excluded_from_context}
+                      onClick={() => void excludeContextTurn(selectedContextTurn.turn_id)}
+                      type="button"
+                    >
+                      {selectedContextTurn.excluded_from_context ? "Already excluded" : "Exclude from future context"}
+                    </button>
+                  ) : null}
+                </div>
+                {selectedContextTurn ? (
+                  <div className="mt-4 space-y-3 text-sm text-[var(--color-ink-soft)]">
+                    <div className="rounded-[10px] border border-[var(--color-line)] px-3 py-3">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className="pixel-tag">{selectedContextTurn.path_type}</span>
+                        <span className="pixel-tag">{selectedContextTurn.run_status || "fresh"}</span>
+                        {selectedContextTurn.excluded_from_context ? <span className="pixel-tag">excluded</span> : null}
+                        <span className="mono text-[0.92rem]">{selectedContextTurn.turn_id}</span>
+                      </div>
+                      <p className="mt-2 text-[var(--color-ink)]">{selectedContextTurn.user_query || "No query captured."}</p>
+                      {selectedContextTurn.exclusion_reason ? <p className="mt-2">reason: {selectedContextTurn.exclusion_reason}</p> : null}
+                    </div>
+
+                    <div className="grid gap-3 xl:grid-cols-2">
+                      <div className="rounded-[10px] border border-[var(--color-line)] px-3 py-3">
+                        <p className="pixel-label">derived memories</p>
+                        <div className="mt-3 space-y-2">
+                          {derivedTurnMemories?.memories.length ? (
+                            derivedTurnMemories.memories.map((item) => (
+                              <div key={item.memory_id} className="rounded-[8px] border border-[var(--color-line)] px-3 py-2">
+                                <div className="flex flex-wrap items-center gap-2">
+                                  <span className="pixel-tag">{item.memory_type || item.kind}</span>
+                                  {item.status ? <span className="pixel-tag">{item.status}</span> : null}
+                                  {item.freshness ? <span className="pixel-tag">{item.freshness}</span> : null}
+                                  <span className="mono text-[0.92rem]">{item.memory_id}</span>
+                                </div>
+                                <p className="mt-2 text-[var(--color-ink)]">{item.title}</p>
+                                <p className="mt-2">{item.summary || item.content}</p>
+                              </div>
+                            ))
+                          ) : (
+                            <p>No derived governed memory found for the selected turn.</p>
+                          )}
+                        </div>
+                      </div>
+
+                      <div className="rounded-[10px] border border-[var(--color-line)] px-3 py-3">
+                        <p className="pixel-label">derived conversation recall</p>
+                        <div className="mt-3 space-y-2">
+                          {derivedTurnMemories?.conversation_recall.length ? (
+                            derivedTurnMemories.conversation_recall.map((item) => (
+                              <div key={item.chunk_id} className="rounded-[8px] border border-[var(--color-line)] px-3 py-2">
+                                <div className="flex flex-wrap items-center gap-2">
+                                  <span className="pixel-tag">{item.role}</span>
+                                  <span className="pixel-tag">{item.status}</span>
+                                  <span className="mono text-[0.92rem]">{item.chunk_id}</span>
+                                </div>
+                                <p className="mt-2">{item.summary || item.snippet}</p>
+                              </div>
+                            ))
+                          ) : (
+                            <p>No derived conversation recall entries found for the selected turn.</p>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="mt-4 rounded-[10px] border border-[var(--color-line)] px-3 py-3 text-sm text-[var(--color-ink-soft)]">
+                    Pick a turn in the Context Trace panel to inspect derived memories and exclude it from future context.
+                  </div>
+                )}
               </div>
             </div>
           ) : (

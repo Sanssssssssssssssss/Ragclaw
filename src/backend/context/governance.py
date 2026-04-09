@@ -94,6 +94,10 @@ def _candidate(
     updated_at: str,
     confidence: float,
     applicability: dict[str, Any] | None = None,
+    source_turn_ids: tuple[str, ...] = (),
+    source_run_ids: tuple[str, ...] = (),
+    source_memory_ids: tuple[str, ...] = (),
+    generated_by: str = "context_writer",
 ) -> MemoryCandidate:
     rule = rule_for(memory_type)
     namespace = memory_scope_namespace(rule.scope, base_dir=base_dir, thread_id=thread_id)
@@ -119,6 +123,11 @@ def _candidate(
         applicability=dict(applicability or {}),
         direct_prompt=rule.direct_prompt and not rule.retrieval_only,
         promotion_priority=rule.promotion_priority,
+        source_turn_ids=source_turn_ids,
+        source_run_ids=source_run_ids,
+        source_memory_ids=source_memory_ids,
+        generated_by=generated_by,
+        generated_at=updated_at,
         fingerprint=fingerprint,
         conflict_key=conflict_key_for(memory_type, namespace, title),
     )
@@ -172,6 +181,11 @@ def extract_memory_candidates(
 
     user_message = str(state.get("user_message", "") or "").strip()
     history = list(state.get("history", []) or [])
+    turn_id = str(state.get("turn_id", "") or "").strip()
+    run_id = str(state.get("run_id", "") or "").strip()
+    source_turn_ids = (turn_id,) if turn_id else ()
+    source_run_ids = (run_id,) if run_id else ()
+    source_memory_ids = tuple(str(item) for item in state.get("selected_memory_ids", []) or [] if str(item).strip())
     recent_user_lines = [
         str(item.get("content", "") or "").strip()
         for item in history[-6:]
@@ -197,6 +211,9 @@ def extract_memory_candidates(
                     updated_at=updated_at,
                     confidence=0.92,
                     applicability={"prompt_paths": ["direct_answer", "capability_path", "knowledge_qa"]},
+                    source_turn_ids=source_turn_ids,
+                    source_run_ids=source_run_ids,
+                    source_memory_ids=source_memory_ids,
                 )
             )
         if looks_like_feedback(line):
@@ -213,6 +230,9 @@ def extract_memory_candidates(
                     updated_at=updated_at,
                     confidence=0.9,
                     applicability={"prompt_paths": ["direct_answer", "capability_path", "knowledge_qa", "resumed_hitl"]},
+                    source_turn_ids=source_turn_ids,
+                    source_run_ids=source_run_ids,
+                    source_memory_ids=source_memory_ids,
                 )
             )
         if looks_like_project_fact(line):
@@ -229,6 +249,9 @@ def extract_memory_candidates(
                     updated_at=updated_at,
                     confidence=0.82,
                     applicability={"prompt_paths": ["capability_path", "knowledge_qa", "recovery_path"]},
+                    source_turn_ids=source_turn_ids,
+                    source_run_ids=source_run_ids,
+                    source_memory_ids=source_memory_ids,
                 )
             )
         if looks_like_external_reference(line):
@@ -245,6 +268,9 @@ def extract_memory_candidates(
                     updated_at=updated_at,
                     confidence=0.86,
                     applicability={"prompt_paths": ["knowledge_qa", "capability_path"]},
+                    source_turn_ids=source_turn_ids,
+                    source_run_ids=source_run_ids,
+                    source_memory_ids=source_memory_ids,
                 )
             )
         if looks_like_artifact_map(line):
@@ -261,6 +287,9 @@ def extract_memory_candidates(
                     updated_at=updated_at,
                     confidence=0.72,
                     applicability={"prompt_paths": ["knowledge_qa", "capability_path"]},
+                    source_turn_ids=source_turn_ids,
+                    source_run_ids=source_run_ids,
+                    source_memory_ids=source_memory_ids,
                 )
             )
 
@@ -281,6 +310,9 @@ def extract_memory_candidates(
                 updated_at=updated_at,
                 confidence=0.74,
                 applicability={"prompt_paths": ["capability_path", "resumed_hitl", "recovery_path"]},
+                source_turn_ids=source_turn_ids,
+                source_run_ids=source_run_ids,
+                source_memory_ids=source_memory_ids,
             )
         )
 
@@ -300,6 +332,9 @@ def extract_memory_candidates(
                     updated_at=updated_at,
                     confidence=0.68,
                     applicability={"prompt_paths": ["capability_path", "recovery_path", "resumed_hitl"]},
+                    source_turn_ids=source_turn_ids,
+                    source_run_ids=source_run_ids,
+                    source_memory_ids=source_memory_ids,
                 )
             )
 
@@ -322,6 +357,9 @@ def extract_memory_candidates(
                 updated_at=updated_at,
                 confidence=0.66,
                 applicability={"prompt_paths": ["capability_path", "recovery_path"]},
+                source_turn_ids=source_turn_ids,
+                source_run_ids=source_run_ids,
+                source_memory_ids=source_memory_ids,
             )
         )
 
@@ -343,6 +381,9 @@ def extract_memory_candidates(
                     updated_at=updated_at,
                     confidence=0.7,
                     applicability={"prompt_paths": ["knowledge_qa"]},
+                    source_turn_ids=source_turn_ids,
+                    source_run_ids=source_run_ids,
+                    source_memory_ids=source_memory_ids,
                 )
             )
         elif looks_like_artifact_map(text):
@@ -360,6 +401,9 @@ def extract_memory_candidates(
                     updated_at=updated_at,
                     confidence=0.65,
                     applicability={"prompt_paths": ["knowledge_qa", "capability_path"]},
+                    source_turn_ids=source_turn_ids,
+                    source_run_ids=source_run_ids,
+                    source_memory_ids=source_memory_ids,
                 )
             )
 
@@ -404,6 +448,9 @@ def extract_memory_candidates(
                 updated_at=updated_at,
                 confidence=0.78,
                 applicability={"prompt_paths": ["resumed_hitl", "recovery_path"], "thread_id": thread_id},
+                source_turn_ids=source_turn_ids,
+                source_run_ids=source_run_ids,
+                source_memory_ids=source_memory_ids,
             )
         )
 

@@ -17,7 +17,9 @@ import {
   compressSession,
   createSession,
   deleteSession,
+  excludeContextTurn as excludeContextTurnRequest,
   getContextTurn,
+  getContextTurnCall,
   getExecutionPlatform,
   getKnowledgeIndexStatus,
   getPendingHitl,
@@ -26,6 +28,7 @@ import {
   getSessionHistory,
   getSessionTokens,
   getSkillRetrieval,
+  getTurnDerivedMemories,
   listContextTurns,
   listSessionCheckpoints,
   listSessions,
@@ -44,8 +47,12 @@ import {
   triggerContextConsolidation,
   type CheckpointEvent,
   type CheckpointSummary,
+  type ContextModelCallPayload,
+  type ContextModelCallSummary,
+  type ContextQuarantineResultPayload,
   type ContextTurnPayload,
   type ContextTurnSummary,
+  type DerivedTurnMemoriesPayload,
   type Evidence,
   type ExecutionPlatform,
   type HitlAuditEntry,
@@ -96,6 +103,9 @@ type ChatStore = {
   sessionContext: SessionContextPayload | null;
   contextTurns: ContextTurnSummary[];
   selectedContextTurn: ContextTurnPayload | null;
+  contextTurnCalls: ContextModelCallSummary[];
+  selectedContextCall: ContextModelCallPayload | null;
+  derivedTurnMemories: DerivedTurnMemoriesPayload | null;
   isInitializing: boolean;
   isSessionLoading: boolean;
   isStreaming: boolean;
@@ -115,6 +125,8 @@ type ChatStore = {
   refreshAssets: () => Promise<void>;
   triggerConsolidation: () => Promise<void>;
   selectContextTurn: (turnId: string) => Promise<void>;
+  selectContextCall: (callId: string) => Promise<void>;
+  excludeContextTurn: (turnId: string) => Promise<ContextQuarantineResultPayload | null>;
 };
 
 type RuntimeStore = {
@@ -453,6 +465,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [sessionContext, setSessionContext] = useState<SessionContextPayload | null>(null);
   const [contextTurns, setContextTurns] = useState<ContextTurnSummary[]>([]);
   const [selectedContextTurn, setSelectedContextTurn] = useState<ContextTurnPayload | null>(null);
+  const [contextTurnCalls, setContextTurnCalls] = useState<ContextModelCallSummary[]>([]);
+  const [selectedContextCall, setSelectedContextCall] = useState<ContextModelCallPayload | null>(null);
+  const [derivedTurnMemories, setDerivedTurnMemories] = useState<DerivedTurnMemoriesPayload | null>(null);
   const [isInitializing, setIsInitializing] = useState(true);
   const [isSessionLoading, setIsSessionLoading] = useState(false);
   const [isStreaming, setIsStreaming] = useState(false);
@@ -515,10 +530,23 @@ export function AppProvider({ children }: { children: ReactNode }) {
         const nextTurnId = preferredTurnId ?? items[0]?.turn_id ?? null;
         if (!nextTurnId) {
           setSelectedContextTurn(null);
+          setContextTurnCalls([]);
+          setSelectedContextCall(null);
+          setDerivedTurnMemories(null);
           return;
         }
         const detail = await getContextTurn(sessionId, nextTurnId);
         setSelectedContextTurn(detail.turn);
+        setContextTurnCalls(Array.isArray(detail.calls) ? detail.calls : []);
+        const preferredCallId = detail.calls?.[0]?.call_id ?? null;
+        if (preferredCallId) {
+          const callDetail = await getContextTurnCall(sessionId, nextTurnId, preferredCallId);
+          setSelectedContextCall(callDetail.call);
+        } else {
+          setSelectedContextCall(null);
+        }
+        const derived = await getTurnDerivedMemories(sessionId, nextTurnId);
+        setDerivedTurnMemories(derived);
       } finally {
         setContextTurnsLoading(false);
       }
@@ -538,6 +566,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
             setSessionContext(null);
             setContextTurns([]);
             setSelectedContextTurn(null);
+            setContextTurnCalls([]);
+            setSelectedContextCall(null);
+            setDerivedTurnMemories(null);
             const mcpPayload = await listMcpCapabilities();
             setMcpCapabilities(mcpPayload.capabilities);
             return;
@@ -586,6 +617,16 @@ export function AppProvider({ children }: { children: ReactNode }) {
       try {
         const detail = await getContextTurn(currentSessionId, turnId);
         setSelectedContextTurn(detail.turn);
+        setContextTurnCalls(Array.isArray(detail.calls) ? detail.calls : []);
+        const nextCallId = detail.calls?.[0]?.call_id ?? null;
+        if (nextCallId) {
+          const callDetail = await getContextTurnCall(currentSessionId, turnId, nextCallId);
+          setSelectedContextCall(callDetail.call);
+        } else {
+          setSelectedContextCall(null);
+        }
+        const derived = await getTurnDerivedMemories(currentSessionId, turnId);
+        setDerivedTurnMemories(derived);
         setConnectionError(null);
       } catch (error) {
         setConnectionError(toErrorMessage(error));
@@ -594,6 +635,39 @@ export function AppProvider({ children }: { children: ReactNode }) {
       }
     },
     [currentSessionId]
+  );
+
+  const selectContextCall = useCallback(
+    async (callId: string) => {
+      if (!currentSessionId || !selectedContextTurn || !callId) return;
+      try {
+        const detail = await getContextTurnCall(currentSessionId, selectedContextTurn.turn_id, callId);
+        setSelectedContextCall(detail.call);
+        setConnectionError(null);
+      } catch (error) {
+        setConnectionError(toErrorMessage(error));
+      }
+    },
+    [currentSessionId, selectedContextTurn]
+  );
+
+  const excludeContextTurn = useCallback(
+    async (turnId: string) => {
+      if (!currentSessionId || !turnId) return null;
+      setAssetsLoading(true);
+      try {
+        const payload = await excludeContextTurnRequest(currentSessionId, turnId);
+        await refreshCheckpoints(currentSessionId);
+        setConnectionError(null);
+        return payload.result;
+      } catch (error) {
+        setConnectionError(toErrorMessage(error));
+        return null;
+      } finally {
+        setAssetsLoading(false);
+      }
+    },
+    [currentSessionId, refreshCheckpoints]
   );
 
   const loadSessionEssentials = useCallback(
@@ -1340,6 +1414,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
       sessionContext,
       contextTurns,
       selectedContextTurn,
+      contextTurnCalls,
+      selectedContextCall,
+      derivedTurnMemories,
       isInitializing,
       isSessionLoading,
       isStreaming,
@@ -1354,9 +1431,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
         refreshCheckpoints: async () => refreshCheckpoints(),
         refreshAssets: async () => refreshCheckpoints(),
         triggerConsolidation,
-        selectContextTurn
+        selectContextTurn,
+        selectContextCall,
+        excludeContextTurn
       }),
-    [assetsLoading, checkpoints, connectionError, contextTurns, contextTurnsLoading, hitlAudit, isInitializing, isSessionLoading, isStreaming, mcpCapabilities, messages, pendingHitl, refreshCheckpoints, retryInitialization, resumeCheckpoint, selectContextTurn, selectedContextTurn, sendMessage, sessionContext, streamingMessagesState, submitHitlDecision, tokenStats, triggerConsolidation]
+    [assetsLoading, checkpoints, connectionError, contextTurnCalls, contextTurns, contextTurnsLoading, derivedTurnMemories, excludeContextTurn, hitlAudit, isInitializing, isSessionLoading, isStreaming, mcpCapabilities, messages, pendingHitl, refreshCheckpoints, retryInitialization, resumeCheckpoint, selectContextCall, selectContextTurn, selectedContextCall, selectedContextTurn, sendMessage, sessionContext, streamingMessagesState, submitHitlDecision, tokenStats, triggerConsolidation]
   );
 
   const runtimeValue = useMemo<RuntimeStore>(

@@ -11,6 +11,16 @@ function formatTimestamp(value: string) {
   return Number.isNaN(date.getTime()) ? value : date.toLocaleString();
 }
 
+function objectToText(value: unknown) {
+  if (!value) return "";
+  if (typeof value === "string") return value;
+  try {
+    return JSON.stringify(value, null, 2);
+  } catch {
+    return String(value);
+  }
+}
+
 function SectionBlock({
   title,
   content,
@@ -71,17 +81,44 @@ const TurnListItem = memo(function TurnListItem({
       <div className="flex flex-wrap items-center gap-2">
         <span className="pixel-tag">{item.path_type}</span>
         <span className="pixel-tag">{item.run_status || "fresh"}</span>
-        {!item.model_invoked ? <span className="pixel-tag">direct output</span> : null}
+        {item.excluded_from_context ? <span className="pixel-tag">excluded</span> : null}
       </div>
       <p className="mt-3 line-clamp-3 text-sm leading-6 text-[var(--color-ink)]">
         {item.user_query || "No user query captured."}
       </p>
       <div className="mt-3 flex flex-wrap items-center gap-3 text-xs text-[var(--color-ink-soft)]">
         <span>{formatTimestamp(item.created_at)}</span>
+        <span>{`calls ${item.call_ids.length}`}</span>
         <span>{`mem ${item.selected_memory_ids.length}`}</span>
-        <span>{`artifacts ${item.selected_artifact_ids.length}`}</span>
-        <span>{`evidence ${item.selected_evidence_ids.length}`}</span>
       </div>
+    </button>
+  );
+});
+
+const CallListItem = memo(function CallListItem({
+  active,
+  item,
+  onSelect
+}: {
+  active: boolean;
+  item: ReturnType<typeof useChatStore>["contextTurnCalls"][number];
+  onSelect: (callId: string) => void;
+}) {
+  return (
+    <button
+      className={`w-full rounded-2xl border px-4 py-3 text-left transition ${
+        active
+          ? "border-[var(--color-accent)] bg-[color-mix(in_srgb,var(--color-accent)_12%,transparent)]"
+          : "border-[var(--color-border)] bg-[var(--color-panel-soft)] hover:border-[var(--color-accent-soft)]"
+      }`}
+      onClick={() => onSelect(item.call_id)}
+      type="button"
+    >
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="pixel-tag">{item.call_type}</span>
+        <span className="pixel-tag">{item.call_site}</span>
+      </div>
+      <p className="mt-3 text-sm leading-6 text-[var(--color-ink-soft)]">{formatTimestamp(item.created_at)}</p>
     </button>
   );
 });
@@ -90,18 +127,27 @@ export function ContextTracePanel() {
   const {
     contextTurns,
     selectedContextTurn,
+    contextTurnCalls,
+    selectedContextCall,
     contextTurnsLoading,
     selectContextTurn,
+    selectContextCall,
     refreshAssets
   } = useChatStore();
   const { currentSessionId } = useSessionStore();
 
   const activeTurnId = selectedContextTurn?.turn_id ?? contextTurns[0]?.turn_id ?? null;
-  const budgetAllocated = selectedContextTurn?.budget_report?.allocated ?? {};
-  const budgetUsed = selectedContextTurn?.budget_report?.used ?? {};
-  const excluded = Array.isArray(selectedContextTurn?.budget_report?.excluded_from_prompt)
-    ? selectedContextTurn?.budget_report?.excluded_from_prompt
-    : [];
+  const activeCallId = selectedContextCall?.call_id ?? contextTurnCalls[0]?.call_id ?? null;
+  const selectedBudget = selectedContextCall?.budget_report ?? selectedContextTurn?.budget_report ?? { allocated: {}, used: {}, excluded_from_prompt: [] };
+  const budgetAllocated = selectedBudget.allocated ?? {};
+  const budgetUsed = selectedBudget.used ?? {};
+  const excluded = Array.isArray(selectedBudget.excluded_from_prompt) ? selectedBudget.excluded_from_prompt : [];
+  const envelope = selectedContextCall?.context_envelope ?? selectedContextTurn?.context_envelope ?? null;
+  const selectedMemoryIds = selectedContextCall?.selected_memory_ids ?? selectedContextTurn?.selected_memory_ids ?? [];
+  const selectedArtifactIds = selectedContextCall?.selected_artifact_ids ?? selectedContextTurn?.selected_artifact_ids ?? [];
+  const selectedEvidenceIds = selectedContextCall?.selected_evidence_ids ?? selectedContextTurn?.selected_evidence_ids ?? [];
+  const droppedItems = selectedContextCall?.dropped_items ?? selectedContextTurn?.dropped_items ?? [];
+  const truncationReason = selectedContextCall?.truncation_reason ?? selectedContextTurn?.truncation_reason ?? "";
 
   if (!currentSessionId) {
     return (
@@ -118,14 +164,14 @@ export function ContextTracePanel() {
         <p className="pixel-label">context trace</p>
         <h3 className="pixel-title mt-3 text-[1rem] text-[var(--color-ink)]">No assistant turn snapshot yet</h3>
         <p className="pixel-note mt-4 max-w-3xl">
-          Once this session produces an assistant answer, the final context envelope for that turn will appear here.
+          Once this session produces an assistant answer, the model-call level context snapshots will appear here.
         </p>
       </div>
     );
   }
 
   return (
-    <div className="grid min-h-0 gap-4 xl:grid-cols-[280px_minmax(0,1fr)]">
+    <div className="grid min-h-0 gap-4 xl:grid-cols-[260px_260px_minmax(0,1fr)]">
       <aside className="pixel-card-soft min-h-0 p-3">
         <div className="mb-3 flex items-center justify-between gap-2">
           <div className="pixel-label flex items-center gap-2">
@@ -148,9 +194,30 @@ export function ContextTracePanel() {
         </div>
       </aside>
 
+      <aside className="pixel-card-soft min-h-0 p-3">
+        <div className="mb-3 flex items-center gap-2 pixel-label">
+          <Layers3 size={14} />
+          model calls
+        </div>
+        {!contextTurnCalls.length ? (
+          <div className="pixel-note px-2 py-3 text-sm">No model call was recorded for this turn.</div>
+        ) : (
+          <div className="space-y-3 overflow-y-auto pr-1">
+            {contextTurnCalls.map((item) => (
+              <CallListItem
+                key={item.call_id}
+                active={item.call_id === activeCallId}
+                item={item}
+                onSelect={(callId) => void selectContextCall(callId)}
+              />
+            ))}
+          </div>
+        )}
+      </aside>
+
       <div className="space-y-4 overflow-y-auto pr-1">
         {contextTurnsLoading && !selectedContextTurn ? (
-          <div className="pixel-card-soft px-6 py-8 text-sm text-[var(--color-ink-soft)]">Loading context trace…</div>
+          <div className="pixel-card-soft px-6 py-8 text-sm text-[var(--color-ink-soft)]">Loading context trace...</div>
         ) : selectedContextTurn ? (
           <>
             <section className="pixel-card p-4">
@@ -171,33 +238,37 @@ export function ContextTracePanel() {
                   <div className="flex flex-wrap items-center gap-2">
                     <span className="pixel-tag">{selectedContextTurn.path_type}</span>
                     <span className="pixel-tag">{selectedContextTurn.run_status || "fresh"}</span>
-                    <span className="pixel-tag">
-                      {selectedContextTurn.model_invoked ? "model context" : "direct output / no extra synthesis"}
-                    </span>
+                    {selectedContextTurn.excluded_from_context ? <span className="pixel-tag">excluded from future context</span> : null}
+                    {selectedContextCall ? <span className="pixel-tag">{selectedContextCall.call_type}</span> : <span className="pixel-tag">post-turn state</span>}
                   </div>
                   <div className="mt-4 space-y-2 text-sm leading-6 text-[var(--color-ink-soft)]">
-                    <p>{`call site: ${selectedContextTurn.call_site}`}</p>
-                    <p>{`created: ${formatTimestamp(selectedContextTurn.created_at)}`}</p>
+                    <p>{`turn created: ${formatTimestamp(selectedContextTurn.created_at)}`}</p>
                     <p>{`run: ${selectedContextTurn.run_id}`}</p>
                     <p>{`thread: ${selectedContextTurn.thread_id}`}</p>
                     {selectedContextTurn.checkpoint_id ? <p>{`checkpoint: ${selectedContextTurn.checkpoint_id}`}</p> : null}
                     {selectedContextTurn.resume_source ? <p>{`resume source: ${selectedContextTurn.resume_source}`}</p> : null}
-                    <p>{`engine: ${selectedContextTurn.orchestration_engine || "langgraph"}`}</p>
+                    {selectedContextTurn.excluded_at ? <p>{`excluded at: ${formatTimestamp(selectedContextTurn.excluded_at)}`}</p> : null}
+                    {selectedContextTurn.exclusion_reason ? <p>{`exclusion reason: ${selectedContextTurn.exclusion_reason}`}</p> : null}
                   </div>
                 </section>
               </div>
             </section>
 
             <div className="grid gap-4 xl:grid-cols-2">
-              <SectionBlock title="System block" content={selectedContextTurn.context_envelope.system_block} />
-              <SectionBlock title="Recent history" content={selectedContextTurn.context_envelope.history_block} />
-              <SectionBlock title="Working memory" content={selectedContextTurn.context_envelope.working_memory_block} />
-              <SectionBlock title="Episodic memory" content={selectedContextTurn.context_envelope.episodic_block} />
-              <SectionBlock title="Semantic memory hits" content={selectedContextTurn.context_envelope.semantic_block} />
-              <SectionBlock title="Procedural memory hits" content={selectedContextTurn.context_envelope.procedural_block} />
-              <SectionBlock title="Conversation recall" content={selectedContextTurn.context_envelope.conversation_block} />
-              <SectionBlock title="Artifacts / MCP / capability outputs" content={selectedContextTurn.context_envelope.artifact_block} />
-              <SectionBlock title="Retrieval evidence" content={selectedContextTurn.context_envelope.evidence_block} />
+              <SectionBlock title="System block" content={envelope?.system_block ?? ""} />
+              <SectionBlock title="Recent history" content={envelope?.history_block ?? ""} />
+              <SectionBlock title="Working memory" content={envelope?.working_memory_block ?? ""} />
+              <SectionBlock title="Episodic memory" content={envelope?.episodic_block ?? ""} />
+              <SectionBlock title="Semantic memory hits" content={envelope?.semantic_block ?? ""} />
+              <SectionBlock title="Procedural memory hits" content={envelope?.procedural_block ?? ""} />
+              <SectionBlock title="Conversation recall" content={envelope?.conversation_block ?? ""} />
+              <SectionBlock title="Artifacts / MCP / capability outputs" content={envelope?.artifact_block ?? ""} />
+              <SectionBlock title="Retrieval evidence" content={envelope?.evidence_block ?? ""} />
+              <SectionBlock
+                title="Post-turn state snapshot"
+                content={objectToText(selectedContextTurn.post_turn_state_snapshot)}
+                emptyLabel="No post-turn state snapshot was recorded."
+              />
             </div>
 
             <div className="grid gap-4 xl:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)]">
@@ -244,38 +315,36 @@ export function ContextTracePanel() {
                 <div className="space-y-3 text-sm text-[var(--color-ink-soft)]">
                   <div>
                     <p className="pixel-label mb-2">selected memory ids</p>
-                    {selectedContextTurn.selected_memory_ids.length ? (
-                      selectedContextTurn.selected_memory_ids.map((item) => <p key={item}>{item}</p>)
+                    {selectedMemoryIds.length ? (
+                      selectedMemoryIds.map((item) => <p key={item}>{item}</p>)
                     ) : (
                       <p className="pixel-note">No governed memories were selected.</p>
                     )}
                   </div>
                   <div>
                     <p className="pixel-label mb-2">selected artifact ids</p>
-                    {selectedContextTurn.selected_artifact_ids.length ? (
-                      selectedContextTurn.selected_artifact_ids.map((item) => <p key={item}>{item}</p>)
+                    {selectedArtifactIds.length ? (
+                      selectedArtifactIds.map((item) => <p key={item}>{item}</p>)
                     ) : (
                       <p className="pixel-note">No artifacts were selected.</p>
                     )}
                   </div>
                   <div>
                     <p className="pixel-label mb-2">selected evidence ids</p>
-                    {selectedContextTurn.selected_evidence_ids.length ? (
-                      selectedContextTurn.selected_evidence_ids.map((item) => <p key={item}>{item}</p>)
+                    {selectedEvidenceIds.length ? (
+                      selectedEvidenceIds.map((item) => <p key={item}>{item}</p>)
                     ) : (
                       <p className="pixel-note">No retrieval evidence ids were recorded.</p>
                     )}
                   </div>
                   <div>
                     <p className="pixel-label mb-2">dropped items / truncation</p>
-                    {selectedContextTurn.dropped_items.length ? (
-                      selectedContextTurn.dropped_items.map((item) => <p key={item}>{item}</p>)
+                    {droppedItems.length ? (
+                      droppedItems.map((item) => <p key={item}>{item}</p>)
                     ) : (
                       <p className="pixel-note">No items were dropped from this snapshot.</p>
                     )}
-                    {selectedContextTurn.truncation_reason ? (
-                      <p className="mt-2 text-[var(--color-ink)]">{selectedContextTurn.truncation_reason}</p>
-                    ) : null}
+                    {truncationReason ? <p className="mt-2 text-[var(--color-ink)]">{truncationReason}</p> : null}
                   </div>
                 </div>
               </section>
