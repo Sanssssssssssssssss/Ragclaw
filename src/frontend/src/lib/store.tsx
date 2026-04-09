@@ -742,6 +742,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
     setIsSessionLoading(false);
     setConnectionError(null);
     setRuntimeReady(false);
+    let listedSessions: SessionSummary[] = [];
+    let selectedSessionId: string | null = null;
     try {
       const initialSessions = await listSessions();
       let nextSessions = initialSessions;
@@ -751,6 +753,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
         nextSessions = [created];
         nextSessionId = created.id;
       }
+      listedSessions = nextSessions;
+      selectedSessionId = nextSessionId;
       setSessions(nextSessions);
       setCurrentSessionId(nextSessionId);
       if (nextSessionId) {
@@ -767,8 +771,6 @@ export function AppProvider({ children }: { children: ReactNode }) {
       }
     } catch (error) {
       setConnectionError(toErrorMessage(error));
-      setSessions([]);
-      setCurrentSessionId(null);
       setMessages([]);
       setStreamingMessages([]);
       setCheckpoints([]);
@@ -785,6 +787,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
       setInspectorContent("");
       setInspectorDirty(false);
       setInspectorCatalogReady(false);
+      if (listedSessions.length) {
+        setSessions(listedSessions);
+        setCurrentSessionId(selectedSessionId);
+      } else {
+        setSessions([]);
+        setCurrentSessionId(null);
+      }
     } finally {
       setIsInitializing(false);
     }

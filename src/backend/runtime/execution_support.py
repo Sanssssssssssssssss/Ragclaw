@@ -123,11 +123,15 @@ class HarnessExecutionSupport:
         prompt_tokens = count_tokens(prompt_payload)
 
         final_content_parts: list[str] = []
+        last_streamed = ""
         async for chunk in self._agent._build_chat_model().astream(model_messages):
             text = _stringify_content(getattr(chunk, "content", ""))
             if text:
-                final_content_parts.append(text)
-                yield {"type": "token", "content": text}
+                next_chunk = self.incremental_stream_text(last_streamed, text)
+                last_streamed = text
+                if next_chunk:
+                    final_content_parts.append(next_chunk)
+                    yield {"type": "token", "content": next_chunk}
 
         final_content = "".join(final_content_parts).strip()
         yield {

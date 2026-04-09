@@ -238,6 +238,8 @@ class ContextStore:
             """
         )
         self._ensure_memory_columns(conn)
+        self._ensure_context_turn_columns(conn)
+        self._ensure_conversation_recall_columns(conn)
         conn.executescript(
             """
             CREATE INDEX IF NOT EXISTS idx_memories_kind_namespace ON memories(kind, namespace, updated_at DESC);
@@ -313,6 +315,35 @@ class ContextStore:
             END
             """
         )
+
+    def _ensure_context_turn_columns(self, conn: sqlite3.Connection) -> None:
+        rows = conn.execute("PRAGMA table_info(context_turns)").fetchall()
+        columns = {str(row["name"]): row for row in rows}
+        desired: dict[str, str] = {
+            "excluded_from_context": "INTEGER NOT NULL DEFAULT 0",
+            "excluded_at": "TEXT NOT NULL DEFAULT ''",
+            "exclusion_reason": "TEXT NOT NULL DEFAULT ''",
+            "call_ids_json": "TEXT NOT NULL DEFAULT '[]'",
+            "post_state_json": "TEXT NOT NULL DEFAULT '{}'",
+        }
+        for column_name, ddl in desired.items():
+            if column_name not in columns:
+                conn.execute(f"ALTER TABLE context_turns ADD COLUMN {column_name} {ddl}")
+
+    def _ensure_conversation_recall_columns(self, conn: sqlite3.Connection) -> None:
+        rows = conn.execute("PRAGMA table_info(conversation_recall)").fetchall()
+        columns = {str(row["name"]): row for row in rows}
+        desired: dict[str, str] = {
+            "source_turn_ids_json": "TEXT NOT NULL DEFAULT '[]'",
+            "source_run_ids_json": "TEXT NOT NULL DEFAULT '[]'",
+            "source_memory_ids_json": "TEXT NOT NULL DEFAULT '[]'",
+            "generated_by": "TEXT NOT NULL DEFAULT ''",
+            "generated_at": "TEXT NOT NULL DEFAULT ''",
+            "status": "TEXT NOT NULL DEFAULT 'active'",
+        }
+        for column_name, ddl in desired.items():
+            if column_name not in columns:
+                conn.execute(f"ALTER TABLE conversation_recall ADD COLUMN {column_name} {ddl}")
 
     def memory_index_path(self) -> Path:
         if self._base_dir is None:

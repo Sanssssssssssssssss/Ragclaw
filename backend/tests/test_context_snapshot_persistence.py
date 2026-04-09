@@ -4,6 +4,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+import sqlite3
 
 BACKEND_DIR = Path(__file__).resolve().parents[1]
 PROJECT_ROOT = BACKEND_DIR.parent
@@ -90,6 +91,84 @@ class ContextSnapshotPersistenceTests(unittest.TestCase):
         self.assertEqual(loaded.context_envelope.semantic_block, "[Semantic memory]\n- Report facts")  # type: ignore[union-attr]
         self.assertEqual(loaded.assembly_decision.selected_memory_ids, ("mem-1", "mem-2"))  # type: ignore[union-attr]
         self.assertEqual(loaded.budget_report["used"]["semantic_memory"], 80)  # type: ignore[index,union-attr]
+
+    def test_legacy_context_tables_are_migrated_for_session_loading(self) -> None:
+        context_store.close()
+        db_dir = self.base_dir / "storage" / "context"
+        db_dir.mkdir(parents=True, exist_ok=True)
+        db_path = db_dir / "context.sqlite"
+        if db_path.exists():
+            db_path.unlink()
+        conn = sqlite3.connect(db_path)
+        conn.executescript(
+            """
+            CREATE TABLE conversation_recall (
+                chunk_id TEXT PRIMARY KEY,
+                thread_id TEXT NOT NULL,
+                session_id TEXT,
+                run_id TEXT NOT NULL,
+                role TEXT NOT NULL,
+                source_message_id TEXT NOT NULL,
+                snippet TEXT NOT NULL,
+                summary TEXT NOT NULL,
+                tags_json TEXT NOT NULL,
+                metadata_json TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                fingerprint TEXT NOT NULL UNIQUE
+            );
+            CREATE TABLE context_turns (
+                turn_id TEXT PRIMARY KEY,
+                session_id TEXT,
+                run_id TEXT NOT NULL,
+                thread_id TEXT NOT NULL,
+                assistant_message_id TEXT,
+                segment_index INTEGER NOT NULL,
+                call_site TEXT NOT NULL,
+                path_type TEXT NOT NULL,
+                user_query TEXT NOT NULL,
+                context_envelope_json TEXT NOT NULL,
+                assembly_decision_json TEXT NOT NULL,
+                budget_report_json TEXT NOT NULL,
+                selected_memory_ids_json TEXT NOT NULL,
+                selected_artifact_ids_json TEXT NOT NULL,
+                selected_evidence_ids_json TEXT NOT NULL,
+                selected_conversation_ids_json TEXT NOT NULL,
+                dropped_items_json TEXT NOT NULL,
+                truncation_reason TEXT NOT NULL,
+                run_status TEXT NOT NULL DEFAULT 'fresh',
+                resume_source TEXT NOT NULL DEFAULT '',
+                checkpoint_id TEXT NOT NULL DEFAULT '',
+                orchestration_engine TEXT NOT NULL DEFAULT 'langgraph',
+                model_invoked INTEGER NOT NULL DEFAULT 1,
+                created_at TEXT NOT NULL
+            );
+            """
+        )
+        conn.commit()
+        conn.close()
+
+        context_store.configure_for_base_dir(self.base_dir)
+
+        verify_conn = sqlite3.connect(db_path)
+        try:
+            migrated_turn_columns = {
+                row[1]
+                for row in verify_conn.execute("PRAGMA table_info(context_turns)").fetchall()
+            }
+            migrated_recall_columns = {
+                row[1]
+                for row in verify_conn.execute("PRAGMA table_info(conversation_recall)").fetchall()
+            }
+        finally:
+            verify_conn.close()
+
+        self.assertIn("excluded_from_context", migrated_turn_columns)
+        self.assertIn("call_ids_json", migrated_turn_columns)
+        self.assertIn("post_state_json", migrated_turn_columns)
+        self.assertIn("status", migrated_recall_columns)
+        self.assertIn("source_turn_ids_json", migrated_recall_columns)
+        self.assertIn("generated_by", migrated_recall_columns)
 
 
 if __name__ == "__main__":
