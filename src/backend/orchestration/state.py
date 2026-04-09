@@ -31,6 +31,8 @@ class GraphState(TypedDict, total=False):
     governor_snapshot: dict[str, Any]
     interrupt_request: dict[str, Any] | None
     approval_decision: str
+    working_memory: dict[str, Any]
+    episodic_summary: dict[str, Any]
     recovery_attempts: dict[str, int]
     last_failure: dict[str, Any] | None
     recovery_action: str
@@ -78,6 +80,8 @@ def create_initial_graph_state(
         governor_snapshot={},
         interrupt_request=None,
         approval_decision="",
+        working_memory={},
+        episodic_summary={},
         recovery_attempts={},
         last_failure=None,
         recovery_action="",
@@ -89,6 +93,9 @@ def create_initial_graph_state(
             "checkpoint_namespace": "harness_langgraph_orchestration_v1",
             "checkpoint_enabled": True,
             "graph_version": "phase1",
+            "run_status": "fresh",
+            "resume_source": "",
+            "updated_at": "",
         },
         path_kind="direct_answer",
         resolved_tools=[],

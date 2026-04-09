@@ -9,6 +9,7 @@ from langgraph.types import Command, interrupt
 
 from src.backend.capabilities.invocation import CapabilityRuntimeContext, GovernedCapabilityTool, capability_runtime_scope, invoke_capability
 from src.backend.capabilities.types import CapabilityResult
+from src.backend.context import ContextAssembler, ContextWriter
 from src.backend.decision.skill_gate import SkillDecision, skill_instruction
 from src.backend.observability.types import AnswerRecord, RetrievalRecord, RouteDecisionRecord, SkillDecisionRecord, ToolCallRecord
 from src.backend.orchestration.checkpointing import PendingHitlRequest, checkpoint_store
@@ -84,6 +85,8 @@ class HarnessLangGraphOrchestrator:
         self._execution = execution_support
         self._knowledge_grader = knowledge_grader or KnowledgeAnswerGrader(agent_manager)
         self._graph = compile_harness_orchestration_graph(self)
+        self._context_assembler = ContextAssembler()
+        self._context_writer = ContextWriter()
         self._bindings: _ExecutionBindings | None = None
         self._resume_checkpoint_id = str(resume_checkpoint_id or "")
         self._resume_thread_id = str(resume_thread_id or "")
@@ -140,15 +143,34 @@ class HarnessLangGraphOrchestrator:
 
     async def bootstrap_node(self, state: GraphState) -> dict[str, Any]:
         bindings = self._bindings_or_raise()
-        return {
+        checkpoint_meta = {
+            **dict(state.get("checkpoint_meta", {}) or {}),
+            "thread_id": state.get("thread_id", ""),
+            "checkpoint_id": self._resume_checkpoint_id or str(state.get("checkpoint_meta", {}).get("checkpoint_id", "") or ""),
+            "resume_source": self._resume_source or str(state.get("checkpoint_meta", {}).get("resume_source", "") or ""),
+            "run_status": "resumed" if self._resume_checkpoint_id else str(state.get("checkpoint_meta", {}).get("run_status", "") or "fresh"),
+            "updated_at": bindings.runtime.now(),
+        }
+        base_state = {
+            **dict(state),
+            "checkpoint_meta": checkpoint_meta,
             "augmented_history": list(state.get("history", [])),
             "rag_mode": self._agent._runtime_rag_mode(),
             "governor_snapshot": bindings.runtime.governor_for(bindings.handle.run_id).snapshot(),
         }
+        context_updates = self._context_writer.snapshot(base_state, updated_at=bindings.runtime.now())
+        return {
+            "augmented_history": list(state.get("history", [])),
+            "rag_mode": self._agent._runtime_rag_mode(),
+            "governor_snapshot": bindings.runtime.governor_for(bindings.handle.run_id).snapshot(),
+            "checkpoint_meta": checkpoint_meta,
+            **context_updates,
+        }
 
     async def route_node(self, state: GraphState) -> dict[str, Any]:
         bindings = self._bindings_or_raise()
-        strategy, decision = await self._agent.resolve_routing(state["user_message"], list(state.get("history", [])))
+        route_context = self._context_assembler.assemble(path_kind="direct_answer", state=state)
+        strategy, decision = await self._agent.resolve_routing(state["user_message"], list(route_context.history_messages))
         await bindings.runtime.emit(
             bindings.handle,
             "route.decided",
@@ -174,7 +196,8 @@ class HarnessLangGraphOrchestrator:
         decision = state.get("route_decision")
         if strategy is None or decision is None:
             return {}
-        skill = self._agent.decide_skill(state["user_message"], list(state.get("history", [])), strategy, decision)
+        skill_context = self._context_assembler.assemble(path_kind=self._path_kind_from_decision(decision), state=state)
+        skill = self._agent.decide_skill(state["user_message"], list(skill_context.history_messages), strategy, decision)
         if skill.use_skill:
             await self._activate_skill_capability(message=state["user_message"], routing_decision=decision, skill_decision=skill)
         await bindings.runtime.emit(
@@ -187,17 +210,20 @@ class HarnessLangGraphOrchestrator:
                 reason_short=skill.reason_short,
             ).to_dict(),
         )
-        return {"skill_decision": skill}
+        updates = self._context_writer.snapshot({**dict(state), "skill_decision": skill}, updated_at=bindings.runtime.now())
+        return {"skill_decision": skill, **updates}
 
     async def memory_retrieval_node(self, state: GraphState) -> dict[str, Any]:
         bindings = self._bindings_or_raise()
         strategy = state.get("execution_strategy")
         if not state.get("rag_mode") or strategy is None or not strategy.allow_retrieval:
-            return {"memory_retrieval": []}
+            updates = self._context_writer.snapshot({**dict(state), "memory_retrieval": []}, updated_at=bindings.runtime.now())
+            return {"memory_retrieval": [], **updates}
         await bindings.runtime.emit(bindings.handle, "retrieval.started", {"kind": "memory", "stage": "memory", "title": "Memory retrieval", "message": ""})
         retrievals = self._memory_retrieve(state["user_message"])
         if not retrievals:
-            return {"memory_retrieval": []}
+            updates = self._context_writer.snapshot({**dict(state), "memory_retrieval": []}, updated_at=bindings.runtime.now())
+            return {"memory_retrieval": [], **updates}
         step = self._agent._format_memory_retrieval_step(retrievals)
         await bindings.runtime.emit(
             bindings.handle,
@@ -210,16 +236,24 @@ class HarnessLangGraphOrchestrator:
                 results=tuple(self._agent._harness_retrieval_evidence_records(step["results"])),
             ).to_dict(),
         )
-        history = list(state.get("augmented_history", state.get("history", [])))
-        history.append({"role": "assistant", "content": self._agent._format_retrieval_context(retrievals)})
-        return {"memory_retrieval": retrievals, "augmented_history": history}
+        updates = self._context_writer.snapshot(
+            {**dict(state), "memory_retrieval": retrievals},
+            updated_at=bindings.runtime.now(),
+        )
+        return {"memory_retrieval": retrievals, **updates}
 
     async def direct_answer_node(self, state: GraphState) -> dict[str, Any]:
         strategy = state.get("execution_strategy")
-        messages = self._agent._build_messages(list(state.get("augmented_history", state.get("history", []))))
+        assembly = self._context_assembler.assemble(path_kind="direct_answer", state=state)
+        messages = list(assembly.history_messages)
         messages.append({"role": "user", "content": state["user_message"]})
-        answer, usage = await self._stream_model_answer(messages, extra_instructions=strategy.to_instructions() if strategy is not None else None)
-        return {"final_answer": answer, "answer_usage": usage, "answer_finalized": True, "answer_segments": [answer] if answer else []}
+        extra_instructions = list(assembly.extra_instructions)
+        if strategy is not None:
+            extra_instructions.extend(strategy.to_instructions())
+        answer, usage = await self._stream_model_answer(messages, extra_instructions=extra_instructions or None)
+        result = {"final_answer": answer, "answer_usage": usage, "answer_finalized": True, "answer_segments": [answer] if answer else []}
+        updates = self._context_writer.snapshot({**dict(state), **result}, updated_at=self._bindings_or_raise().runtime.now())
+        return {**result, **updates}
 
     async def knowledge_retrieval_node(self, state: GraphState) -> dict[str, Any]:
         bindings = self._bindings_or_raise()
@@ -228,7 +262,6 @@ class HarnessLangGraphOrchestrator:
         async for event in self._knowledge_astream(state["user_message"]):
             if event.get("type") == "orchestrated_result":
                 result = event["result"]
-        history = list(state.get("augmented_history", state.get("history", [])))
         if result is not None:
             for step in result.steps:
                 await bindings.runtime.emit(
@@ -244,23 +277,29 @@ class HarnessLangGraphOrchestrator:
                         reason=getattr(result, "reason", ""),
                     ).to_dict(),
                 )
-            history.append({"role": "assistant", "content": self._agent._format_knowledge_context(result)})
-            scaffold = self._agent._build_knowledge_scaffold(state["user_message"], result)
-            if scaffold:
-                history.append({"role": "assistant", "content": scaffold})
-        return {"knowledge_retrieval": result, "augmented_history": history}
+        updates = self._context_writer.snapshot(
+            {**dict(state), "knowledge_retrieval": result},
+            updated_at=bindings.runtime.now(),
+        )
+        return {"knowledge_retrieval": result, **updates}
 
     async def knowledge_synthesis_node(self, state: GraphState) -> dict[str, Any]:
         result = state.get("knowledge_retrieval")
-        messages = self._agent._build_messages(list(state.get("augmented_history", state.get("history", []))))
+        assembly = self._context_assembler.assemble(path_kind="knowledge_qa", state=state)
+        messages = list(assembly.history_messages)
         messages.append({"role": "user", "content": state["user_message"]})
+        extra_instructions = list(assembly.extra_instructions)
+        if result:
+            extra_instructions.extend(self._agent._knowledge_answer_instructions(result))
         answer, usage = await self._stream_model_answer(
             messages,
-            extra_instructions=self._agent._knowledge_answer_instructions(result) if result else None,
+            extra_instructions=extra_instructions or None,
             system_prompt_override=self._agent._knowledge_system_prompt(),
             stream_deltas=False,
         )
-        return {"final_answer": answer, "answer_usage": usage}
+        result_payload = {"final_answer": answer, "answer_usage": usage}
+        updates = self._context_writer.snapshot({**dict(state), **result_payload}, updated_at=self._bindings_or_raise().runtime.now())
+        return {**result_payload, **updates}
 
     async def knowledge_guard_node(self, state: GraphState) -> dict[str, Any]:
         bindings = self._bindings_or_raise()
@@ -274,24 +313,30 @@ class HarnessLangGraphOrchestrator:
             if guard_result is not None:
                 await bindings.runtime.emit(bindings.handle, "guard.failed", guard_result.to_dict())
         await self._emit_final_answer(answer, usage=state.get("answer_usage"))
-        return {"final_answer": answer, "guard_result": guard_result, "answer_finalized": True, "answer_segments": [answer] if answer else []}
+        result_payload = {"final_answer": answer, "guard_result": guard_result, "answer_finalized": True, "answer_segments": [answer] if answer else []}
+        updates = self._context_writer.snapshot({**dict(state), **result_payload}, updated_at=bindings.runtime.now())
+        return {**result_payload, **updates}
 
     async def capability_selection_node(self, state: GraphState) -> dict[str, Any]:
+        bindings = self._bindings_or_raise()
         strategy = state.get("execution_strategy")
         if strategy is None:
-            return {"selected_capabilities": []}
+            updates = self._context_writer.snapshot({**dict(state), "selected_capabilities": []}, updated_at=bindings.runtime.now())
+            return {"selected_capabilities": [], **updates}
         decision = state.get("route_decision")
         tools = self._agent._resolve_tools_for_strategy(strategy)
         if decision is not None and decision.allowed_tools:
             allowed_names = set(decision.allowed_tools)
             tools = [tool for tool in tools if getattr(tool, "name", "") in allowed_names]
         explicit_id, explicit_payload = self._explicit_capability_selection(state["user_message"], tools) if tools else ("", None)
-        return {
+        result = {
             "selected_capabilities": [str(getattr(tool, "name", "") or "") for tool in tools],
             "explicit_capability_id": explicit_id,
             "explicit_capability_payload": explicit_payload,
             "path_kind": "capability",
         }
+        updates = self._context_writer.snapshot({**dict(state), **result}, updated_at=bindings.runtime.now())
+        return {**result, **updates}
 
     async def capability_approval_node(self, state: GraphState) -> dict[str, Any]:
         bindings = self._bindings_or_raise()
@@ -378,20 +423,24 @@ class HarnessLangGraphOrchestrator:
         )
         if decision == "approve":
             bindings.context.approval_overrides.add(str(request["capability_id"]))
-            return {
+            result = {
                 "interrupt_request": request,
                 "approval_decision": "approve",
                 "recovery_action": "",
             }
+            updates = self._context_writer.snapshot({**dict(state), **result}, updated_at=bindings.runtime.now())
+            return {**result, **updates}
         if decision == "edit":
             bindings.context.approval_overrides.add(str(request["capability_id"]))
-            return {
+            result = {
                 "interrupt_request": request,
                 "approval_decision": "edit",
                 "explicit_capability_id": str(request["capability_id"]),
                 "explicit_capability_payload": dict(payload.get("edited_input_snapshot", {}) or request["proposed_input"]),
                 "recovery_action": "",
             }
+            updates = self._context_writer.snapshot({**dict(state), **result}, updated_at=bindings.runtime.now())
+            return {**result, **updates}
 
         blocked_result = CapabilityResult(
             status="blocked",
@@ -436,7 +485,7 @@ class HarnessLangGraphOrchestrator:
             f"I did not run {request['display_name']} because you rejected this approval request."
         )
         await self._emit_final_answer(rejection_answer)
-        return {
+        result = {
             "interrupt_request": request,
             "approval_decision": "reject",
             "capability_results": [
@@ -455,6 +504,8 @@ class HarnessLangGraphOrchestrator:
             "needs_answer_synthesis": False,
             "recovery_action": "",
         }
+        updates = self._context_writer.snapshot({**dict(state), **result}, updated_at=bindings.runtime.now())
+        return {**result, **updates}
 
     async def capability_invoke_node(self, state: GraphState) -> dict[str, Any]:
         bindings = self._bindings_or_raise()
@@ -470,7 +521,8 @@ class HarnessLangGraphOrchestrator:
                 if str(getattr(tool, "name", "") or "") in selected_capabilities
             ]
         if not tools:
-            return {"selected_capabilities": []}
+            updates = self._context_writer.snapshot({**dict(state), "selected_capabilities": []}, updated_at=bindings.runtime.now())
+            return {"selected_capabilities": [], **updates}
         explicit_id = str(state.get("explicit_capability_id", "") or "")
         explicit_payload = state.get("explicit_capability_payload")
         if explicit_id and explicit_payload is not None:
@@ -497,7 +549,7 @@ class HarnessLangGraphOrchestrator:
             }
             if result.status in {"success", "partial"}:
                 await self._emit_final_answer(rendered)
-                return {
+                result_payload = {
                     "recorded_tools": [{"tool": explicit_id, "input": tool_input, "output": rendered, "call_id": call_id}],
                     "capability_results": [result_entry],
                     "final_answer": rendered,
@@ -508,7 +560,9 @@ class HarnessLangGraphOrchestrator:
                     "recovery_action": "",
                     "recovered_from_failure": bool(state.get("last_failure")),
                 }
-            return {
+                updates = self._context_writer.snapshot({**dict(state), **result_payload}, updated_at=bindings.runtime.now())
+                return {**result_payload, **updates}
+            result_payload = {
                 "recorded_tools": [{"tool": explicit_id, "input": tool_input, "output": rendered, "call_id": call_id}],
                 "capability_results": [result_entry],
                 "final_answer": "",
@@ -519,9 +573,11 @@ class HarnessLangGraphOrchestrator:
                 "recovery_action": "",
                 "recovered_from_failure": False,
             }
+            updates = self._context_writer.snapshot({**dict(state), **result_payload}, updated_at=bindings.runtime.now())
+            return {**result_payload, **updates}
         return await self._invoke_tool_path(
+            state=state,
             message=state["user_message"],
-            augmented_history=list(state.get("augmented_history", state.get("history", []))),
             strategy=state.get("execution_strategy"),
             skill_decision=state.get("skill_decision"),
             allowed_tools=tools,
@@ -531,11 +587,13 @@ class HarnessLangGraphOrchestrator:
         bindings = self._bindings_or_raise()
         failure = extract_latest_failed_capability(state)
         if failure is None:
-            return {
+            result = {
                 "last_failure": None,
                 "recovery_action": "",
                 "recovery_metadata": dict(state.get("recovery_metadata", {}) or {}),
             }
+            updates = self._context_writer.snapshot({**dict(state), **result}, updated_at=bindings.runtime.now())
+            return {**result, **updates}
 
         spec = self._agent.get_capability_registry().get(failure.capability_id)
         recovery_attempts = dict(state.get("recovery_attempts", {}) or {})
@@ -576,7 +634,7 @@ class HarnessLangGraphOrchestrator:
                     "recovered": True,
                 },
             )
-            return {
+            result = {
                 "recovery_attempts": recovery_attempts,
                 "last_failure": failure.to_dict(),
                 "recovery_action": "retry_once",
@@ -589,6 +647,8 @@ class HarnessLangGraphOrchestrator:
                 "answer_finalized": False,
                 "approval_decision": "",
             }
+            updates = self._context_writer.snapshot({**dict(state), **result}, updated_at=bindings.runtime.now())
+            return {**result, **updates}
 
         if decision.action == "escalate_to_hitl":
             escalated_failures.add(failure.failure_key)
@@ -606,7 +666,7 @@ class HarnessLangGraphOrchestrator:
                     "recovered": False,
                 },
             )
-            return {
+            result = {
                 "interrupt_request": interrupt_request,
                 "approval_decision": "",
                 "recovery_action": "escalate_to_hitl",
@@ -619,6 +679,8 @@ class HarnessLangGraphOrchestrator:
                 },
                 "answer_finalized": False,
             }
+            updates = self._context_writer.snapshot({**dict(state), **result}, updated_at=bindings.runtime.now())
+            return {**result, **updates}
 
         fail_fast = decision.action == "fail_fast"
         answer = build_recovery_fallback_answer(
@@ -635,7 +697,7 @@ class HarnessLangGraphOrchestrator:
             },
         )
         await self._emit_final_answer(answer)
-        return {
+        result = {
             "final_answer": answer,
             "answer_segments": [answer] if answer else [],
             "answer_finalized": True,
@@ -648,6 +710,8 @@ class HarnessLangGraphOrchestrator:
                 "last_failure_key": failure.failure_key,
             },
         }
+        updates = self._context_writer.snapshot({**dict(state), **result}, updated_at=bindings.runtime.now())
+        return {**result, **updates}
 
     async def capability_synthesis_node(self, state: GraphState) -> dict[str, Any]:
         bindings = self._bindings_or_raise()
@@ -657,7 +721,7 @@ class HarnessLangGraphOrchestrator:
         recorded_tools = list(state.get("recorded_tools", []))
         if state.get("needs_answer_synthesis"):
             final_answer = await self._stream_tool_result_fallback(
-                history_messages=self._agent._build_messages(list(state.get("augmented_history", state.get("history", [])))),
+                state=state,
                 user_message=state["user_message"],
                 recorded_tools=recorded_tools,
                 strategy=state.get("execution_strategy"),
@@ -670,14 +734,21 @@ class HarnessLangGraphOrchestrator:
             )
         if final_answer:
             await bindings.runtime.emit(bindings.handle, "answer.completed", AnswerRecord(content=final_answer, segment_index=bindings.runtime.current_segment_index(bindings.handle), final=True).to_dict())
-        return {"final_answer": final_answer, "answer_finalized": True}
+        result = {"final_answer": final_answer, "answer_finalized": True}
+        updates = self._context_writer.snapshot({**dict(state), **result}, updated_at=bindings.runtime.now())
+        return {**result, **updates}
 
     async def capability_guard_node(self, state: GraphState) -> dict[str, Any]:
-        return {"guard_result": None}
+        bindings = self._bindings_or_raise()
+        result = {"guard_result": None}
+        updates = self._context_writer.snapshot({**dict(state), **result}, updated_at=bindings.runtime.now())
+        return {**result, **updates}
 
     async def finalize_node(self, state: GraphState) -> dict[str, Any]:
         bindings = self._bindings_or_raise()
-        return {"governor_snapshot": bindings.runtime.governor_for(bindings.handle.run_id).snapshot()}
+        result = {"governor_snapshot": bindings.runtime.governor_for(bindings.handle.run_id).snapshot()}
+        updates = self._context_writer.snapshot({**dict(state), **result}, updated_at=bindings.runtime.now())
+        return {**result, **updates}
 
     def _thread_id_for(self, handle: "RuntimeRunHandle") -> str:
         return self._resume_thread_id or checkpoint_store.thread_id_for(
@@ -897,15 +968,18 @@ class HarnessLangGraphOrchestrator:
                 return tool_name, {key: str(match.group(1)).strip().rstrip(".,;:")}
         return "", None
 
-    async def _invoke_tool_path(self, *, message: str, augmented_history: list[dict[str, Any]], strategy: "ExecutionStrategy | None", skill_decision: SkillDecision | None, allowed_tools: list[Any]) -> dict[str, Any]:
+    async def _invoke_tool_path(self, *, state: GraphState, message: str, strategy: "ExecutionStrategy | None", skill_decision: SkillDecision | None, allowed_tools: list[Any]) -> dict[str, Any]:
         bindings = self._bindings_or_raise()
         if strategy is None:
             raise RuntimeError("capability path requires execution strategy")
+        assembly = self._context_assembler.assemble(path_kind="capability", state=state)
+        extra_instructions = list(assembly.extra_instructions)
+        extra_instructions.extend(self._execution.tool_agent_instructions(strategy, skill_decision or SkillDecision(False, "", 0.0, "")))
         agent = self._execution.build_tool_agent(
-            extra_instructions=self._execution.tool_agent_instructions(strategy, skill_decision or SkillDecision(False, "", 0.0, "")),
+            extra_instructions=extra_instructions,
             tools_override=allowed_tools,
         )
-        messages = self._agent._build_messages(augmented_history)
+        messages = list(assembly.history_messages)
         messages.append({"role": "user", "content": message})
         final_parts: list[str] = []
         answer_segments: list[str] = []
@@ -967,7 +1041,7 @@ class HarnessLangGraphOrchestrator:
 
         final_answer = "".join(final_parts).strip() or last_ai_message.strip()
         last_failure = extract_latest_failed_capability({"capability_results": capability_results})
-        return {
+        result = {
             "recorded_tools": recorded_tools,
             "capability_results": capability_results,
             "final_answer": final_answer,
@@ -979,6 +1053,8 @@ class HarnessLangGraphOrchestrator:
             "recovery_action": "",
             "recovered_from_failure": False,
         }
+        updates = self._context_writer.snapshot({**dict(state), **result}, updated_at=bindings.runtime.now())
+        return {**result, **updates}
 
     def _consume_captured_result(self, context: CapabilityRuntimeContext, capability_id: str) -> dict[str, Any] | None:
         for index, entry in enumerate(list(context.result_log)):
@@ -986,8 +1062,9 @@ class HarnessLangGraphOrchestrator:
                 return context.result_log.pop(index)
         return None
 
-    async def _stream_tool_result_fallback(self, *, history_messages: list[dict[str, str]], user_message: str, recorded_tools: list[dict[str, str]], strategy: "ExecutionStrategy | None") -> str:
-        fallback_messages = list(history_messages)
+    async def _stream_tool_result_fallback(self, *, state: GraphState, user_message: str, recorded_tools: list[dict[str, str]], strategy: "ExecutionStrategy | None") -> str:
+        assembly = self._context_assembler.assemble(path_kind="capability", state=state)
+        fallback_messages = list(assembly.history_messages)
         fallback_messages.append({"role": "assistant", "content": self._execution.tool_results_context(recorded_tools)})
         fallback_messages.append({"role": "user", "content": user_message})
         instructions = [
@@ -995,6 +1072,7 @@ class HarnessLangGraphOrchestrator:
             "Answer the user's original request directly using the provided tool results.",
             "Your answer must be natural-language and user-facing, not an internal note.",
         ]
+        instructions.extend(assembly.extra_instructions)
         if strategy is not None:
             instructions.extend(strategy.to_instructions())
         answer, _usage = await self._stream_model_answer(fallback_messages, extra_instructions=instructions)
