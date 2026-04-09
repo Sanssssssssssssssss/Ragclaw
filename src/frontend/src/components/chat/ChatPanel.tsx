@@ -8,6 +8,8 @@ import { PixelGhostFriend } from "@/components/icons/PixelGhostFriend";
 import { useChatStore, useSessionStore } from "@/lib/store";
 
 const AUTO_SCROLL_THRESHOLD = 72;
+const AUTO_SCROLL_RESTORE_THRESHOLD = 12;
+const AUTO_SCROLL_USER_PAUSE_MS = 900;
 const CHAT_ITEM_ESTIMATE = 220;
 
 type ChatRow = {
@@ -36,6 +38,7 @@ export function ChatPanel() {
   const frameRef = useRef<number | null>(null);
   const lastScrollTopRef = useRef(0);
   const programmaticScrollRef = useRef(false);
+  const userScrollPauseUntilRef = useRef(0);
   const rowCacheRef = useRef(
     new Map<string, { source: ChatRow["message"]; streaming: boolean; row: ChatRow }>()
   );
@@ -91,15 +94,37 @@ export function ChatPanel() {
     }
   }, []);
 
+  const getDistanceToBottom = useCallback(() => {
+    const container = scrollRef.current;
+    if (!container) {
+      return Infinity;
+    }
+    return container.scrollHeight - container.scrollTop - container.clientHeight;
+  }, []);
+
+  const pauseAutoStick = useCallback(() => {
+    stickToBottomRef.current = false;
+    userScrollPauseUntilRef.current = performance.now() + AUTO_SCROLL_USER_PAUSE_MS;
+    cancelScheduledScroll();
+  }, [cancelScheduledScroll]);
+
   const syncToBottom = useCallback((defer = true) => {
     const container = scrollRef.current;
-    if (!container || !stickToBottomRef.current) {
+    if (
+      !container ||
+      !stickToBottomRef.current ||
+      performance.now() < userScrollPauseUntilRef.current
+    ) {
       return;
     }
 
     const run = () => {
       const nextContainer = scrollRef.current;
-      if (!nextContainer || !stickToBottomRef.current) {
+      if (
+        !nextContainer ||
+        !stickToBottomRef.current ||
+        performance.now() < userScrollPauseUntilRef.current
+      ) {
         return;
       }
       programmaticScrollRef.current = true;
@@ -142,9 +167,8 @@ export function ChatPanel() {
       lastScrollTopRef.current = nextScrollTop;
 
       if (scrolledUp) {
-        stickToBottomRef.current = false;
-        cancelScheduledScroll();
-      } else if (distanceToBottom <= AUTO_SCROLL_THRESHOLD) {
+        pauseAutoStick();
+      } else if (distanceToBottom <= AUTO_SCROLL_RESTORE_THRESHOLD) {
         stickToBottomRef.current = true;
       }
 
@@ -155,13 +179,12 @@ export function ChatPanel() {
 
     const handleWheel = (event: WheelEvent) => {
       if (event.deltaY < 0) {
-        stickToBottomRef.current = false;
-        cancelScheduledScroll();
+        pauseAutoStick();
       }
     };
 
     const handlePointerDown = () => {
-      cancelScheduledScroll();
+      pauseAutoStick();
     };
 
     handleScroll();
@@ -173,7 +196,7 @@ export function ChatPanel() {
       container.removeEventListener("wheel", handleWheel);
       container.removeEventListener("pointerdown", handlePointerDown);
     };
-  }, [cancelScheduledScroll, syncToBottom]);
+  }, [cancelScheduledScroll, pauseAutoStick, syncToBottom]);
 
   useLayoutEffect(() => {
     if (!renderableMessages.length) {
@@ -195,10 +218,20 @@ export function ChatPanel() {
   }, [isStreaming, lastMessage, syncToBottom]);
 
   const handleTotalHeightChange = useCallback(() => {
+    if (performance.now() < userScrollPauseUntilRef.current) {
+      cancelScheduledScroll();
+      return;
+    }
+    const distanceToBottom = getDistanceToBottom();
+    if (distanceToBottom > AUTO_SCROLL_THRESHOLD) {
+      stickToBottomRef.current = false;
+      cancelScheduledScroll();
+      return;
+    }
     if (stickToBottomRef.current) {
       syncToBottom(false);
     }
-  }, [syncToBottom]);
+  }, [cancelScheduledScroll, getDistanceToBottom, syncToBottom]);
 
   const handleEditAndContinue = useCallback(() => {
     if (!pendingHitl) return;
