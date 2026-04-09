@@ -476,11 +476,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
   const setStreamingMessages = useCallback(
     (value: Message[] | ((previous: Message[]) => Message[])) => {
-      setStreamingMessagesState((previous) => {
-        const next = typeof value === "function" ? value(previous) : value;
-        streamingMessagesRef.current = next;
-        return next;
-      });
+      const previous = streamingMessagesRef.current;
+      const next = typeof value === "function" ? value(previous) : value;
+      streamingMessagesRef.current = next;
+      setStreamingMessagesState(next);
     },
     []
   );
@@ -1099,7 +1098,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
             if (event === "done") {
               flushTokenBuffer();
               const finalContent = String(data.content ?? "");
-              patchAssistant((message) => (message.content ? message : { ...message, content: finalContent }));
+              if (finalContent) {
+                patchAssistant((message) =>
+                  message.content === finalContent ? message : { ...message, content: finalContent }
+                );
+              }
               const usage = normalizeUsage(data.usage);
               if (usage) patchAssistant((message) => ({ ...message, usage }));
               const runMeta = normalizeRunMeta(data.run_meta);

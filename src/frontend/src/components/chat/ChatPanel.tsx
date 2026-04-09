@@ -124,6 +124,10 @@ export function ChatPanel() {
       const distanceToBottom =
         container.scrollHeight - container.scrollTop - container.clientHeight;
       stickToBottomRef.current = distanceToBottom <= AUTO_SCROLL_THRESHOLD;
+      if (!stickToBottomRef.current && frameRef.current !== null) {
+        window.cancelAnimationFrame(frameRef.current);
+        frameRef.current = null;
+      }
     };
 
     handleScroll();
@@ -139,12 +143,9 @@ export function ChatPanel() {
   }, [renderableMessages.length]);
 
   useLayoutEffect(() => {
-    if (!messages.length) {
-      return;
-    }
     stickToBottomRef.current = true;
     syncToBottom(false);
-  }, [currentSessionId, messages.length]);
+  }, [currentSessionId]);
 
   useLayoutEffect(() => {
     if (!lastMessage) {
