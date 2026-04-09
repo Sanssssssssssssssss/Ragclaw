@@ -122,8 +122,10 @@ export type EpisodicSummaryPayload = {
 
 export type ContextMemoryRecord = {
   memory_id: string;
-  kind: "semantic" | "procedural";
+  kind: "semantic" | "procedural" | "episodic";
   namespace: string;
+  memory_type?: string;
+  scope?: string;
   title: string;
   content: string;
   summary: string;
@@ -132,7 +134,49 @@ export type ContextMemoryRecord = {
   source: string;
   created_at: string;
   updated_at: string;
+  confidence?: number;
+  freshness?: string;
+  stale_after?: string;
+  status?: string;
+  supersedes?: string[];
+  applicability?: Record<string, unknown>;
+  direct_prompt?: boolean;
+  promotion_priority?: number;
+  conflict_flag?: boolean;
+  conflict_with?: string[];
   enabled: boolean;
+};
+
+export type ConversationRecallPayload = {
+  chunk_id: string;
+  thread_id: string;
+  session_id: string | null;
+  run_id: string;
+  role: string;
+  source_message_id: string;
+  snippet: string;
+  summary: string;
+  tags: string[];
+  metadata: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
+  fingerprint: string;
+};
+
+export type ConsolidationSummaryPayload = {
+  consolidation_id: string;
+  trigger: string;
+  thread_id: string | null;
+  status: string;
+  created_at: string;
+  completed_at: string;
+  promoted_memory_ids: string[];
+  superseded_memory_ids: string[];
+  stale_memory_ids: string[];
+  dropped_memory_ids: string[];
+  conflict_memory_ids: string[];
+  notes: string[];
+  stats: Record<string, unknown>;
 };
 
 export type ContextAssemblyRecord = {
@@ -153,7 +197,12 @@ export type SessionContextPayload = {
   episodic_summary: EpisodicSummaryPayload;
   semantic_memories: ContextMemoryRecord[];
   procedural_memories: ContextMemoryRecord[];
+  episodic_memories: ContextMemoryRecord[];
+  manifests: ContextMemoryRecord[];
+  conversation_recall: ConversationRecallPayload[];
   assemblies: ContextAssemblyRecord[];
+  consolidation_runs: ConsolidationSummaryPayload[];
+  latest_consolidation: ConsolidationSummaryPayload | null;
 };
 
 export type ExecutionPlatform = "windows" | "linux";
@@ -433,6 +482,13 @@ export async function listContextAssemblies(params: { sessionId?: string; runId?
   return request<{ thread_id: string | null; run_id: string | null; assemblies: ContextAssemblyRecord[] }>(
     `/context/assemblies?${search.toString()}`
   );
+}
+
+export async function triggerContextConsolidation(sessionId: string) {
+  const search = new URLSearchParams({ session_id: sessionId });
+  return request<{ consolidation: ConsolidationSummaryPayload }>(`/context/consolidation?${search.toString()}`, {
+    method: "POST"
+  });
 }
 
 /**

@@ -39,6 +39,7 @@ import {
   streamChat,
   streamCheckpointResume,
   streamHitlDecision,
+  triggerContextConsolidation,
   type CheckpointEvent,
   type CheckpointSummary,
   type Evidence,
@@ -105,6 +106,7 @@ type ChatStore = {
   ) => Promise<void>;
   refreshCheckpoints: () => Promise<void>;
   refreshAssets: () => Promise<void>;
+  triggerConsolidation: () => Promise<void>;
 };
 
 type RuntimeStore = {
@@ -494,7 +496,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const refreshCheckpoints = useCallback(
-    async (sessionId?: string | null) => {
+      async (sessionId?: string | null) => {
       const resolvedSessionId = sessionId ?? currentSessionId;
       setAssetsLoading(true);
         try {
@@ -526,8 +528,22 @@ export function AppProvider({ children }: { children: ReactNode }) {
           setAssetsLoading(false);
         }
     },
-    [currentSessionId]
-  );
+      [currentSessionId]
+    );
+
+  const triggerConsolidation = useCallback(async () => {
+    if (!currentSessionId) return;
+    setAssetsLoading(true);
+    try {
+      await triggerContextConsolidation(currentSessionId);
+      await refreshCheckpoints(currentSessionId);
+      setConnectionError(null);
+    } catch (error) {
+      setConnectionError(toErrorMessage(error));
+    } finally {
+      setAssetsLoading(false);
+    }
+  }, [currentSessionId, refreshCheckpoints]);
 
   const loadSessionEssentials = useCallback(
     async (sessionId: string) => {
@@ -1251,13 +1267,14 @@ export function AppProvider({ children }: { children: ReactNode }) {
       connectionError,
       tokenStats,
       retryInitialization,
-      sendMessage,
-      resumeCheckpoint,
-      submitHitlDecision,
-      refreshCheckpoints: async () => refreshCheckpoints(),
-      refreshAssets: async () => refreshCheckpoints()
-    }),
-    [assetsLoading, checkpoints, connectionError, hitlAudit, isInitializing, isSessionLoading, isStreaming, mcpCapabilities, messages, pendingHitl, refreshCheckpoints, retryInitialization, resumeCheckpoint, sendMessage, sessionContext, streamingMessagesState, submitHitlDecision, tokenStats]
+        sendMessage,
+        resumeCheckpoint,
+        submitHitlDecision,
+        refreshCheckpoints: async () => refreshCheckpoints(),
+        refreshAssets: async () => refreshCheckpoints(),
+        triggerConsolidation
+      }),
+    [assetsLoading, checkpoints, connectionError, hitlAudit, isInitializing, isSessionLoading, isStreaming, mcpCapabilities, messages, pendingHitl, refreshCheckpoints, retryInitialization, resumeCheckpoint, sendMessage, sessionContext, streamingMessagesState, submitHitlDecision, tokenStats, triggerConsolidation]
   );
 
   const runtimeValue = useMemo<RuntimeStore>(

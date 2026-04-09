@@ -12,6 +12,8 @@ DEFAULT_EXCLUDED_FROM_PROMPT: tuple[str, ...] = (
     "raw checkpoint blobs",
     "governor snapshots",
     "capability governance internals",
+    "noisy one-off tool output",
+    "temporary failure scenes",
 )
 
 
@@ -24,6 +26,7 @@ def budget_for_path(path_kind: ContextPathKind) -> SlotBudget:
             episodic_summary=450,
             semantic_memory=450,
             procedural_memory=450,
+            conversation_recall=500,
             artifacts=250,
             retrieval_evidence=1800,
             answer_reserve=700,
@@ -36,6 +39,7 @@ def budget_for_path(path_kind: ContextPathKind) -> SlotBudget:
             episodic_summary=450,
             semantic_memory=350,
             procedural_memory=500,
+            conversation_recall=350,
             artifacts=1200,
             retrieval_evidence=350,
             answer_reserve=700,
@@ -48,6 +52,7 @@ def budget_for_path(path_kind: ContextPathKind) -> SlotBudget:
             episodic_summary=700,
             semantic_memory=450,
             procedural_memory=650,
+            conversation_recall=500,
             artifacts=900,
             retrieval_evidence=400,
             answer_reserve=700,
@@ -60,6 +65,7 @@ def budget_for_path(path_kind: ContextPathKind) -> SlotBudget:
             episodic_summary=600,
             semantic_memory=300,
             procedural_memory=450,
+            conversation_recall=450,
             artifacts=1000,
             retrieval_evidence=350,
             answer_reserve=700,
@@ -71,6 +77,7 @@ def budget_for_path(path_kind: ContextPathKind) -> SlotBudget:
         episodic_summary=500,
         semantic_memory=300,
         procedural_memory=450,
+        conversation_recall=300,
         artifacts=300,
         retrieval_evidence=250,
         answer_reserve=700,

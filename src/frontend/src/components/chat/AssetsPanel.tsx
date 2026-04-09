@@ -18,6 +18,7 @@ export function AssetsPanel() {
     assetsLoading,
     isStreaming,
     refreshAssets,
+    triggerConsolidation,
     resumeCheckpoint,
     submitHitlDecision
   } = useChatStore();
@@ -275,6 +276,110 @@ export function AssetsPanel() {
                     ) : (
                       <p className="text-sm text-[var(--color-ink-soft)]">No procedural memory hits yet.</p>
                     )}
+                  </div>
+                </div>
+              </div>
+
+              <div className="pixel-card-soft p-4">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div>
+                    <p className="pixel-label">memory governance</p>
+                    <p className="pixel-note mt-2">Manifest-first recall state, consolidation summary, and lifecycle flags.</p>
+                  </div>
+                  <button
+                    className="ui-button"
+                    disabled={assetsLoading || isStreaming}
+                    onClick={() => void triggerConsolidation()}
+                    type="button"
+                  >
+                    Run consolidation
+                  </button>
+                </div>
+
+                <div className="mt-4 grid gap-3 xl:grid-cols-2">
+                  <div className="rounded-[10px] border border-[var(--color-line)] px-3 py-3 text-sm text-[var(--color-ink-soft)]">
+                    <p className="pixel-label">latest consolidation</p>
+                    {sessionContext.latest_consolidation ? (
+                      <>
+                        <div className="mt-3 flex flex-wrap items-center gap-2">
+                          <span className="pixel-tag">{sessionContext.latest_consolidation.status}</span>
+                          <span className="pixel-tag">{sessionContext.latest_consolidation.trigger}</span>
+                          <span className="mono text-[0.92rem]">{sessionContext.latest_consolidation.created_at}</span>
+                        </div>
+                        <p className="mt-3">
+                          promoted: {sessionContext.latest_consolidation.promoted_memory_ids.length} | stale: {sessionContext.latest_consolidation.stale_memory_ids.length} | superseded: {sessionContext.latest_consolidation.superseded_memory_ids.length} | conflicts: {sessionContext.latest_consolidation.conflict_memory_ids.length}
+                        </p>
+                        <p className="mt-2">{(sessionContext.latest_consolidation.notes || []).join(" | ") || "-"}</p>
+                      </>
+                    ) : (
+                      <p className="mt-3">No consolidation run recorded yet.</p>
+                    )}
+                  </div>
+
+                  <div className="rounded-[10px] border border-[var(--color-line)] px-3 py-3 text-sm text-[var(--color-ink-soft)]">
+                    <p className="pixel-label">conversation recall</p>
+                    <div className="mt-3 space-y-2">
+                      {sessionContext.conversation_recall.length ? (
+                        sessionContext.conversation_recall.slice(0, 4).map((item) => (
+                          <div key={item.chunk_id} className="rounded-[8px] border border-[var(--color-line)] px-3 py-2">
+                            <div className="flex flex-wrap items-center gap-2">
+                              <span className="pixel-tag">{item.role}</span>
+                              <span className="mono text-[0.92rem]">{item.updated_at}</span>
+                            </div>
+                            <p className="mt-2">{item.summary || item.snippet}</p>
+                          </div>
+                        ))
+                      ) : (
+                        <p>No thread recall chunks yet.</p>
+                      )}
+                    </div>
+                  </div>
+                </div>
+
+                <div className="mt-4 grid gap-3 xl:grid-cols-2">
+                  <div className="rounded-[10px] border border-[var(--color-line)] px-3 py-3 text-sm text-[var(--color-ink-soft)]">
+                    <p className="pixel-label">episodic memories</p>
+                    <div className="mt-3 space-y-3">
+                      {sessionContext.episodic_memories.length ? (
+                        sessionContext.episodic_memories.map((item) => (
+                          <div key={item.memory_id} className="rounded-[8px] border border-[var(--color-line)] px-3 py-3">
+                            <div className="flex flex-wrap items-center gap-2">
+                              <span className="pixel-tag">{item.status || "active"}</span>
+                              <span className="pixel-tag">{item.freshness || "fresh"}</span>
+                              <span className="mono text-[0.92rem]">{item.memory_id}</span>
+                            </div>
+                            <p className="mt-2 text-[var(--color-ink)]">{item.title}</p>
+                            <p className="mt-2">{item.summary || item.content}</p>
+                          </div>
+                        ))
+                      ) : (
+                        <p>No episodic memories yet.</p>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="rounded-[10px] border border-[var(--color-line)] px-3 py-3 text-sm text-[var(--color-ink-soft)]">
+                    <p className="pixel-label">memory manifests</p>
+                    <div className="mt-3 space-y-3">
+                      {sessionContext.manifests.length ? (
+                        sessionContext.manifests.slice(0, 10).map((item) => (
+                          <div key={item.memory_id} className="rounded-[8px] border border-[var(--color-line)] px-3 py-3">
+                            <div className="flex flex-wrap items-center gap-2">
+                              <span className="pixel-tag">{item.memory_type || item.kind}</span>
+                              <span className="pixel-tag">{item.scope || item.namespace}</span>
+                              {item.status ? <span className="pixel-tag">{item.status}</span> : null}
+                              {item.freshness ? <span className="pixel-tag">{item.freshness}</span> : null}
+                              {item.conflict_flag ? <span className="pixel-tag">conflict</span> : null}
+                              <span className="mono text-[0.92rem]">{item.memory_id}</span>
+                            </div>
+                            <p className="mt-2 text-[var(--color-ink)]">{item.title}</p>
+                            <p className="mt-2">{item.summary || item.content}</p>
+                          </div>
+                        ))
+                      ) : (
+                        <p>No governed manifests yet.</p>
+                      )}
+                    </div>
                   </div>
                 </div>
               </div>

@@ -10,16 +10,24 @@ from src.backend.context.budget import (
     trim_messages_to_budget,
     trim_text_to_budget,
 )
+from src.backend.context.manifest import tokenize
 from src.backend.context.models import (
     ContextAssembly,
     ContextAssemblyDecision,
     ContextEnvelope,
     ContextPathKind,
+    ConversationRecallRecord,
+    MemoryManifest,
     StoredMemory,
 )
-from src.backend.context.policies import procedural_query_for, project_namespace, semantic_query_for, thread_namespace, user_namespace
-from src.backend.context.procedural_memory import procedural_memory
-from src.backend.context.semantic_memory import semantic_memory
+from src.backend.context.policies import (
+    procedural_query_for,
+    project_namespace,
+    semantic_query_for,
+    thread_namespace,
+    user_namespace,
+)
+from src.backend.context.recall import conversation_recall
 from src.backend.context.store import context_store
 from src.backend.runtime.token_utils import count_tokens
 
@@ -77,13 +85,26 @@ def _format_memory_block(label: str, items: list[StoredMemory]) -> str:
         return ""
     lines = [f"[{label}]"]
     for item in items:
-        summary = str(item.summary or "").strip()
-        content = summary or str(item.content or "").strip()
-        header = f"{item.title} ({item.namespace})".strip()
+        header_bits = [item.title]
+        if item.memory_type:
+            header_bits.append(item.memory_type)
+        if item.namespace:
+            header_bits.append(item.namespace)
+        header = " | ".join(bit for bit in header_bits if bit)
         if header:
             lines.append(f"- {header}")
-        if content:
-            lines.append(f"  {content}")
+        body = str(item.summary or item.content or "").strip()
+        if body:
+            lines.append(f"  {body}")
+    return "\n".join(lines)
+
+
+def _format_conversation_block(items: list[ConversationRecallRecord]) -> str:
+    if not items:
+        return ""
+    lines = ["[Conversation recall]"]
+    for item in items:
+        lines.append(f"- {item.role}: {item.summary or item.snippet}")
     return "\n".join(lines)
 
 
@@ -115,34 +136,39 @@ class ContextAssembler:
         budget = budget_for_path(effective_path)
         source_history = self._history_source(state)
         history_messages = trim_messages_to_budget(source_history, budget.recent_history)
+        history_trimmed = len(history_messages) < len(source_history)
 
         thread_id = str(state.get("thread_id", "") or state.get("session_id", "") or state.get("run_id", "") or "")
         working_memory = self._working_memory_payload(state, thread_id=thread_id)
         episodic_summary = self._episodic_payload(state, thread_id=thread_id)
-
-        semantic_items, procedural_items = self._memory_hits(state, working_memory, thread_id=thread_id)
+        semantic_items, procedural_items = self._memory_hits(
+            state=state,
+            working_memory=working_memory,
+            thread_id=thread_id,
+            path_kind=effective_path,
+        )
+        conversation_items = self._conversation_hits(
+            state=state,
+            working_memory=working_memory,
+            thread_id=thread_id,
+            path_kind=effective_path,
+            history_trimmed=history_trimmed,
+        )
 
         working_memory_block = trim_text_to_budget(
             _format_working_memory_block(working_memory, fields=self._working_memory_fields(effective_path)),
             budget.working_memory,
         )
-        episodic_block = trim_text_to_budget(
-            _format_episodic_block(episodic_summary),
-            budget.episodic_summary,
-        )
-        semantic_block = trim_text_to_budget(
-            _format_memory_block("Semantic memory", semantic_items),
-            budget.semantic_memory,
-        )
+        episodic_block = trim_text_to_budget(_format_episodic_block(episodic_summary), budget.episodic_summary)
+        semantic_block = trim_text_to_budget(_format_memory_block("Semantic memory", semantic_items), budget.semantic_memory)
         procedural_block = trim_text_to_budget(
             _format_memory_block("Procedural memory", procedural_items),
             budget.procedural_memory,
         )
+        conversation_block = trim_text_to_budget(_format_conversation_block(conversation_items), budget.conversation_recall)
+
         artifacts = self._artifact_selector.select_capability_outputs(state, path_kind=effective_path)
-        artifacts_block = trim_text_to_budget(
-            _format_list_block("Capability outputs", artifacts),
-            budget.artifacts,
-        )
+        artifacts_block = trim_text_to_budget(_format_list_block("Capability outputs", artifacts), budget.artifacts)
         evidence = self._artifact_selector.select_retrieval_evidence(state, path_kind=effective_path)
         retrieval_block = trim_text_to_budget(
             _format_list_block("Retrieval evidence", evidence),
@@ -155,6 +181,7 @@ class ContextAssembler:
             "episodic_summary": count_tokens(episodic_block),
             "semantic_memory": count_tokens(semantic_block),
             "procedural_memory": count_tokens(procedural_block),
+            "conversation_recall": count_tokens(conversation_block),
             "artifacts": count_tokens(artifacts_block),
             "retrieval_evidence": count_tokens(retrieval_block),
             "answer_reserve": budget.answer_reserve,
@@ -167,6 +194,7 @@ class ContextAssembler:
             episodic_block=episodic_block,
             semantic_block=semantic_block,
             procedural_block=procedural_block,
+            conversation_block=conversation_block,
             artifact_block=artifacts_block,
             evidence_block=retrieval_block,
             budget_report=dict(budget_used),
@@ -174,12 +202,14 @@ class ContextAssembler:
 
         dropped_items = list(self._dropped_history_ids(source_history, history_messages))
         truncation_reasons: list[str] = []
-        if len(history_messages) < len(source_history):
+        if history_trimmed:
             truncation_reasons.append("recent_history budget")
         if semantic_items and not semantic_block:
             truncation_reasons.append("semantic memory budget")
         if procedural_items and not procedural_block:
             truncation_reasons.append("procedural memory budget")
+        if conversation_items and not conversation_block:
+            truncation_reasons.append("conversation recall budget")
         if artifacts and not artifacts_block:
             truncation_reasons.append("artifact budget")
         if evidence and not retrieval_block:
@@ -195,6 +225,7 @@ class ContextAssembler:
             ),
             selected_artifact_ids=tuple(self._selected_artifact_ids(state, artifacts)),
             selected_evidence_ids=tuple(self._selected_evidence_ids(state, evidence)),
+            selected_conversation_ids=tuple(item.chunk_id for item in conversation_items),
             dropped_items=tuple(dropped_items),
             truncation_reason=", ".join(truncation_reasons),
         )
@@ -212,6 +243,7 @@ class ContextAssembler:
                     envelope.episodic_block,
                     envelope.semantic_block,
                     envelope.procedural_block,
+                    envelope.conversation_block,
                     envelope.artifact_block,
                     envelope.evidence_block,
                 )
@@ -221,6 +253,7 @@ class ContextAssembler:
             episodic_block=episodic_block,
             semantic_block=semantic_block,
             procedural_block=procedural_block,
+            conversation_block=conversation_block,
             artifacts_block=artifacts_block,
             retrieval_block=retrieval_block,
             budget=budget,
@@ -280,33 +313,146 @@ class ContextAssembler:
 
     def _memory_hits(
         self,
+        *,
         state: dict[str, Any],
         working_memory: dict[str, Any],
-        *,
         thread_id: str,
+        path_kind: ContextPathKind,
     ) -> tuple[list[StoredMemory], list[StoredMemory]]:
         namespaces = self._memory_namespaces(thread_id)
-        try:
-            semantic_items = semantic_memory.search(
+        semantic_items = self._hydrate_manifests(
+            self._select_memory_manifests(
+                kind="semantic",
                 namespaces=namespaces,
-                query=semantic_query_for(state, working_memory),
-                limit=4,
-            )
-            procedural_items = procedural_memory.search(
+                query=self._manifest_query(
+                    semantic_query_for(state, working_memory),
+                    state=state,
+                    working_memory=working_memory,
+                    path_kind=path_kind,
+                ),
+                path_kind=path_kind,
+                limit=self._memory_limit(path_kind, kind="semantic"),
+            ),
+            path_kind=path_kind,
+        )
+        procedural_items = self._hydrate_manifests(
+            self._select_memory_manifests(
+                kind="procedural",
                 namespaces=namespaces,
-                query=procedural_query_for(state, working_memory),
-                limit=4,
-            )
-        except Exception:
-            return [], []
+                query=self._manifest_query(
+                    procedural_query_for(state, working_memory),
+                    state=state,
+                    working_memory=working_memory,
+                    path_kind=path_kind,
+                ),
+                path_kind=path_kind,
+                limit=self._memory_limit(path_kind, kind="procedural"),
+            ),
+            path_kind=path_kind,
+        )
         return semantic_items, procedural_items
 
+    def _conversation_hits(
+        self,
+        *,
+        state: dict[str, Any],
+        working_memory: dict[str, Any],
+        thread_id: str,
+        path_kind: ContextPathKind,
+        history_trimmed: bool,
+    ) -> list[ConversationRecallRecord]:
+        if not thread_id:
+            return []
+        if not conversation_recall.should_recall(path_kind=path_kind, state=state, history_trimmed=history_trimmed):
+            return []
+        query = conversation_recall.query_for(state=state, working_memory=working_memory)
+        return conversation_recall.retrieve(
+            thread_id=thread_id,
+            query=query,
+            limit=self._conversation_limit(path_kind),
+        )
+
+    def _select_memory_manifests(
+        self,
+        *,
+        kind: str,
+        namespaces: tuple[str, ...],
+        query: str,
+        path_kind: ContextPathKind,
+        limit: int,
+    ) -> list[MemoryManifest]:
+        try:
+            manifests = context_store.search_memory_manifests(
+                kind=kind,  # type: ignore[arg-type]
+                namespaces=namespaces,
+                query=query,
+                limit=max(limit * 2, 4),
+            )
+        except Exception:
+            return []
+        selected: list[MemoryManifest] = []
+        for manifest in manifests:
+            if manifest.status == "superseded":
+                continue
+            if manifest.memory_type == "session_episode":
+                continue
+            prompt_paths = set(str(item) for item in manifest.applicability.get("prompt_paths", []) or [])
+            if prompt_paths and path_kind not in prompt_paths:
+                continue
+            selected.append(manifest)
+            if len(selected) >= limit:
+                break
+        return selected
+
+    def _hydrate_manifests(self, manifests: list[MemoryManifest], *, path_kind: ContextPathKind) -> list[StoredMemory]:
+        hydrated: list[StoredMemory] = []
+        for manifest in manifests:
+            record = context_store.get_memory(memory_id=manifest.memory_id)
+            if record is None or record.status == "superseded":
+                continue
+            if not record.direct_prompt:
+                continue
+            hydrated.append(record)
+        return hydrated
+
     def _memory_namespaces(self, thread_id: str) -> tuple[str, ...]:
-        namespaces: list[str] = [user_namespace()]
-        namespaces.append(project_namespace(self._base_dir))
+        namespaces: list[str] = [user_namespace(), project_namespace(self._base_dir)]
         if thread_id:
             namespaces.append(thread_namespace(thread_id))
         return tuple(dict.fromkeys(namespace for namespace in namespaces if namespace))
+
+    def _manifest_query(
+        self,
+        base_query: str,
+        *,
+        state: dict[str, Any],
+        working_memory: dict[str, Any],
+        path_kind: ContextPathKind,
+    ) -> str:
+        terms: list[str] = [base_query, str(state.get("user_message", "") or ""), path_kind]
+        terms.extend(str(item) for item in working_memory.get("active_constraints", []) or [])
+        terms.extend(str(item) for item in working_memory.get("active_artifacts", []) or [])
+        terms.extend(str(item) for item in working_memory.get("latest_capability_results", []) or [])
+        terms.extend(str(item) for item in working_memory.get("unresolved_items", []) or [])
+        recent_evidence = self._artifact_selector.select_retrieval_evidence(state, path_kind=path_kind)
+        terms.extend(recent_evidence[:2])
+        return " ".join(term for term in terms if str(term).strip()).strip()
+
+    def _memory_limit(self, path_kind: ContextPathKind, *, kind: str) -> int:
+        if path_kind == "knowledge_qa":
+            return 2 if kind == "semantic" else 2
+        if path_kind == "capability_path":
+            return 3 if kind == "semantic" else 3
+        if path_kind == "resumed_hitl":
+            return 3
+        if path_kind == "recovery_path":
+            return 2 if kind == "semantic" else 3
+        return 2 if kind == "semantic" else 2
+
+    def _conversation_limit(self, path_kind: ContextPathKind) -> int:
+        if path_kind in {"resumed_hitl", "recovery_path"}:
+            return 3
+        return 2
 
     def _working_memory_fields(self, path_kind: ContextPathKind) -> tuple[str, ...]:
         if path_kind == "knowledge_qa":
@@ -350,14 +496,14 @@ class ContextAssembler:
 
     def _system_block(self, path_kind: ContextPathKind) -> str:
         if path_kind == "knowledge_qa":
-            return "[Context policy]\nUse retrieved evidence and summaries only. Do not fabricate unsupported file facts."
+            return "[Context policy]\nPrefer retrieval evidence first, then governed semantic memory. Do not inject retrieval-only memory or unsupported codebase facts."
         if path_kind == "capability_path":
-            return "[Context policy]\nPrefer the latest grounded capability results and active constraints. Do not restate raw audit or trace data."
+            return "[Context policy]\nPrefer active constraints, approved workflow rules, and grounded capability outputs. Exclude raw audit, raw trace, and noisy tool output."
         if path_kind == "resumed_hitl":
-            return "[Context policy]\nThis run resumed from checkpoint/HITL. Use summaries and approved inputs, not raw checkpoint dumps."
+            return "[Context policy]\nThis run resumed from checkpoint/HITL. Use summaries, approved edits, and compact conversation recall instead of raw checkpoint dumps."
         if path_kind == "recovery_path":
-            return "[Context policy]\nThis run is recovering from a capability failure. Use only the recovery summary and surviving evidence."
-        return "[Context policy]\nAnswer directly using recent history plus compact working and episodic memory."
+            return "[Context policy]\nThis run is recovering from failure. Prefer surviving evidence, procedural guidance, and concise conversation recall. Exclude transient failure noise."
+        return "[Context policy]\nAnswer directly using recent history, working memory, and only prompt-safe governed memory."
 
     def _selected_artifact_ids(self, state: dict[str, Any], artifacts: list[str]) -> list[str]:
         selected_ids: list[str] = []
@@ -386,7 +532,11 @@ class ContextAssembler:
                     selected_ids.append(f"{source_path}|{locator}".strip("|"))
         return selected_ids[: len(evidence)]
 
-    def _dropped_history_ids(self, source_history: list[dict[str, str]], selected_history: list[dict[str, str]]) -> tuple[str, ...]:
+    def _dropped_history_ids(
+        self,
+        source_history: list[dict[str, str]],
+        selected_history: list[dict[str, str]],
+    ) -> tuple[str, ...]:
         selected = set(_history_ids(source_history, selected_history))
         dropped = [f"history:{index}" for index in range(len(source_history)) if f"history:{index}" not in selected]
         return tuple(dropped)
@@ -410,3 +560,14 @@ class ContextAssembler:
             )
         except Exception:
             return
+
+    def _recent_terms(self, state: dict[str, Any], working_memory: dict[str, Any]) -> tuple[str, ...]:
+        text = " ".join(
+            [
+                str(state.get("user_message", "") or ""),
+                str(working_memory.get("current_goal", "") or ""),
+                " ".join(str(item) for item in working_memory.get("active_entities", []) or []),
+                " ".join(str(item) for item in working_memory.get("active_artifacts", []) or []),
+            ]
+        )
+        return tokenize(text)
