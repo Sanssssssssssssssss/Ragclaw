@@ -920,6 +920,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       let activeRunMeta = initialAssistant.runMeta;
       let pendingTokenBuffer = "";
       let tokenFlushHandle: number | null = null;
+      let sawTerminalEvent = false;
 
       setStreamingMessages([initialAssistant]);
       setIsStreaming(true);
@@ -1096,6 +1097,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
               return;
             }
             if (event === "done") {
+              sawTerminalEvent = true;
               flushTokenBuffer();
               const finalContent = String(data.content ?? "");
               if (finalContent) {
@@ -1121,6 +1123,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
               return;
             }
             if (event === "error") {
+              sawTerminalEvent = true;
               flushTokenBuffer();
               patchAssistant((message) => ({
                 ...message,
@@ -1146,19 +1149,24 @@ export function AppProvider({ children }: { children: ReactNode }) {
         if (tokenFlushHandle !== null) window.clearTimeout(tokenFlushHandle);
         flushTokenBuffer();
         setIsStreaming(false);
-        if (streamingMessagesRef.current.length) {
-          setMessages((previous) => [...previous, ...streamingMessagesRef.current]);
-          setStreamingMessages([]);
+        const completedStreamingMessages = streamingMessagesRef.current.filter(assistantHasPayload);
+        if (completedStreamingMessages.length) {
+          setMessages((previous) => [...previous, ...completedStreamingMessages]);
         }
+        setStreamingMessages([]);
         try {
-          await Promise.all([refreshSessions(), refreshSessionTokens(sessionId), refreshCheckpoints(sessionId)]);
-          setConnectionError(null);
+          await Promise.all([refreshSessions(), loadSessionEssentials(sessionId)]);
+          if (!sawTerminalEvent && completedStreamingMessages.length) {
+            console.warn("Response stream ended before a terminal event; restored persisted reply.");
+          } else {
+            setConnectionError(null);
+          }
         } catch (error) {
           setConnectionError(toErrorMessage(error));
         }
       }
     },
-    [refreshCheckpoints, refreshSessionTokens, refreshSessions, setStreamingMessages]
+    [loadSessionEssentials, refreshSessions, setStreamingMessages]
   );
 
   const sendMessage = useCallback(
