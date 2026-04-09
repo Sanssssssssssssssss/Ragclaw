@@ -17,38 +17,38 @@ const STEP_META: Record<
   memory: {
     label: "Memory",
     icon: Database,
-    border: "border-[rgba(16,163,127,0.22)] bg-[rgba(16,163,127,0.08)]",
-    badge: "bg-[rgba(16,163,127,0.14)] text-[#7fe7ca]"
+    border: "border-[var(--color-accent-line)] bg-[var(--color-accent-soft)]",
+    badge: "bg-[rgba(189,118,80,0.12)] text-[var(--color-accent)]"
   },
   skill: {
     label: "Skill",
     icon: Search,
-    border: "border-[rgba(255,255,255,0.08)] bg-[rgba(255,255,255,0.04)]",
-    badge: "bg-[rgba(255,255,255,0.08)] text-white"
+    border: "border-[var(--color-line)] bg-[var(--color-surface-soft)]",
+    badge: "bg-[var(--color-surface)] text-[var(--color-ink)]"
   },
   fallback: {
     label: "Fallback",
     icon: Sparkles,
-    border: "border-[rgba(255,107,107,0.2)] bg-[rgba(255,107,107,0.08)]",
-    badge: "bg-[rgba(255,107,107,0.14)] text-[#ffb2b2]"
+    border: "border-[rgba(183,84,39,0.2)] bg-[rgba(183,84,39,0.08)]",
+    badge: "bg-[rgba(183,84,39,0.12)] text-[var(--color-danger)]"
   },
   vector: {
     label: "Vector",
     icon: Database,
-    border: "border-[rgba(16,163,127,0.22)] bg-[rgba(16,163,127,0.08)]",
-    badge: "bg-[rgba(16,163,127,0.14)] text-[#7fe7ca]"
+    border: "border-[var(--color-accent-line)] bg-[var(--color-accent-soft)]",
+    badge: "bg-[rgba(189,118,80,0.12)] text-[var(--color-accent)]"
   },
   bm25: {
     label: "BM25",
     icon: FileSearch,
-    border: "border-[rgba(255,255,255,0.08)] bg-[rgba(255,255,255,0.04)]",
-    badge: "bg-[rgba(255,255,255,0.08)] text-white"
+    border: "border-[var(--color-line)] bg-[var(--color-surface-soft)]",
+    badge: "bg-[var(--color-surface)] text-[var(--color-ink)]"
   },
   fused: {
     label: "Fused",
     icon: Layers3,
-    border: "border-[rgba(16,163,127,0.22)] bg-[rgba(16,163,127,0.08)]",
-    badge: "bg-[rgba(16,163,127,0.14)] text-[#7fe7ca]"
+    border: "border-[var(--color-accent-line)] bg-[var(--color-accent-soft)]",
+    badge: "bg-[rgba(189,118,80,0.12)] text-[var(--color-accent)]"
   }
 };
 
@@ -57,14 +57,14 @@ const RetrievalStepCard = memo(function RetrievalStepCard({ step }: { step: Retr
   const Icon = meta.icon;
 
   return (
-    <section className={`rounded-2xl border p-3 ${meta.border}`}>
+    <section className={`p-3 ${meta.border} border-4 shadow-[6px_6px_0_rgba(0,0,0,0.88)]`}>
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2">
-            <span className={`rounded-full px-2 py-1 text-[11px] font-medium uppercase tracking-[0.18em] ${meta.badge}`}>
+            <span className={`px-2 py-1 text-[11px] font-medium uppercase tracking-[0.18em] border-2 border-[rgba(0,0,0,0.3)] ${meta.badge}`}>
               {meta.label}
             </span>
-            <div className="flex min-w-0 items-center gap-2 text-sm font-medium text-white">
+            <div className="flex min-w-0 items-center gap-2 text-sm font-medium text-[var(--color-ink)]">
               <Icon className="shrink-0" size={14} />
               <span className="truncate">{step.title}</span>
             </div>
@@ -76,7 +76,7 @@ const RetrievalStepCard = memo(function RetrievalStepCard({ step }: { step: Retr
           ) : null}
         </div>
         {step.results.length ? (
-          <span className="shrink-0 rounded-full border border-[var(--color-line)] bg-[rgba(255,255,255,0.04)] px-2 py-1 text-[11px] uppercase tracking-[0.16em] text-[var(--color-ink-soft)]">
+          <span className="shrink-0 border-2 border-[var(--color-line)] bg-[rgba(255,255,255,0.04)] px-2 py-1 text-[11px] uppercase tracking-[0.16em] text-[var(--color-ink-soft)]">
             {step.results.length} hits
           </span>
         ) : null}
@@ -86,7 +86,7 @@ const RetrievalStepCard = memo(function RetrievalStepCard({ step }: { step: Retr
         <div className="mt-3 space-y-2">
           {step.results.map((item, resultIndex) => (
             <div
-              className="rounded-2xl border border-[rgba(255,255,255,0.06)] bg-[rgba(0,0,0,0.2)] p-3"
+              className="border-4 border-[var(--color-line)] bg-[var(--color-surface)] p-3 shadow-[4px_4px_0_rgba(0,0,0,0.78)]"
               key={`${item.channel}-${item.source_path}-${item.locator}-${resultIndex}`}
             >
               <div className="mb-1 flex items-center justify-between gap-3 text-xs uppercase tracking-[0.14em] text-[var(--color-ink-muted)]">
@@ -114,10 +114,10 @@ export const RetrievalCard = memo(function RetrievalCard({ steps }: { steps: Ret
   }
 
   return (
-    <div className="mb-4 rounded-3xl border border-[rgba(16,163,127,0.2)] bg-[rgba(16,163,127,0.07)] p-4">
-      <div className="flex items-center gap-2 text-sm font-medium uppercase tracking-[0.24em] text-[#88e8cf]">
+    <div className="pixel-card-soft mb-4 p-4">
+      <div className="pixel-label flex items-center gap-2 text-[var(--color-accent)]">
         <Database size={15} />
-        Retrieval trace
+        # Retrieval trace
       </div>
 
       <div className="mt-3 space-y-3">

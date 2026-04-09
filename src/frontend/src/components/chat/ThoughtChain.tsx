@@ -27,14 +27,14 @@ const ToolCallRow = memo(function ToolCallRow({ toolCall }: { toolCall: ToolCall
   const isFinished = Boolean(toolCall.output.trim());
 
   return (
-    <div className="rounded-2xl border border-[rgba(255,255,255,0.06)] bg-[rgba(0,0,0,0.2)] p-3">
+    <div className="pixel-card p-3">
       <div className="mb-2 flex items-center justify-between gap-3 text-sm font-medium">
-        <span className="text-white">{toolCall.tool}</span>
+        <span className="text-[var(--color-ink)]">{toolCall.tool}</span>
         <span
-          className={`rounded-full px-2 py-1 text-[11px] uppercase tracking-[0.16em] ${
+          className={`border-2 border-[rgba(0,0,0,0.3)] px-2 py-1 text-[11px] uppercase tracking-[0.16em] ${
             isFinished
-              ? "bg-[rgba(16,163,127,0.14)] text-[#7fe7ca]"
-              : "bg-[rgba(255,255,255,0.08)] text-[var(--color-ink-soft)]"
+              ? "bg-[var(--color-accent-soft)] text-[var(--color-accent)]"
+              : "bg-[var(--color-surface-soft)] text-[var(--color-ink-soft)]"
           }`}
         >
           {isFinished ? "Completed" : "Running"}
@@ -42,17 +42,17 @@ const ToolCallRow = memo(function ToolCallRow({ toolCall }: { toolCall: ToolCall
       </div>
 
       <div className="space-y-2 text-sm">
-        <div className="rounded-2xl border border-[rgba(255,255,255,0.06)] bg-[rgba(255,255,255,0.03)] p-3">
-          <div className="mb-1 font-medium uppercase tracking-[0.14em] text-[var(--color-ink-muted)]">
-            Input
+        <div className="pixel-card-soft p-3">
+          <div className="pixel-label mb-2 text-[var(--color-accent)]">
+            # Input
           </div>
           <pre className="mono whitespace-pre-wrap text-[var(--color-ink-soft)]">
             {formattedInput}
           </pre>
         </div>
-        <div className="rounded-2xl border border-[rgba(255,255,255,0.06)] bg-[rgba(255,255,255,0.03)] p-3">
-          <div className="mb-1 font-medium uppercase tracking-[0.14em] text-[var(--color-ink-muted)]">
-            Output
+        <div className="pixel-card-soft p-3">
+          <div className="pixel-label mb-2 text-[var(--color-accent)]">
+            # Output
           </div>
           <pre className="mono whitespace-pre-wrap text-[var(--color-ink-soft)]">
             {formattedOutput}
@@ -93,14 +93,14 @@ export const ThoughtChain = memo(function ThoughtChain({ toolCalls }: { toolCall
 
   return (
     <details
-      className="mb-4 rounded-3xl border border-[rgba(255,255,255,0.08)] bg-[rgba(255,255,255,0.03)] p-4"
+      className="pixel-card-soft mb-4 p-4"
       onToggle={(event) => setIsOpen(event.currentTarget.open)}
       open={isOpen}
     >
       <summary className="flex cursor-pointer list-none items-start gap-3 text-sm font-medium uppercase tracking-[0.18em] text-[var(--color-ink-soft)]">
         <TerminalSquare className="mt-0.5 shrink-0 text-[var(--color-accent)]" size={16} />
         <div className="min-w-0 flex-1">
-          <div className="text-white">
+          <div className="pixel-title text-[0.76rem] text-[var(--color-ink)]">
             {activeTool ? `Running ${activeTool.tool}` : `${toolCalls.length} tool call(s)`}
           </div>
           <div className="truncate pt-1 text-xs font-normal tracking-[0.16em] text-[var(--color-ink-muted)]">

@@ -13,6 +13,27 @@ function formatTokenUsage(usage: MessageUsage) {
   return `Input ${usage.input_tokens.toLocaleString()} | Output ${usage.output_tokens.toLocaleString()} tokens`;
 }
 
+const DOODLE_FRAMES = ["[+__+]", "[+o_+]", "[+O_+]", "[+o_+]", "[+__+]", "[+^^+]"];
+
+function StreamingThinking() {
+  const [frameIndex, setFrameIndex] = useState(0);
+
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      setFrameIndex((value) => (value + 1) % DOODLE_FRAMES.length);
+    }, 180);
+
+    return () => window.clearInterval(timer);
+  }, []);
+
+  return (
+    <div className="doodle-thinking" aria-label="thinking">
+      <span className="doodle-frame mono">{DOODLE_FRAMES[frameIndex]}</span>
+      <span className="mono">thinking...</span>
+    </div>
+  );
+}
+
 /**
  * Returns one rendered chat message from role, content, and usage inputs and keeps the main chat lightweight.
  */
@@ -67,20 +88,20 @@ export const ChatMessage = memo(function ChatMessage({
 
   return (
     <article
-      className={`message-card max-w-[92%] rounded-[28px] border px-5 py-4 ${
+      className={`message-card max-w-[92%] px-4 py-3 ${
         isUser
-          ? "ml-auto border-[rgba(255,255,255,0.08)] bg-[rgba(255,255,255,0.07)] text-white"
-          : "mr-auto border-[var(--color-line)] bg-[rgba(255,255,255,0.03)] text-[var(--color-ink)]"
+          ? "pixel-card-soft ml-auto text-[var(--color-ink)]"
+          : "pixel-card mr-auto text-[var(--color-ink)]"
       }`}
       ref={articleRef}
     >
       {!isUser && runMeta ? (
         <div className="mb-3 flex items-center gap-2 text-xs uppercase tracking-[0.18em] text-[var(--color-ink-muted)]">
-          <span className="rounded-full border border-[var(--color-line)] px-2 py-1">
+          <span className="pixel-tag">
             {runMeta.status}
           </span>
           {runMeta.checkpoint_id ? (
-            <span className="mono text-[11px] normal-case tracking-normal text-[var(--color-ink-soft)]">
+            <span className="mono rounded-[4px] border border-[var(--color-line)] bg-[var(--color-bg)] px-2 py-1 text-[0.84rem] normal-case tracking-normal text-[var(--color-ink-soft)]">
               checkpoint {runMeta.checkpoint_id.slice(0, 8)}
             </span>
           ) : null}
@@ -89,7 +110,7 @@ export const ChatMessage = memo(function ChatMessage({
       <div
         className={
           shouldRenderPlainText
-            ? "whitespace-pre-wrap text-[1rem] leading-8 text-[var(--color-ink)]"
+            ? "whitespace-pre-wrap text-[0.98rem] leading-7 text-[var(--color-ink)]"
             : "markdown"
         }
       >
@@ -98,7 +119,7 @@ export const ChatMessage = memo(function ChatMessage({
           (runMeta?.status === "interrupted"
             ? "Approval requested before capability execution."
             : streaming
-              ? "Thinking..."
+              ? <StreamingThinking />
               : "")
         ) : (
           <ReactMarkdown remarkPlugins={[remarkGfm]}>
@@ -107,7 +128,7 @@ export const ChatMessage = memo(function ChatMessage({
         )}
       </div>
       {!isUser && usage && (
-        <div className="mt-4 border-t border-[var(--color-line)] pt-3 text-sm text-[var(--color-ink-soft)]">
+        <div className="mono mt-4 border-t border-solid border-[var(--color-line)] pt-3 text-[0.9rem] text-[var(--color-ink-soft)]">
           {formatTokenUsage(usage)}
         </div>
       )}

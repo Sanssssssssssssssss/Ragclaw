@@ -1,36 +1,19 @@
 "use client";
 
-import {
-  Database,
-  FileSearch,
-  MessageSquareText,
-  Monitor,
-  Pencil,
-  Plus,
-  Route,
-  Sparkles,
-  Wrench
-} from "lucide-react";
+import { Database, FileText, Menu, Monitor, Pencil, Plus, Search, Wrench } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
 
 import { useRuntimeStore, useSessionStore } from "@/lib/store";
 
-/**
- * Returns one rendered top navigation bar from no explicit inputs and exposes session, view, RAG, and index controls.
- */
 export function Navbar({
-  currentView,
-  onViewChange
+  onOpenSessions,
+  onOpenFiles
 }: {
-  currentView: "chat" | "trace";
-  onViewChange: (view: "chat" | "trace") => void;
+  onOpenSessions: () => void;
+  onOpenFiles: () => void;
 }) {
-  const {
-    createNewSession,
-    compressCurrentSession,
-    renameCurrentSession,
-    sessions,
-    currentSessionId
-  } = useSessionStore();
+  const { currentSessionTitle, createNewSession, renameCurrentSession, compressCurrentSession } =
+    useSessionStore();
   const {
     ragMode,
     toggleRagMode,
@@ -38,135 +21,196 @@ export function Navbar({
     toggleSkillRetrieval,
     executionPlatform,
     updateExecutionPlatform,
+    knowledgeIndexStatus,
     rebuildKnowledgeIndex,
-    knowledgeIndexStatus
+    runtimeLoading
   } = useRuntimeStore();
+  const [menuOpen, setMenuOpen] = useState(false);
+  const menuRef = useRef<HTMLDivElement | null>(null);
 
-  const currentTitle =
-    sessions.find((session) => session.id === currentSessionId)?.title ?? "Fresh thread";
-  const isIndexBuilding = Boolean(knowledgeIndexStatus?.building);
-  const knowledgeIndexLabel = isIndexBuilding ? "Rebuilding index" : "Rebuild index";
-  const knowledgeIndexHint = isIndexBuilding
-    ? "Index rebuild in progress"
+  useEffect(() => {
+    if (!menuOpen) {
+      return;
+    }
+
+    const onPointerDown = (event: MouseEvent) => {
+      if (!menuRef.current?.contains(event.target as Node)) {
+        setMenuOpen(false);
+      }
+    };
+
+    document.addEventListener("mousedown", onPointerDown);
+    return () => document.removeEventListener("mousedown", onPointerDown);
+  }, [menuOpen]);
+
+  const knowledgeLabel = knowledgeIndexStatus?.building
+    ? "Index rebuilding"
     : knowledgeIndexStatus?.ready
       ? `${knowledgeIndexStatus.indexed_files} files indexed`
       : "Index offline";
 
   return (
-    <header className="panel flex flex-wrap items-center justify-between gap-4 rounded-[28px] px-5 py-4">
-      <div className="flex min-w-0 items-center gap-4">
-        <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-[var(--color-accent-soft)] text-[var(--color-accent)]">
-          <Sparkles size={20} />
-        </div>
-        <div className="min-w-0">
-          <p className="text-xs uppercase tracking-[0.34em] text-[var(--color-ink-muted)]">
-            Onyx Chat
-          </p>
-          <div className="flex flex-wrap items-center gap-3">
-            <h1 className="truncate text-2xl font-semibold tracking-[-0.04em] text-white">
-              {currentTitle}
-            </h1>
-            <button
-              className="ui-button px-3 py-1.5 text-xs"
-              onClick={() => {
-                const next = window.prompt("Rename the current session", currentTitle);
-                if (next) {
-                  void renameCurrentSession(next);
-                }
-              }}
-              type="button"
-            >
-              <Pencil size={14} />
-              Rename
-            </button>
-          </div>
-          <div className="mt-2 flex flex-wrap items-center gap-2">
-            <button
-              className={currentView === "chat" ? "ui-button ui-button-primary" : "ui-button"}
-              onClick={() => onViewChange("chat")}
-              type="button"
-            >
-              <MessageSquareText size={16} />
-              Chat
-            </button>
-            <button
-              className={currentView === "trace" ? "ui-button ui-button-primary" : "ui-button"}
-              onClick={() => onViewChange("trace")}
-              type="button"
-            >
-              <Route size={16} />
-              Trace
-            </button>
-          </div>
-        </div>
+    <header className="panel workspace-topbar">
+      <button aria-label="Open sessions" className="ui-button" onClick={onOpenSessions} type="button">
+        <Menu size={16} />
+        Threads
+      </button>
+
+      <div className="workspace-title-wrap">
+        <p className="workspace-title-label">Current chat</p>
+        <h1 className="workspace-title-text" title={currentSessionTitle}>
+          {currentSessionTitle}
+        </h1>
       </div>
 
-      <div className="flex flex-wrap items-center justify-end gap-2.5">
-        <button className="ui-button" onClick={() => void createNewSession()} type="button">
-          <Plus size={16} />
-          New session
-        </button>
+      <div className="relative" ref={menuRef}>
         <button
-          className={ragMode ? "ui-button ui-button-primary" : "ui-button"}
-          onClick={() => void toggleRagMode()}
-          type="button"
-        >
-          <Database size={16} />
-          {ragMode ? "RAG enabled" : "RAG disabled"}
-        </button>
-        <button
-          className={skillRetrievalEnabled ? "ui-button ui-button-primary" : "ui-button"}
-          onClick={() => void toggleSkillRetrieval()}
-          type="button"
-        >
-          <FileSearch size={16} />
-          {skillRetrievalEnabled ? "Skill on" : "Skill off"}
-        </button>
-        <div className="flex items-center gap-1 rounded-full border border-[var(--color-line)] bg-[var(--color-bg-soft)] p-1">
-          <div className="flex items-center gap-2 rounded-full px-3 py-1 text-sm text-[var(--color-ink-soft)]">
-            <Monitor size={15} />
-            Shell
-          </div>
-          <button
-            className={
-              executionPlatform === "windows"
-                ? "ui-button ui-button-primary px-3 py-1.5"
-                : "ui-button border-transparent px-3 py-1.5"
-            }
-            onClick={() => void updateExecutionPlatform("windows")}
-            type="button"
-          >
-            Win
-          </button>
-          <button
-            className={
-              executionPlatform === "linux"
-                ? "ui-button ui-button-primary px-3 py-1.5"
-                : "ui-button border-transparent px-3 py-1.5"
-            }
-            onClick={() => void updateExecutionPlatform("linux")}
-            type="button"
-          >
-            Linux
-          </button>
-        </div>
-        <button className="ui-button" onClick={() => void compressCurrentSession()} type="button">
-          <Wrench size={16} />
-          Compress
-        </button>
-        <button
+          aria-label="Open tools"
           className="ui-button"
-          disabled={isIndexBuilding}
-          onClick={() => void rebuildKnowledgeIndex()}
+          onClick={() => setMenuOpen((value) => !value)}
           type="button"
         >
-          <FileSearch size={16} />
-          {knowledgeIndexLabel}
+          <Wrench size={16} />
+          Tools
         </button>
-        <div className="ui-pill hidden md:inline-flex">
-          <FileSearch size={14} />
-          {knowledgeIndexHint}
-        </div>
+
+        {menuOpen ? (
+          <div className="menu-popover absolute right-0 top-[calc(100%+0.75rem)] z-40 w-[420px] p-3">
+            <div className="menu-section">
+              <p className="menu-label">Session</p>
+              <div className="grid gap-2">
+                <button
+                  className="menu-card"
+                  onClick={() => {
+                    void createNewSession();
+                    setMenuOpen(false);
+                  }}
+                  type="button"
+                >
+                  <div>
+                    <div className="menu-card-title">New session</div>
+                    <div className="menu-card-copy">Start a fresh thread</div>
+                  </div>
+                  <Plus size={16} />
+                </button>
+                <button
+                  className="menu-card"
+                  onClick={() => {
+                    const nextTitle = window.prompt("Rename the current session", currentSessionTitle);
+                    if (nextTitle) {
+                      void renameCurrentSession(nextTitle);
+                    }
+                    setMenuOpen(false);
+                  }}
+                  type="button"
+                >
+                  <div>
+                    <div className="menu-card-title">Rename session</div>
+                    <div className="menu-card-copy">{currentSessionTitle}</div>
+                  </div>
+                  <Pencil size={16} />
+                </button>
+                <button
+                  className="menu-card"
+                  onClick={() => {
+                    void compressCurrentSession();
+                    setMenuOpen(false);
+                  }}
+                  type="button"
+                >
+                  <div>
+                    <div className="menu-card-title">Compress session</div>
+                    <div className="menu-card-copy">Summarize older context</div>
+                  </div>
+                  <Wrench size={16} />
+                </button>
+                <button
+                  className="menu-card"
+                  onClick={() => {
+                    onOpenFiles();
+                    setMenuOpen(false);
+                  }}
+                  type="button"
+                >
+                  <div>
+                    <div className="menu-card-title">Open files</div>
+                    <div className="menu-card-copy">Browse and edit workspace files</div>
+                  </div>
+                  <FileText size={16} />
+                </button>
+              </div>
+            </div>
+
+            <div className="menu-section">
+              <p className="menu-label">Runtime</p>
+              <div className="grid gap-2 sm:grid-cols-2">
+                <button
+                  className="menu-card"
+                  disabled={runtimeLoading}
+                  onClick={() => void toggleRagMode()}
+                  type="button"
+                >
+                  <div>
+                    <div className="menu-card-title">RAG</div>
+                    <div className="menu-card-copy">{ragMode ? "Enabled" : "Disabled"}</div>
+                  </div>
+                  <Search size={16} />
+                </button>
+                <button
+                  className="menu-card"
+                  disabled={runtimeLoading}
+                  onClick={() => void toggleSkillRetrieval()}
+                  type="button"
+                >
+                  <div>
+                    <div className="menu-card-title">Skill retrieval</div>
+                    <div className="menu-card-copy">
+                      {skillRetrievalEnabled ? "Enabled" : "Disabled"}
+                    </div>
+                  </div>
+                  <Search size={16} />
+                </button>
+              </div>
+              <div className="menu-inline">
+                <span className="menu-inline-label">
+                  <Monitor size={14} />
+                  Shell
+                </span>
+                <button
+                  className={executionPlatform === "windows" ? "ui-button ui-button-primary" : "ui-button"}
+                  onClick={() => void updateExecutionPlatform("windows")}
+                  type="button"
+                >
+                  Windows
+                </button>
+                <button
+                  className={executionPlatform === "linux" ? "ui-button ui-button-primary" : "ui-button"}
+                  onClick={() => void updateExecutionPlatform("linux")}
+                  type="button"
+                >
+                  Linux
+                </button>
+              </div>
+            </div>
+
+            <div className="menu-section">
+              <p className="menu-label">Knowledge index</p>
+              <div className="menu-note">{knowledgeLabel}</div>
+              <button
+                className="menu-card"
+                disabled={Boolean(knowledgeIndexStatus?.building)}
+                onClick={() => void rebuildKnowledgeIndex()}
+                type="button"
+              >
+                <div>
+                  <div className="menu-card-title">Rebuild index</div>
+                  <div className="menu-card-copy">Refresh the current knowledge catalog</div>
+                </div>
+                <Database size={16} />
+              </button>
+            </div>
+          </div>
+        ) : null}
       </div>
     </header>
   );
