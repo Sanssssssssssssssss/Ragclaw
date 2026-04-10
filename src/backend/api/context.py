@@ -67,6 +67,7 @@ async def get_session_context(session_id: str) -> dict[str, Any]:
         "thread_id": thread_id,
         "working_memory": snapshot.working_memory if snapshot is not None else {},
         "episodic_summary": snapshot.episodic_summary if snapshot is not None else {},
+        "session_memory_state": snapshot.session_memory_state if snapshot is not None else {},
         "semantic_memories": semantic,
         "procedural_memories": procedural,
         "episodic_memories": episodic,

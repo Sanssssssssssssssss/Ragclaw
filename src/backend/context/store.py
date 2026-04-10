@@ -35,6 +35,7 @@ class ThreadContextSnapshot:
     run_id: str
     working_memory: dict[str, Any]
     episodic_summary: dict[str, Any]
+    session_memory_state: dict[str, Any]
     updated_at: str
 
     def to_dict(self) -> dict[str, Any]:
@@ -44,6 +45,7 @@ class ThreadContextSnapshot:
             "run_id": self.run_id,
             "working_memory": dict(self.working_memory),
             "episodic_summary": dict(self.episodic_summary),
+            "session_memory_state": dict(self.session_memory_state),
             "updated_at": self.updated_at,
         }
 
@@ -92,6 +94,7 @@ class ContextStore:
                 run_id TEXT NOT NULL,
                 working_memory_json TEXT NOT NULL,
                 episodic_summary_json TEXT NOT NULL,
+                session_memory_state_json TEXT NOT NULL DEFAULT '{}',
                 updated_at TEXT NOT NULL
             );
 
@@ -104,6 +107,7 @@ class ContextStore:
                 title TEXT NOT NULL,
                 content TEXT NOT NULL,
                 summary TEXT NOT NULL,
+                body_json TEXT NOT NULL DEFAULT '{}',
                 tags_json TEXT NOT NULL,
                 metadata_json TEXT NOT NULL,
                 source TEXT NOT NULL,
@@ -237,6 +241,7 @@ class ContextStore:
             );
             """
         )
+        self._ensure_thread_context_columns(conn)
         self._ensure_memory_columns(conn)
         self._ensure_context_turn_columns(conn)
         self._ensure_conversation_recall_columns(conn)
@@ -261,6 +266,7 @@ class ContextStore:
         rows = conn.execute("PRAGMA table_info(memories)").fetchall()
         columns = {str(row["name"]): row for row in rows}
         desired: dict[str, str] = {
+            "body_json": "TEXT NOT NULL DEFAULT '{}'",
             "memory_type": "TEXT NOT NULL DEFAULT ''",
             "scope": "TEXT NOT NULL DEFAULT 'project'",
             "confidence": "REAL NOT NULL DEFAULT 0.5",
@@ -345,6 +351,16 @@ class ContextStore:
             if column_name not in columns:
                 conn.execute(f"ALTER TABLE conversation_recall ADD COLUMN {column_name} {ddl}")
 
+    def _ensure_thread_context_columns(self, conn: sqlite3.Connection) -> None:
+        rows = conn.execute("PRAGMA table_info(thread_context)").fetchall()
+        columns = {str(row["name"]): row for row in rows}
+        desired: dict[str, str] = {
+            "session_memory_state_json": "TEXT NOT NULL DEFAULT '{}'",
+        }
+        for column_name, ddl in desired.items():
+            if column_name not in columns:
+                conn.execute(f"ALTER TABLE thread_context ADD COLUMN {column_name} {ddl}")
+
     def memory_index_path(self) -> Path:
         if self._base_dir is None:
             raise RuntimeError("Context store is not configured")
@@ -365,21 +381,24 @@ class ContextStore:
         run_id: str,
         working_memory: WorkingMemory | dict[str, Any],
         episodic_summary: EpisodicSummary | dict[str, Any],
+        session_memory_state: dict[str, Any] | None = None,
         updated_at: str,
     ) -> None:
         working_payload = working_memory.to_dict() if hasattr(working_memory, "to_dict") else dict(working_memory)
         episodic_payload = episodic_summary.to_dict() if hasattr(episodic_summary, "to_dict") else dict(episodic_summary)
+        session_state_payload = dict(session_memory_state or {})
         with self._lock:
             self._conn_or_raise().execute(
                 """
                 INSERT INTO thread_context (
-                    thread_id, session_id, run_id, working_memory_json, episodic_summary_json, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?)
+                    thread_id, session_id, run_id, working_memory_json, episodic_summary_json, session_memory_state_json, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(thread_id) DO UPDATE SET
                     session_id = excluded.session_id,
                     run_id = excluded.run_id,
                     working_memory_json = excluded.working_memory_json,
                     episodic_summary_json = excluded.episodic_summary_json,
+                    session_memory_state_json = excluded.session_memory_state_json,
                     updated_at = excluded.updated_at
                 """,
                 (
@@ -388,6 +407,7 @@ class ContextStore:
                     run_id,
                     json.dumps(working_payload, ensure_ascii=False),
                     json.dumps(episodic_payload, ensure_ascii=False),
+                    json.dumps(session_state_payload, ensure_ascii=False),
                     updated_at,
                 ),
             )
@@ -407,6 +427,7 @@ class ContextStore:
             run_id=str(row["run_id"] or ""),
             working_memory=json.loads(str(row["working_memory_json"] or "{}")),
             episodic_summary=json.loads(str(row["episodic_summary_json"] or "{}")),
+            session_memory_state=json.loads(str(row["session_memory_state_json"] or "{}")),
             updated_at=str(row["updated_at"] or ""),
         )
 
@@ -418,6 +439,7 @@ class ContextStore:
         title: str,
         content: str,
         summary: str = "",
+        body: dict[str, Any] | None = None,
         tags: list[str] | tuple[str, ...] = (),
         metadata: dict[str, Any] | None = None,
         source: str = "",
@@ -447,6 +469,7 @@ class ContextStore:
             title=title,
             content=content,
             summary=summary,
+            body=dict(body or {}),
             tags=tuple(tags),
             metadata=dict(metadata or {}),
             source=source,
@@ -481,7 +504,7 @@ class ContextStore:
                 conn.execute(
                     """
                     UPDATE memories
-                    SET updated_at = ?, confidence = ?, metadata_json = ?, summary = ?, content = ?, status = ?, enabled = 1,
+                    SET updated_at = ?, confidence = ?, metadata_json = ?, summary = ?, content = ?, body_json = ?, status = ?, enabled = 1,
                         source_turn_ids_json = ?, source_run_ids_json = ?, source_memory_ids_json = ?, generated_by = ?, generated_at = ?
                     WHERE fingerprint = ?
                     """,
@@ -491,6 +514,7 @@ class ContextStore:
                         json.dumps(dict(candidate.metadata), ensure_ascii=False),
                         candidate.summary,
                         candidate.content,
+                        json.dumps(dict(candidate.body), ensure_ascii=False),
                         candidate.status,
                         json.dumps(list(candidate.source_turn_ids), ensure_ascii=False),
                         json.dumps(list(candidate.source_run_ids), ensure_ascii=False),
@@ -564,12 +588,12 @@ class ContextStore:
             conn.execute(
                 """
                 INSERT INTO memories (
-                    memory_id, kind, namespace, memory_type, scope, title, content, summary, tags_json,
+                    memory_id, kind, namespace, memory_type, scope, title, content, summary, body_json, tags_json,
                     metadata_json, source, created_at, updated_at, confidence, freshness, stale_after, status,
                     supersedes_json, applicability_json, direct_prompt, promotion_priority, conflict_flag,
                     conflict_with_json, enabled, fingerprint, conflict_key, source_turn_ids_json,
                     source_run_ids_json, source_memory_ids_json, generated_by, generated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     memory_id,
@@ -580,6 +604,7 @@ class ContextStore:
                     candidate.title,
                     candidate.content,
                     candidate.summary,
+                    json.dumps(dict(candidate.body), ensure_ascii=False),
                     json.dumps(list(candidate.tags), ensure_ascii=False),
                     json.dumps(dict(candidate.metadata), ensure_ascii=False),
                     candidate.source,
@@ -632,6 +657,7 @@ class ContextStore:
         title: str | None = None,
         content: str | None = None,
         summary: str | None = None,
+        body: dict[str, Any] | None = None,
         tags: list[str] | tuple[str, ...] | None = None,
         metadata: dict[str, Any] | None = None,
         updated_at: str,
@@ -659,7 +685,7 @@ class ContextStore:
             self._conn_or_raise().execute(
                 """
                 UPDATE memories
-                SET title = ?, content = ?, summary = ?, tags_json = ?, metadata_json = ?, updated_at = ?,
+                SET title = ?, content = ?, summary = ?, body_json = ?, tags_json = ?, metadata_json = ?, updated_at = ?,
                     confidence = ?, stale_after = ?, freshness = ?, status = ?, supersedes_json = ?,
                     conflict_flag = ?, conflict_with_json = ?, source_turn_ids_json = ?, source_run_ids_json = ?,
                     source_memory_ids_json = ?, generated_by = ?, generated_at = ?,
@@ -670,6 +696,7 @@ class ContextStore:
                     str(title or current.title),
                     str(content or current.content),
                     str(summary if summary is not None else current.summary),
+                    json.dumps(dict(body if body is not None else current.body), ensure_ascii=False),
                     json.dumps(list(tags if tags is not None else current.tags), ensure_ascii=False),
                     json.dumps(dict(metadata if metadata is not None else current.metadata), ensure_ascii=False),
                     updated_at,
@@ -808,12 +835,16 @@ class ContextStore:
         kind: MemoryKind | None = None,
         namespaces: list[str] | tuple[str, ...] = (),
         query: str,
+        path_kind: str = "direct_answer",
+        recent_terms: list[str] | tuple[str, ...] = (),
+        exclude_memory_ids: list[str] | tuple[str, ...] = (),
         limit: int = 8,
     ) -> list[MemoryManifest]:
         normalized = str(query or "").strip()
         if not normalized:
             return []
         namespace_values = [str(item).strip() for item in namespaces if str(item).strip()]
+        excluded_ids = {str(item).strip() for item in exclude_memory_ids if str(item).strip()}
         with self._lock:
             conn = self._conn_or_raise()
             self._refresh_staleness_locked(conn)
@@ -833,7 +864,14 @@ class ContextStore:
         scored: list[tuple[float, MemoryManifest]] = []
         for row in rows:
             manifest = self._memory_from_row(row).to_manifest()
-            score = score_manifest(manifest, query=normalized)
+            if manifest.memory_id in excluded_ids:
+                continue
+            score = score_manifest(
+                manifest,
+                query=normalized,
+                path_kind=path_kind,  # type: ignore[arg-type]
+                recent_terms=recent_terms,
+            )
             if score > 0:
                 scored.append((score, manifest))
         scored.sort(key=lambda item: (-item[0], item[1].updated_at))
@@ -1539,6 +1577,7 @@ class ContextStore:
             title=str(row["title"] or ""),
             content=str(row["content"] or ""),
             summary=str(row["summary"] or ""),
+            body=dict(json.loads(str(row["body_json"] or "{}"))),
             tags=tuple(json.loads(str(row["tags_json"] or "[]"))),
             metadata=dict(json.loads(str(row["metadata_json"] or "{}"))),
             source=str(row["source"] or ""),

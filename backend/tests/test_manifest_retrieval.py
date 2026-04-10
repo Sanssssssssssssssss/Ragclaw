@@ -46,23 +46,41 @@ class ManifestRetrievalTests(unittest.TestCase):
             applicability={"prompt_paths": ["capability_path", "knowledge_qa"]},
             conflict_key="project-freeze",
         )
-        context_store.insert_memory(
+        recently_used = context_store.insert_memory(
             kind="procedural",
             namespace="project:backend",
             memory_type="workflow_rule",
             scope="project",
-            title="Grounded workflow rule",
+            title="Recently used grounded workflow",
             content="Always answer with grounded evidence and avoid raw audit data.",
             summary="Grounded answers only.",
             tags=("grounded", "workflow"),
             source="unit_test",
             created_at="2026-04-09T10:01:00Z",
-            fingerprint="procedural-grounded",
+            fingerprint="procedural-grounded-used",
             confidence=0.91,
             direct_prompt=True,
             promotion_priority=95,
             applicability={"prompt_paths": ["capability_path"]},
-            conflict_key="workflow-grounded",
+            conflict_key="workflow-grounded-used",
+        )
+        context_store.insert_memory(
+            kind="procedural",
+            namespace="project:backend",
+            memory_type="workflow_rule",
+            scope="project",
+            title="Fallback grounded workflow",
+            content="Prefer grounded evidence and avoid unsupported audit details.",
+            summary="Fallback grounded workflow.",
+            tags=("grounded", "workflow"),
+            source="unit_test",
+            created_at="2026-04-09T10:01:30Z",
+            fingerprint="procedural-grounded-fallback",
+            confidence=0.9,
+            direct_prompt=True,
+            promotion_priority=92,
+            applicability={"prompt_paths": ["capability_path"]},
+            conflict_key="workflow-grounded-fallback",
         )
         context_store.insert_memory(
             kind="semantic",
@@ -103,12 +121,14 @@ class ManifestRetrievalTests(unittest.TestCase):
                     "unresolved_items": [],
                 },
                 "episodic_summary": {"key_facts": ["release freeze exists"]},
+                "selected_memory_ids": [recently_used.memory_id],
                 "checkpoint_meta": {"updated_at": "2026-04-09T10:05:00Z", "run_status": "fresh"},
             },
         )
 
         self.assertIn("Release freeze fact", assembly.semantic_block)
-        self.assertIn("Grounded workflow rule", assembly.procedural_block)
+        self.assertIn("Fallback grounded workflow", assembly.procedural_block)
+        self.assertNotIn("Recently used grounded workflow", assembly.procedural_block)
         self.assertNotIn("Artifact map only", assembly.semantic_block)
         self.assertNotIn("Artifact map only", assembly.procedural_block)
 

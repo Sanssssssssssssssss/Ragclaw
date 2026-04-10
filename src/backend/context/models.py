@@ -181,11 +181,13 @@ class MemoryManifest:
 @dataclass(frozen=True)
 class StoredMemory(MemoryManifest):
     content: str = ""
+    body: dict[str, Any] = field(default_factory=dict)
     enabled: bool = True
 
     def to_dict(self) -> dict[str, Any]:
         payload = super().to_dict()
         payload["content"] = self.content
+        payload["body"] = dict(self.body)
         payload["enabled"] = self.enabled
         return payload
 
@@ -231,6 +233,7 @@ class MemoryCandidate:
     title: str
     content: str
     summary: str
+    body: dict[str, Any] = field(default_factory=dict)
     tags: tuple[str, ...] = ()
     metadata: dict[str, Any] = field(default_factory=dict)
     source: str = ""
@@ -253,6 +256,7 @@ class MemoryCandidate:
 
     def to_dict(self) -> dict[str, Any]:
         payload = asdict(self)
+        payload["body"] = dict(self.body)
         payload["tags"] = list(self.tags)
         payload["metadata"] = dict(self.metadata)
         payload["supersedes"] = list(self.supersedes)

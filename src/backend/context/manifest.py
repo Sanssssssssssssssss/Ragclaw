@@ -40,11 +40,23 @@ def score_manifest(
         score -= 1.25
     if manifest.conflict_flag:
         score -= 0.8
+    if manifest.status in {"superseded", "invalidated", "dropped"}:
+        score -= 5.0
     prompt_paths = set(str(item) for item in manifest.applicability.get("prompt_paths", []) or [])
     if prompt_paths and path_kind in prompt_paths:
         score += 1.1
+    if prompt_paths and path_kind not in prompt_paths:
+        score -= 1.6
     if not manifest.direct_prompt and path_kind in {"direct_answer", "knowledge_qa"}:
-        score -= 0.2
+        score -= 0.35
+    if manifest.memory_type == "artifact_map" and path_kind == "direct_answer":
+        score -= 1.25
+    if manifest.memory_type == "workflow_rule" and path_kind in {"capability_path", "recovery_path", "resumed_hitl"}:
+        score += 0.75
+    if manifest.memory_type == "project_fact" and path_kind == "knowledge_qa":
+        score += 0.55
+    if manifest.memory_type == "preference_feedback" and path_kind in {"direct_answer", "capability_path"}:
+        score += 0.55
     return score
 
 

@@ -301,6 +301,17 @@ export function AssetsPanel() {
 
                 <div className="mt-4 grid gap-3 xl:grid-cols-2">
                   <div className="rounded-[10px] border border-[var(--color-line)] px-3 py-3 text-sm text-[var(--color-ink-soft)]">
+                    <p className="pixel-label">session memory gates</p>
+                    <div className="mt-3 grid gap-2">
+                      <p>last_updated_at: {String(sessionContext.session_memory_state?.["last_updated_at"] ?? "-")}</p>
+                      <p>last_update_reason: {String(sessionContext.session_memory_state?.["last_update_reason"] ?? "-")}</p>
+                      <p>last_decision: {String(sessionContext.session_memory_state?.["last_decision"] ?? "-")}</p>
+                      <p>last_skip_reason: {String(sessionContext.session_memory_state?.["last_skip_reason"] ?? "-")}</p>
+                      <p>update_count: {String(sessionContext.session_memory_state?.["update_count"] ?? "0")}</p>
+                    </div>
+                  </div>
+
+                  <div className="rounded-[10px] border border-[var(--color-line)] px-3 py-3 text-sm text-[var(--color-ink-soft)]">
                     <p className="pixel-label">latest consolidation</p>
                     {sessionContext.latest_consolidation ? (
                       <>

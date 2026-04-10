@@ -331,6 +331,8 @@ class ContextAssembler:
                     path_kind=path_kind,
                 ),
                 path_kind=path_kind,
+                state=state,
+                working_memory=working_memory,
                 limit=self._memory_limit(path_kind, kind="semantic"),
             ),
             path_kind=path_kind,
@@ -346,6 +348,8 @@ class ContextAssembler:
                     path_kind=path_kind,
                 ),
                 path_kind=path_kind,
+                state=state,
+                working_memory=working_memory,
                 limit=self._memory_limit(path_kind, kind="procedural"),
             ),
             path_kind=path_kind,
@@ -382,25 +386,38 @@ class ContextAssembler:
         namespaces: tuple[str, ...],
         query: str,
         path_kind: ContextPathKind,
+        state: dict[str, Any],
+        working_memory: dict[str, Any],
         limit: int,
     ) -> list[MemoryManifest]:
+        recent_terms = self._recent_terms(state, working_memory)
+        excluded_ids = self._recently_surfaced_memory_ids(state)
         try:
             manifests = context_store.search_memory_manifests(
                 kind=kind,  # type: ignore[arg-type]
                 namespaces=namespaces,
                 query=query,
+                path_kind=path_kind,
+                recent_terms=recent_terms,
+                exclude_memory_ids=list(excluded_ids),
                 limit=max(limit * 2, 4),
             )
         except Exception:
             return []
         selected: list[MemoryManifest] = []
         for manifest in manifests:
-            if manifest.status == "superseded":
+            if manifest.status in {"superseded", "invalidated", "dropped"}:
                 continue
             if manifest.memory_type == "session_episode":
                 continue
             prompt_paths = set(str(item) for item in manifest.applicability.get("prompt_paths", []) or [])
             if prompt_paths and path_kind not in prompt_paths:
+                continue
+            if manifest.conflict_flag and manifest.confidence < 0.82:
+                continue
+            if manifest.freshness == "stale" and manifest.confidence < 0.9:
+                continue
+            if path_kind == "direct_answer" and not manifest.direct_prompt:
                 continue
             selected.append(manifest)
             if len(selected) >= limit:
@@ -574,3 +591,21 @@ class ContextAssembler:
             ]
         )
         return tokenize(text)
+
+    def _recently_surfaced_memory_ids(self, state: dict[str, Any]) -> tuple[str, ...]:
+        excluded: list[str] = [str(item) for item in state.get("selected_memory_ids", []) or [] if str(item).strip()]
+        thread_id = str(state.get("thread_id", "") or state.get("session_id", "") or "").strip()
+        if not thread_id:
+            return tuple(dict.fromkeys(excluded))
+        try:
+            recent_assemblies = context_store.list_context_assemblies(thread_id=thread_id, limit=4)
+        except Exception:
+            return tuple(dict.fromkeys(excluded))
+        for item in recent_assemblies:
+            decision = dict(item.get("decision", {}) or {})
+            for memory_id in list(decision.get("selected_memory_ids", []) or []):
+                value = str(memory_id or "").strip()
+                if value.startswith("working:") or value.startswith("episodic:"):
+                    continue
+                excluded.append(value)
+        return tuple(dict.fromkeys(excluded))

@@ -129,6 +129,7 @@ export type ContextMemoryRecord = {
   title: string;
   content: string;
   summary: string;
+  body?: Record<string, unknown>;
   tags: string[];
   metadata: Record<string, unknown>;
   source: string;
@@ -340,6 +341,7 @@ export type SessionContextPayload = {
   thread_id: string;
   working_memory: WorkingMemoryPayload;
   episodic_summary: EpisodicSummaryPayload;
+  session_memory_state: Record<string, unknown>;
   semantic_memories: ContextMemoryRecord[];
   procedural_memories: ContextMemoryRecord[];
   episodic_memories: ContextMemoryRecord[];

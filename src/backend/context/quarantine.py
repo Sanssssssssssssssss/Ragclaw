@@ -406,6 +406,13 @@ class ContextQuarantineService:
             run_id=run_id,
             working_memory=working_memory,
             episodic_summary=episodic_summary,
+            session_memory_state={
+                "last_updated_at": updated_at,
+                "last_update_reason": "context_rebuild",
+                "last_update_trigger": "context_rebuild",
+                "last_decision": "update",
+                "last_skip_reason": "",
+            },
             updated_at=updated_at,
         )
         self._rebuild_conversation_recall(

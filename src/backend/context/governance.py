@@ -27,10 +27,18 @@ _NOISY_OUTPUT_PATTERN = re.compile(
     re.IGNORECASE,
 )
 _TEMPORARY_FAILURE_PATTERN = re.compile(
-    r"\b(timeout|temporary|transient|retrying|failed once|one-off|flaky)\b",
+    r"\b(timeout|temporary|transient|retrying|failed once|one-off|flaky|just this once)\b",
     re.IGNORECASE,
 )
 _URL_PATTERN = re.compile(r"https?://[^\s]+", re.IGNORECASE)
+_REPO_DERIVABLE_PATTERN = re.compile(
+    r"\b(repo|repository|codebase|file structure|folder structure|architecture|git history|commit|branch|src/|backend/|frontend/|function|class)\b",
+    re.IGNORECASE,
+)
+_EPHEMERAL_DETAIL_PATTERN = re.compile(
+    r"\b(this run|this turn|just now|for this prompt only|temporary workaround|current failure scene)\b",
+    re.IGNORECASE,
+)
 
 
 @dataclass(frozen=True)
@@ -45,17 +53,45 @@ class MemoryGovernanceRule:
     immediate_write: bool
     promotion_threshold: int
     allow_title_prefix: str
+    body_fields: tuple[str, ...]
+    require_why: bool
+    require_how_to_apply: bool
+    confidence_lower_bound: float
 
 
 RULES: dict[MemoryType, MemoryGovernanceRule] = {
-    "user_profile": MemoryGovernanceRule("user_profile", "semantic", "user", 180, 90, True, False, True, 1, "User profile"),
-    "preference_feedback": MemoryGovernanceRule("preference_feedback", "procedural", "user", 90, 100, True, False, True, 1, "Preference"),
-    "project_fact": MemoryGovernanceRule("project_fact", "semantic", "project", 30, 80, True, False, True, 1, "Project fact"),
-    "external_reference": MemoryGovernanceRule("external_reference", "semantic", "project", 120, 70, True, False, True, 1, "External reference"),
-    "workflow_rule": MemoryGovernanceRule("workflow_rule", "procedural", "project", 120, 95, True, False, True, 1, "Workflow rule"),
-    "capability_lesson": MemoryGovernanceRule("capability_lesson", "procedural", "project", 45, 75, False, False, False, 2, "Capability lesson"),
-    "artifact_map": MemoryGovernanceRule("artifact_map", "semantic", "project", 60, 60, False, False, False, 2, "Artifact map"),
-    "session_episode": MemoryGovernanceRule("session_episode", "episodic", "thread", 5, 20, False, True, True, 1, "Session episode"),
+    "user_profile": MemoryGovernanceRule(
+        "user_profile", "semantic", "user", 180, 90, True, False, True, 1, "User profile",
+        ("profile", "why"), True, False, 0.7
+    ),
+    "preference_feedback": MemoryGovernanceRule(
+        "preference_feedback", "procedural", "user", 90, 100, True, False, True, 1, "Preference",
+        ("preference", "why", "how_to_apply"), True, True, 0.7
+    ),
+    "project_fact": MemoryGovernanceRule(
+        "project_fact", "semantic", "project", 30, 80, True, False, True, 1, "Project fact",
+        ("fact", "why", "validation_hint"), True, False, 0.75
+    ),
+    "external_reference": MemoryGovernanceRule(
+        "external_reference", "semantic", "project", 120, 70, True, False, True, 1, "External reference",
+        ("reference", "why", "how_to_apply"), True, False, 0.72
+    ),
+    "workflow_rule": MemoryGovernanceRule(
+        "workflow_rule", "procedural", "project", 120, 95, True, False, True, 1, "Workflow rule",
+        ("rule", "why", "how_to_apply"), True, True, 0.72
+    ),
+    "capability_lesson": MemoryGovernanceRule(
+        "capability_lesson", "procedural", "project", 45, 75, False, False, False, 2, "Capability lesson",
+        ("lesson", "trigger", "why", "how_to_apply"), True, True, 0.68
+    ),
+    "artifact_map": MemoryGovernanceRule(
+        "artifact_map", "semantic", "project", 60, 60, False, False, False, 2, "Artifact map",
+        ("artifact", "mapping", "why", "how_to_apply"), True, True, 0.68
+    ),
+    "session_episode": MemoryGovernanceRule(
+        "session_episode", "episodic", "thread", 5, 20, False, True, True, 1, "Session episode",
+        ("episode", "why"), True, False, 0.55
+    ),
 }
 
 
@@ -80,14 +116,118 @@ def _sanitize_text(text: str, *, limit: int = 500) -> str:
     return normalized[:limit].rstrip() + " ..."
 
 
+def _line_body(memory_type: MemoryType, text: str) -> dict[str, Any]:
+    normalized = _sanitize_text(text, limit=320)
+    if memory_type == "user_profile":
+        return {
+            "profile": normalized,
+            "why": "The user explicitly described their role, experience, or background in a way that should shape future responses.",
+        }
+    if memory_type == "preference_feedback":
+        return {
+            "preference": normalized,
+            "why": "The user explicitly stated a durable response preference or feedback signal.",
+            "how_to_apply": "Bias future answers toward this style unless newer feedback supersedes it.",
+        }
+    if memory_type == "project_fact":
+        return {
+            "fact": normalized,
+            "why": "This is a stable project fact with cross-session value and should survive beyond the current turn.",
+            "validation_hint": "Re-check against current evidence if the fact is date-sensitive or operationally important.",
+        }
+    if memory_type == "external_reference":
+        return {
+            "reference": normalized,
+            "why": "This external link or document was cited as a durable reference point for future work.",
+            "how_to_apply": "Use it as a retrieval or navigation hint when the same project topic reappears.",
+        }
+    if memory_type == "workflow_rule":
+        return {
+            "rule": normalized,
+            "why": "This rule captures a durable execution preference, constraint, or policy.",
+            "how_to_apply": "Apply it before selecting tools, drafting answers, or resuming interrupted work.",
+        }
+    if memory_type == "capability_lesson":
+        return {
+            "lesson": normalized,
+            "trigger": "Repeat capability failure or recovery pattern",
+            "why": "This lesson captures a non-trivial capability behavior worth reusing later.",
+            "how_to_apply": "Use it as a retrieval candidate when similar tool failures or recovery flows recur.",
+        }
+    if memory_type == "artifact_map":
+        return {
+            "artifact": normalized,
+            "mapping": normalized,
+            "why": "This artifact reference helps map durable project assets to their meaning or usage.",
+            "how_to_apply": "Use it to locate the right asset quickly instead of re-discovering it from scratch.",
+        }
+    return {
+        "episode": normalized,
+        "why": "This is a concise session episode summary that can later be consolidated into stable memory.",
+    }
+
+
+def _render_body_content(memory_type: MemoryType, body: dict[str, Any]) -> tuple[str, str]:
+    if memory_type == "user_profile":
+        content = f"profile: {body.get('profile', '')}\nwhy: {body.get('why', '')}"
+        summary = str(body.get("profile", "") or "")
+    elif memory_type == "preference_feedback":
+        content = (
+            f"preference: {body.get('preference', '')}\n"
+            f"why: {body.get('why', '')}\n"
+            f"how_to_apply: {body.get('how_to_apply', '')}"
+        )
+        summary = str(body.get("preference", "") or "")
+    elif memory_type == "project_fact":
+        content = (
+            f"fact: {body.get('fact', '')}\n"
+            f"why: {body.get('why', '')}\n"
+            f"validation_hint: {body.get('validation_hint', '')}"
+        )
+        summary = str(body.get("fact", "") or "")
+    elif memory_type == "external_reference":
+        content = (
+            f"reference: {body.get('reference', '')}\n"
+            f"why: {body.get('why', '')}\n"
+            f"how_to_apply: {body.get('how_to_apply', '')}"
+        )
+        summary = str(body.get("reference", "") or "")
+    elif memory_type == "workflow_rule":
+        content = (
+            f"rule: {body.get('rule', '')}\n"
+            f"why: {body.get('why', '')}\n"
+            f"how_to_apply: {body.get('how_to_apply', '')}"
+        )
+        summary = str(body.get("rule", "") or "")
+    elif memory_type == "capability_lesson":
+        content = (
+            f"lesson: {body.get('lesson', '')}\n"
+            f"trigger: {body.get('trigger', '')}\n"
+            f"why: {body.get('why', '')}\n"
+            f"how_to_apply: {body.get('how_to_apply', '')}"
+        )
+        summary = str(body.get("lesson", "") or "")
+    elif memory_type == "artifact_map":
+        content = (
+            f"artifact: {body.get('artifact', '')}\n"
+            f"mapping: {body.get('mapping', '')}\n"
+            f"why: {body.get('why', '')}\n"
+            f"how_to_apply: {body.get('how_to_apply', '')}"
+        )
+        summary = str(body.get("mapping", "") or body.get("artifact", "") or "")
+    else:
+        content = f"episode: {body.get('episode', '')}\nwhy: {body.get('why', '')}"
+        summary = str(body.get("episode", "") or "")
+    return _sanitize_text(content, limit=1200 if memory_type == "session_episode" else 640), _sanitize_text(summary, limit=220)
+
+
 def _candidate(
     *,
     memory_type: MemoryType,
     base_dir: Path | None,
     thread_id: str,
     title: str,
-    content: str,
-    summary: str,
+    body: dict[str, Any],
     tags: tuple[str, ...] = (),
     metadata: dict[str, Any] | None = None,
     source: str,
@@ -101,8 +241,7 @@ def _candidate(
 ) -> MemoryCandidate:
     rule = rule_for(memory_type)
     namespace = memory_scope_namespace(rule.scope, base_dir=base_dir, thread_id=thread_id)
-    content_value = _sanitize_text(content, limit=1200 if memory_type == "session_episode" else 500)
-    summary_value = _sanitize_text(summary, limit=180)
+    content_value, summary_value = _render_body_content(memory_type, body)
     fingerprint = fingerprint_for(rule.kind, namespace, content_value, tags)
     return MemoryCandidate(
         kind=rule.kind,
@@ -112,6 +251,7 @@ def _candidate(
         title=title,
         content=content_value,
         summary=summary_value,
+        body=dict(body),
         tags=tags,
         metadata=dict(metadata or {}),
         source=source,
@@ -133,23 +273,47 @@ def _candidate(
     )
 
 
+def _validate_contract(candidate: MemoryCandidate) -> bool:
+    rule = rule_for(candidate.memory_type)
+    if candidate.confidence < rule.confidence_lower_bound:
+        return False
+    if not candidate.body:
+        return False
+    for field_name in rule.body_fields:
+        value = candidate.body.get(field_name)
+        if value in (None, "", [], ()):
+            return False
+    if rule.require_why and not str(candidate.body.get("why", "") or "").strip():
+        return False
+    if rule.require_how_to_apply and not str(candidate.body.get("how_to_apply", "") or "").strip():
+        return False
+    return True
+
+
 def _is_forbidden_long_term(candidate: MemoryCandidate) -> bool:
     if candidate.memory_type == "session_episode":
         return False
+    rule = rule_for(candidate.memory_type)
+    if candidate.confidence < rule.confidence_lower_bound:
+        return True
     source = str(candidate.source or "").strip().lower()
     content = f"{candidate.title}\n{candidate.content}\n{candidate.summary}".strip()
     metadata = dict(candidate.metadata)
-    if metadata.get("derivable_from_repo"):
+    if metadata.get("derivable_from_repo") or _REPO_DERIVABLE_PATTERN.search(content):
         return True
     if metadata.get("raw_tool_output") or metadata.get("raw_trace") or metadata.get("raw_checkpoint") or metadata.get("raw_hitl"):
         return True
     if source in {"raw_trace", "raw_checkpoint", "raw_hitl", "tool_output"}:
         return True
+    if metadata.get("low_confidence_transient") or metadata.get("no_cross_session_value"):
+        return True
     if _NOISY_OUTPUT_PATTERN.search(content):
+        return True
+    if _EPHEMERAL_DETAIL_PATTERN.search(content):
         return True
     if metadata.get("transient_failure") and candidate.memory_type not in {"capability_lesson"}:
         return True
-    if _TEMPORARY_FAILURE_PATTERN.search(content) and candidate.memory_type in {"project_fact", "artifact_map"}:
+    if _TEMPORARY_FAILURE_PATTERN.search(content) and candidate.memory_type in {"project_fact", "artifact_map", "workflow_rule"}:
         return True
     if len(candidate.content.strip()) < 24:
         return True
@@ -204,8 +368,7 @@ def extract_memory_candidates(
                     base_dir=base_dir,
                     thread_id=thread_id,
                     title="User profile signal",
-                    content=line,
-                    summary=line,
+                    body=_line_body("user_profile", line),
                     tags=("user", "profile"),
                     source="user_message",
                     updated_at=updated_at,
@@ -223,8 +386,7 @@ def extract_memory_candidates(
                     base_dir=base_dir,
                     thread_id=thread_id,
                     title="User preference feedback",
-                    content=line,
-                    summary=line,
+                    body=_line_body("preference_feedback", line),
                     tags=("preference", "feedback"),
                     source="user_message",
                     updated_at=updated_at,
@@ -242,8 +404,7 @@ def extract_memory_candidates(
                     base_dir=base_dir,
                     thread_id=thread_id,
                     title="Project fact",
-                    content=line,
-                    summary=line,
+                    body=_line_body("project_fact", line),
                     tags=("project", "fact"),
                     source="user_message",
                     updated_at=updated_at,
@@ -261,8 +422,7 @@ def extract_memory_candidates(
                     base_dir=base_dir,
                     thread_id=thread_id,
                     title="External reference",
-                    content=line,
-                    summary=line,
+                    body=_line_body("external_reference", line),
                     tags=("reference",) + infer_reference_tags(line),
                     source="user_message",
                     updated_at=updated_at,
@@ -280,8 +440,7 @@ def extract_memory_candidates(
                     base_dir=base_dir,
                     thread_id=thread_id,
                     title="Artifact map",
-                    content=line,
-                    summary=line,
+                    body=_line_body("artifact_map", line),
                     tags=("artifact", "map"),
                     source="user_message",
                     updated_at=updated_at,
@@ -299,16 +458,15 @@ def extract_memory_candidates(
             continue
         candidates.append(
             _candidate(
-                memory_type="workflow_rule" if looks_like_feedback(text) else "workflow_rule",
+                memory_type="workflow_rule",
                 base_dir=base_dir,
                 thread_id=thread_id,
                 title="Workflow rule",
-                content=text,
-                summary=text,
+                body=_line_body("workflow_rule", text),
                 tags=("workflow", "rule"),
                 source="working_memory",
                 updated_at=updated_at,
-                confidence=0.74,
+                confidence=0.76,
                 applicability={"prompt_paths": ["capability_path", "resumed_hitl", "recovery_path"]},
                 source_turn_ids=source_turn_ids,
                 source_run_ids=source_run_ids,
@@ -318,44 +476,47 @@ def extract_memory_candidates(
 
     for decision in list(episodic_summary.important_decisions)[:3]:
         text = str(decision).strip()
-        if text:
-            candidates.append(
-                _candidate(
-                    memory_type="workflow_rule",
-                    base_dir=base_dir,
-                    thread_id=thread_id,
-                    title="Workflow rule",
-                    content=text,
-                    summary=text,
-                    tags=("decision", "workflow"),
-                    source="episodic_summary",
-                    updated_at=updated_at,
-                    confidence=0.68,
-                    applicability={"prompt_paths": ["capability_path", "recovery_path", "resumed_hitl"]},
-                    source_turn_ids=source_turn_ids,
-                    source_run_ids=source_run_ids,
-                    source_memory_ids=source_memory_ids,
-                )
+        if not text:
+            continue
+        if text.startswith("route=") or text.startswith("skill="):
+            continue
+        candidates.append(
+            _candidate(
+                memory_type="workflow_rule",
+                base_dir=base_dir,
+                thread_id=thread_id,
+                title="Workflow rule",
+                body=_line_body("workflow_rule", text),
+                tags=("decision", "workflow"),
+                source="episodic_summary",
+                updated_at=updated_at,
+                confidence=0.72,
+                applicability={"prompt_paths": ["capability_path", "recovery_path", "resumed_hitl"]},
+                source_turn_ids=source_turn_ids,
+                source_run_ids=source_run_ids,
+                source_memory_ids=source_memory_ids,
             )
+        )
 
     last_failure = state.get("last_failure")
     if isinstance(last_failure, dict) and last_failure:
         lesson = f"{last_failure.get('capability_id', 'capability')} failed with {last_failure.get('error_type', 'unknown')}"
         if state.get("recovery_action"):
             lesson += f"; recovery={state.get('recovery_action')}"
+        lesson_body = _line_body("capability_lesson", lesson)
+        lesson_body["trigger"] = str(last_failure.get("capability_id", "capability") or "capability failure")
         candidates.append(
             _candidate(
                 memory_type="capability_lesson",
                 base_dir=base_dir,
                 thread_id=thread_id,
                 title="Capability lesson",
-                content=lesson,
-                summary=lesson,
+                body=lesson_body,
                 tags=("capability", "failure", "lesson"),
                 metadata={"transient_failure": False},
                 source="failure_state",
                 updated_at=updated_at,
-                confidence=0.66,
+                confidence=0.7,
                 applicability={"prompt_paths": ["capability_path", "recovery_path"]},
                 source_turn_ids=source_turn_ids,
                 source_run_ids=source_run_ids,
@@ -374,12 +535,11 @@ def extract_memory_candidates(
                     base_dir=base_dir,
                     thread_id=thread_id,
                     title="External reference",
-                    content=text,
-                    summary=text,
+                    body=_line_body("external_reference", text),
                     tags=("reference", "url"),
                     source="episodic_summary",
                     updated_at=updated_at,
-                    confidence=0.7,
+                    confidence=0.74,
                     applicability={"prompt_paths": ["knowledge_qa"]},
                     source_turn_ids=source_turn_ids,
                     source_run_ids=source_run_ids,
@@ -393,13 +553,12 @@ def extract_memory_candidates(
                     base_dir=base_dir,
                     thread_id=thread_id,
                     title="Artifact map",
-                    content=text,
-                    summary=text,
+                    body=_line_body("artifact_map", text),
                     tags=("artifact", "map"),
                     metadata={"derivable_from_repo": False},
                     source="episodic_summary",
                     updated_at=updated_at,
-                    confidence=0.65,
+                    confidence=0.7,
                     applicability={"prompt_paths": ["knowledge_qa", "capability_path"]},
                     source_turn_ids=source_turn_ids,
                     source_run_ids=source_run_ids,
@@ -419,6 +578,7 @@ def extract_memory_candidates(
                 "memory_type": candidate.memory_type,
                 "title": candidate.title,
                 "summary": candidate.summary,
+                "body": candidate.body,
                 "namespace": candidate.namespace,
                 "fingerprint": candidate.fingerprint,
                 "conflict_key": candidate.conflict_key,
@@ -428,15 +588,18 @@ def extract_memory_candidates(
             for candidate in candidates
             if candidate.memory_type != "session_episode"
         ]
-        episode_content = " | ".join(episode_lines)
+        episode_body = {
+            "episode": " | ".join(episode_lines),
+            "why": "This captures the current session episode so repeated patterns can later be consolidated into stable memory.",
+            "stable_candidates": stable_hints,
+        }
         candidates.append(
             _candidate(
                 memory_type="session_episode",
                 base_dir=base_dir,
                 thread_id=thread_id,
                 title="Session episode",
-                content=episode_content,
-                summary="; ".join(episode_lines[:2]),
+                body=episode_body,
                 tags=("episode", "thread"),
                 metadata={
                     "thread_id": thread_id,
@@ -456,6 +619,8 @@ def extract_memory_candidates(
 
     accepted: list[MemoryCandidate] = []
     for candidate in _dedupe_candidates(candidates):
+        if not _validate_contract(candidate):
+            continue
         if _is_forbidden_long_term(candidate):
             continue
         accepted.append(candidate)
