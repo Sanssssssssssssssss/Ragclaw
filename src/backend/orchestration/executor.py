@@ -2,17 +2,25 @@ from __future__ import annotations
 
 import json
 import re
+from contextvars import ContextVar
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from langgraph.types import Command, interrupt
 
-from src.backend.capabilities.invocation import CapabilityRuntimeContext, GovernedCapabilityTool, capability_runtime_scope, invoke_capability
+from src.backend.capabilities.invocation import (
+    CapabilityRuntimeContext,
+    GovernedCapabilityTool,
+    activate_capability_runtime_context,
+    invoke_capability,
+    reset_capability_runtime_context,
+)
 from src.backend.capabilities.types import CapabilityResult
 from src.backend.context import ContextAssembler, ContextWriter
 from src.backend.context.models import ContextAssembly, ContextModelCallSnapshot, ContextTurnSnapshot
 from src.backend.context.store import context_store
 from src.backend.decision.skill_gate import SkillDecision, skill_instruction
+from src.backend.observability.otel_spans import set_span_attributes, with_observation
 from src.backend.observability.types import AnswerRecord, RetrievalRecord, RouteDecisionRecord, SkillDecisionRecord, ToolCallRecord
 from src.backend.orchestration.checkpointing import PendingHitlRequest, checkpoint_store
 from src.backend.orchestration.compiler import compile_harness_orchestration_graph
@@ -71,6 +79,9 @@ class _ExecutionBindings:
     context: CapabilityRuntimeContext
 
 
+_CURRENT_EXECUTION_BINDINGS: ContextVar[_ExecutionBindings | None] = ContextVar("ragclaw_execution_bindings", default=None)
+
+
 class HarnessLangGraphOrchestrator:
     def __init__(
         self,
@@ -82,18 +93,22 @@ class HarnessLangGraphOrchestrator:
         resume_thread_id: str = "",
         resume_source: str = "",
         resume_payload: dict[str, Any] | None = None,
+        include_checkpointer: bool = True,
     ) -> None:
         self._agent = agent_manager
         self._execution = execution_support
         self._knowledge_grader = knowledge_grader or KnowledgeAnswerGrader(agent_manager)
-        self._graph = compile_harness_orchestration_graph(self)
+        self._graph = compile_harness_orchestration_graph(self, include_checkpointer=include_checkpointer)
         self._context_assembler = ContextAssembler(base_dir=self._agent.base_dir)
         self._context_writer = ContextWriter(base_dir=self._agent.base_dir)
-        self._bindings: _ExecutionBindings | None = None
         self._resume_checkpoint_id = str(resume_checkpoint_id or "")
         self._resume_thread_id = str(resume_thread_id or "")
         self._resume_source = str(resume_source or "")
         self._resume_payload = dict(resume_payload or {})
+
+    @property
+    def graph(self):
+        return self._graph
 
     async def run(self, runtime: "HarnessRuntime", handle: "RuntimeRunHandle", *, message: str, history: list[dict[str, Any]]) -> GraphState:
         context = CapabilityRuntimeContext(
@@ -103,51 +118,132 @@ class HarnessLangGraphOrchestrator:
             governor=runtime.governor_for(handle.run_id),
             approval_overrides=set(),
         )
-        self._bindings = _ExecutionBindings(runtime=runtime, handle=handle, context=context)
+        token = _CURRENT_EXECUTION_BINDINGS.set(_ExecutionBindings(runtime=runtime, handle=handle, context=context))
+        capability_token = activate_capability_runtime_context(context)
         try:
-            async with capability_runtime_scope(context):
-                thread_id = self._thread_id_for(handle)
-                if self._resume_checkpoint_id:
-                    await self._emit_resume_events(runtime, handle, thread_id)
-                    resume_input: Any = None
-                    if self._resume_payload:
-                        resume_input = Command(resume=dict(self._resume_payload))
-                    result = await self._graph.ainvoke(
-                        resume_input,
-                        config={
-                            "configurable": {
-                                "thread_id": thread_id,
-                                "checkpoint_id": self._resume_checkpoint_id,
-                            }
-                        },
-                    )
-                else:
-                    result = await self._graph.ainvoke(
-                        create_initial_graph_state(
-                            run_id=handle.run_id,
-                            session_id=getattr(handle.metadata, "session_id", None),
-                            thread_id=thread_id,
-                            user_message=message,
-                            history=history,
-                        ),
-                        config={"configurable": {"thread_id": thread_id}},
-                    )
-                await self._emit_hitl_interrupt_if_needed(runtime, handle, thread_id, result)
-                await self._emit_checkpoint_created(runtime, handle, thread_id)
-                return result
+            thread_id = self._thread_id_for(handle)
+            if self._resume_checkpoint_id:
+                await self._emit_resume_events(runtime, handle, thread_id)
+                resume_input: Any = None
+                if self._resume_payload:
+                    resume_input = Command(resume=dict(self._resume_payload))
+                result = await self._graph.ainvoke(
+                    resume_input,
+                    config={
+                        "configurable": {
+                            "thread_id": thread_id,
+                            "checkpoint_id": self._resume_checkpoint_id,
+                        }
+                    },
+                )
+            else:
+                result = await self._graph.ainvoke(
+                    create_initial_graph_state(
+                        run_id=handle.run_id,
+                        session_id=getattr(handle.metadata, "session_id", None),
+                        thread_id=thread_id,
+                        user_message=message,
+                        history=history,
+                    ),
+                    config={"configurable": {"thread_id": thread_id}},
+                )
+            await self._emit_hitl_interrupt_if_needed(runtime, handle, thread_id, result)
+            await self._emit_checkpoint_created(runtime, handle, thread_id)
+            return result
         finally:
-            self._bindings = None
+            reset_capability_runtime_context(capability_token)
+            _CURRENT_EXECUTION_BINDINGS.reset(token)
 
     def _bindings_or_raise(self) -> _ExecutionBindings:
-        if self._bindings is None:
+        bindings = _CURRENT_EXECUTION_BINDINGS.get()
+        if bindings is None:
             raise RuntimeError("orchestration bindings are not active")
-        return self._bindings
+        return bindings
 
-    async def bootstrap_node(self, state: GraphState) -> dict[str, Any]:
+    def _studio_configurable(self, config: Any | None) -> dict[str, Any]:
+        if isinstance(config, dict):
+            return dict(config.get("configurable", {}) or {})
+        if config is None:
+            return {}
+        getter = getattr(config, "get", None)
+        if callable(getter):
+            return dict(getter("configurable", {}) or {})
+        return {}
+
+    def _ensure_studio_bindings(self, state: GraphState, *, config: Any | None = None) -> dict[str, Any]:
+        if _CURRENT_EXECUTION_BINDINGS.get() is not None:
+            return {}
+
+        runtime = self._agent.get_harness_runtime()
+        configurable = self._studio_configurable(config)
+        checkpoint_meta = dict(state.get("checkpoint_meta", {}) or {})
+        session_id = state.get("session_id") or configurable.get("session_id")
+        checkpoint_id = str(configurable.get("checkpoint_id", "") or checkpoint_meta.get("checkpoint_id", "") or "")
+        resume_source = str(configurable.get("resume_source", "") or checkpoint_meta.get("resume_source", "") or "")
+        run_status = str(checkpoint_meta.get("run_status", "") or ("resumed" if checkpoint_id else "fresh"))
+        user_message = str(state.get("user_message", "") or configurable.get("user_message", "") or "")
+        thread_id = str(
+            state.get("thread_id", "")
+            or configurable.get("thread_id", "")
+            or checkpoint_store.thread_id_for(session_id=session_id, run_id=str(state.get("run_id", "") or "studio"))
+        )
+        handle = runtime.begin_run(
+            user_message=user_message,
+            session_id=str(session_id) if session_id is not None else None,
+            source="langsmith_studio",
+            thread_id=thread_id,
+            checkpoint_id=checkpoint_id,
+            resume_source=resume_source,
+            run_status=run_status,
+            orchestration_engine="langgraph",
+        )
+        context = CapabilityRuntimeContext(
+            runtime=runtime,
+            handle=handle,
+            registry=self._agent.get_capability_registry(),
+            governor=runtime.governor_for(handle.run_id),
+            approval_overrides=set(),
+        )
+        _CURRENT_EXECUTION_BINDINGS.set(_ExecutionBindings(runtime=runtime, handle=handle, context=context))
+        activate_capability_runtime_context(context)
+        return {
+            "run_id": handle.run_id,
+            "session_id": getattr(handle.metadata, "session_id", None),
+            "thread_id": thread_id,
+            "studio_managed_run": True,
+            "checkpoint_meta": {
+                **checkpoint_meta,
+                "thread_id": thread_id,
+                "checkpoint_id": checkpoint_id,
+                "resume_source": resume_source,
+                "run_status": run_status,
+                "orchestration_engine": "langgraph",
+                "updated_at": runtime.now(),
+            },
+        }
+
+    def ensure_graph_bindings(self, state: GraphState, *, config: Any | None = None) -> dict[str, Any]:
+        return self._ensure_studio_bindings(state, config=config)
+
+    def _otel_state_attributes(self, state: GraphState, *, path_type: str = "", **extra: Any) -> dict[str, Any]:
+        meta = self._run_context_meta(state)
+        return {
+            "run_id": meta["run_id"],
+            "thread_id": meta["thread_id"],
+            "session_id": meta["session_id"],
+            "path_type": path_type or str(state.get("path_kind", "") or ""),
+            "checkpoint_id": meta["checkpoint_id"] or None,
+            "resume_source": meta["resume_source"] or None,
+            **extra,
+        }
+
+    async def bootstrap_node(self, state: GraphState, *, config: Any | None = None) -> dict[str, Any]:
+        studio_updates = self._ensure_studio_bindings(state, config=config)
         bindings = self._bindings_or_raise()
         checkpoint_meta = {
             **dict(state.get("checkpoint_meta", {}) or {}),
-            "thread_id": state.get("thread_id", ""),
+            **dict(studio_updates.get("checkpoint_meta", {}) or {}),
+            "thread_id": studio_updates.get("thread_id") or state.get("thread_id", ""),
             "checkpoint_id": self._resume_checkpoint_id or str(state.get("checkpoint_meta", {}).get("checkpoint_id", "") or ""),
             "resume_source": self._resume_source or str(state.get("checkpoint_meta", {}).get("resume_source", "") or ""),
             "run_status": "resumed" if self._resume_checkpoint_id else str(state.get("checkpoint_meta", {}).get("run_status", "") or "fresh"),
@@ -155,6 +251,7 @@ class HarnessLangGraphOrchestrator:
         }
         base_state = {
             **dict(state),
+            **dict(studio_updates),
             "checkpoint_meta": checkpoint_meta,
             "augmented_history": list(state.get("history", [])),
             "rag_mode": self._agent._runtime_rag_mode(),
@@ -167,6 +264,10 @@ class HarnessLangGraphOrchestrator:
             turn_id=base_state["turn_id"],
         )
         return {
+            "run_id": studio_updates.get("run_id", state.get("run_id", "")),
+            "session_id": studio_updates.get("session_id", state.get("session_id")),
+            "thread_id": studio_updates.get("thread_id", state.get("thread_id", "")),
+            "studio_managed_run": bool(studio_updates.get("studio_managed_run", state.get("studio_managed_run", False))),
             "augmented_history": list(state.get("history", [])),
             "rag_mode": self._agent._runtime_rag_mode(),
             "governor_snapshot": bindings.runtime.governor_for(bindings.handle.run_id).snapshot(),
@@ -261,39 +362,45 @@ class HarnessLangGraphOrchestrator:
 
     async def memory_retrieval_node(self, state: GraphState) -> dict[str, Any]:
         bindings = self._bindings_or_raise()
-        strategy = state.get("execution_strategy")
-        if not state.get("rag_mode") or strategy is None or not strategy.allow_retrieval:
-            result = {"memory_retrieval": [], "turn_id": self._current_turn_id(state)}
-            _payload, updates = self._write_context_snapshot(state=state, result=result, turn_id=result["turn_id"])
-            return {"memory_retrieval": [], **updates}
-        await bindings.runtime.emit(bindings.handle, "retrieval.started", {"kind": "memory", "stage": "memory", "title": "Memory retrieval", "message": ""})
-        retrievals = self._memory_retrieve(state["user_message"])
-        if not retrievals:
-            result = {"memory_retrieval": [], "turn_id": self._current_turn_id(state)}
-            _payload, updates = self._write_context_snapshot(state=state, result=result, turn_id=result["turn_id"])
-            return {"memory_retrieval": [], **updates}
-        step = self._agent._format_memory_retrieval_step(retrievals)
-        await bindings.runtime.emit(
-            bindings.handle,
-            "retrieval.completed",
-            RetrievalRecord(
-                kind=step["kind"],
-                stage=step["stage"],
-                title=step["title"],
-                message=step["message"],
-                results=tuple(self._agent._harness_retrieval_evidence_records(step["results"])),
-            ).to_dict(),
-        )
-        result = {
-            "memory_retrieval": retrievals,
-            "turn_id": self._current_turn_id(state),
-        }
-        _payload, updates = self._write_context_snapshot(
-            state=state,
-            result=result,
-            turn_id=result["turn_id"],
-        )
-        return {"memory_retrieval": retrievals, **updates}
+        with with_observation(
+            "retrieval",
+            tracer_name="ragclaw.orchestration",
+            attributes=self._otel_state_attributes(state, path_type="direct_answer", retrieval_kind="memory"),
+        ) as span:
+            strategy = state.get("execution_strategy")
+            if not state.get("rag_mode") or strategy is None or not strategy.allow_retrieval:
+                result = {"memory_retrieval": [], "turn_id": self._current_turn_id(state)}
+                _payload, updates = self._write_context_snapshot(state=state, result=result, turn_id=result["turn_id"])
+                return {"memory_retrieval": [], **updates}
+            await bindings.runtime.emit(bindings.handle, "retrieval.started", {"kind": "memory", "stage": "memory", "title": "Memory retrieval", "message": ""})
+            retrievals = self._memory_retrieve(state["user_message"])
+            set_span_attributes(span, {"retrieval_count": len(retrievals)})
+            if not retrievals:
+                result = {"memory_retrieval": [], "turn_id": self._current_turn_id(state)}
+                _payload, updates = self._write_context_snapshot(state=state, result=result, turn_id=result["turn_id"])
+                return {"memory_retrieval": [], **updates}
+            step = self._agent._format_memory_retrieval_step(retrievals)
+            await bindings.runtime.emit(
+                bindings.handle,
+                "retrieval.completed",
+                RetrievalRecord(
+                    kind=step["kind"],
+                    stage=step["stage"],
+                    title=step["title"],
+                    message=step["message"],
+                    results=tuple(self._agent._harness_retrieval_evidence_records(step["results"])),
+                ).to_dict(),
+            )
+            result = {
+                "memory_retrieval": retrievals,
+                "turn_id": self._current_turn_id(state),
+            }
+            _payload, updates = self._write_context_snapshot(
+                state=state,
+                result=result,
+                turn_id=result["turn_id"],
+            )
+            return {"memory_retrieval": retrievals, **updates}
 
     async def direct_answer_node(self, state: GraphState) -> dict[str, Any]:
         strategy = state.get("execution_strategy")
@@ -342,36 +449,42 @@ class HarnessLangGraphOrchestrator:
 
     async def knowledge_retrieval_node(self, state: GraphState) -> dict[str, Any]:
         bindings = self._bindings_or_raise()
-        await bindings.runtime.emit(bindings.handle, "retrieval.started", {"kind": "knowledge", "stage": "knowledge", "title": "Knowledge retrieval", "message": ""})
-        result = None
-        async for event in self._knowledge_astream(state["user_message"]):
-            if event.get("type") == "orchestrated_result":
-                result = event["result"]
-        if result is not None:
-            for step in result.steps:
-                await bindings.runtime.emit(
-                    bindings.handle,
-                    "retrieval.completed",
-                    RetrievalRecord(
-                        kind=step.kind,
-                        stage=step.stage,
-                        title=step.title,
-                        message=step.message,
-                        results=tuple(self._agent._harness_retrieval_evidence_records([item.to_dict() for item in step.results])),
-                        status=getattr(result, "status", ""),
-                        reason=getattr(result, "reason", ""),
-                    ).to_dict(),
-                )
-        result_payload = {
-            "knowledge_retrieval": result,
-            "turn_id": self._current_turn_id(state),
-        }
-        _payload, updates = self._write_context_snapshot(
-            state=state,
-            result=result_payload,
-            turn_id=result_payload["turn_id"],
-        )
-        return {"knowledge_retrieval": result, **updates}
+        with with_observation(
+            "retrieval",
+            tracer_name="ragclaw.orchestration",
+            attributes=self._otel_state_attributes(state, path_type="knowledge_qa", retrieval_kind="knowledge"),
+        ) as span:
+            await bindings.runtime.emit(bindings.handle, "retrieval.started", {"kind": "knowledge", "stage": "knowledge", "title": "Knowledge retrieval", "message": ""})
+            result = None
+            async for event in self._knowledge_astream(state["user_message"]):
+                if event.get("type") == "orchestrated_result":
+                    result = event["result"]
+            if result is not None:
+                set_span_attributes(span, {"retrieval_status": getattr(result, "status", ""), "retrieval_reason": getattr(result, "reason", "")})
+                for step in result.steps:
+                    await bindings.runtime.emit(
+                        bindings.handle,
+                        "retrieval.completed",
+                        RetrievalRecord(
+                            kind=step.kind,
+                            stage=step.stage,
+                            title=step.title,
+                            message=step.message,
+                            results=tuple(self._agent._harness_retrieval_evidence_records([item.to_dict() for item in step.results])),
+                            status=getattr(result, "status", ""),
+                            reason=getattr(result, "reason", ""),
+                        ).to_dict(),
+                    )
+            result_payload = {
+                "knowledge_retrieval": result,
+                "turn_id": self._current_turn_id(state),
+            }
+            _payload, updates = self._write_context_snapshot(
+                state=state,
+                result=result_payload,
+                turn_id=result_payload["turn_id"],
+            )
+            return {"knowledge_retrieval": result, **updates}
 
     async def knowledge_synthesis_node(self, state: GraphState) -> dict[str, Any]:
         result = state.get("knowledge_retrieval")
@@ -484,11 +597,23 @@ class HarnessLangGraphOrchestrator:
         if request is None:
             return {"interrupt_request": None, "approval_decision": ""}
 
-        response = interrupt(request)
-        response_payload = dict(response) if isinstance(response, dict) else {"decision": response}
-        decision = str(response_payload.get("decision", "") or "").strip().lower()
-        if decision not in {"approve", "reject", "edit"}:
-            decision = "reject"
+        with with_observation(
+            "hitl",
+            tracer_name="ragclaw.orchestration",
+            attributes=self._otel_state_attributes(
+                state,
+                path_type="capability_path",
+                checkpoint_id=str(request.get("checkpoint_id", "") or "") or None,
+                capability_id=request["capability_id"],
+                capability_type=request["capability_type"],
+            ),
+        ) as span:
+            response = interrupt(request)
+            response_payload = dict(response) if isinstance(response, dict) else {"decision": response}
+            decision = str(response_payload.get("decision", "") or "").strip().lower()
+            if decision not in {"approve", "reject", "edit"}:
+                decision = "reject"
+            set_span_attributes(span, {"hitl_decision": decision})
         thread_id = str(request["thread_id"] or "")
         checkpoint_id = self._resume_checkpoint_id or str(request.get("checkpoint_id", "") or "")
         edited_input = (
@@ -797,22 +922,34 @@ class HarnessLangGraphOrchestrator:
             retry_count=retry_count,
             already_escalated=failure.failure_key in escalated_failures,
         )
-        base_payload = {
-            "run_id": bindings.handle.run_id,
-            "session_id": state.get("session_id"),
-            "thread_id": state.get("thread_id"),
-            "capability_id": failure.capability_id,
-            "capability_type": failure.capability_type,
-            "display_name": failure.display_name,
-            "error_type": failure.error_type,
-            "error_message": failure.error_message,
-            "recovery_action": decision.action,
-            "retry_count": retry_count,
-            "from_checkpoint": bool(self._resume_checkpoint_id),
-            "recovered": False,
-            "checkpoint_id": self._resume_checkpoint_id or str(state.get("checkpoint_meta", {}).get("checkpoint_id", "") or ""),
-        }
-        await bindings.runtime.emit(bindings.handle, "recovery.started", dict(base_payload))
+        with with_observation(
+            "recovery",
+            tracer_name="ragclaw.orchestration",
+            attributes=self._otel_state_attributes(
+                state,
+                path_type="recovery_path",
+                capability_id=failure.capability_id,
+                capability_type=failure.capability_type,
+                error_type=failure.error_type,
+                recovery_action=decision.action,
+            ),
+        ):
+            base_payload = {
+                "run_id": bindings.handle.run_id,
+                "session_id": state.get("session_id"),
+                "thread_id": state.get("thread_id"),
+                "capability_id": failure.capability_id,
+                "capability_type": failure.capability_type,
+                "display_name": failure.display_name,
+                "error_type": failure.error_type,
+                "error_message": failure.error_message,
+                "recovery_action": decision.action,
+                "retry_count": retry_count,
+                "from_checkpoint": bool(self._resume_checkpoint_id),
+                "recovered": False,
+                "checkpoint_id": self._resume_checkpoint_id or str(state.get("checkpoint_meta", {}).get("checkpoint_id", "") or ""),
+            }
+            await bindings.runtime.emit(bindings.handle, "recovery.started", dict(base_payload))
 
         if decision.action == "retry_once":
             recovery_attempts[failure.failure_key] = retry_count + 1
@@ -994,10 +1131,15 @@ class HarnessLangGraphOrchestrator:
         _payload, updates = self._write_context_snapshot(state=state, result=result, turn_id=self._current_turn_id(state))
         return {**result, **updates}
 
-    async def finalize_node(self, state: GraphState) -> dict[str, Any]:
+    async def finalize_node(self, state: GraphState, *, config: Any | None = None) -> dict[str, Any]:
         bindings = self._bindings_or_raise()
         result = {"governor_snapshot": bindings.runtime.governor_for(bindings.handle.run_id).snapshot()}
         _payload, updates = self._write_context_snapshot(state=state, result=result, turn_id=self._current_turn_id(state))
+        if state.get("studio_managed_run"):
+            try:
+                bindings.runtime.complete_run(bindings.handle)
+            except KeyError:
+                pass
         return {**result, **updates}
 
     def _thread_id_for(self, handle: "RuntimeRunHandle") -> str:
@@ -1007,38 +1149,60 @@ class HarnessLangGraphOrchestrator:
         )
 
     async def _emit_resume_events(self, runtime: "HarnessRuntime", handle: "RuntimeRunHandle", thread_id: str) -> None:
-        summary = checkpoint_store.get_checkpoint(thread_id=thread_id, checkpoint_id=self._resume_checkpoint_id)
-        if summary is None:
-            raise RuntimeError(f"checkpoint not found: {self._resume_checkpoint_id}")
-        await runtime.emit(
-            handle,
-            "checkpoint.resumed",
-            {
+        with with_observation(
+            "checkpoint",
+            tracer_name="ragclaw.orchestration",
+            attributes={
+                "run_id": handle.run_id,
                 "thread_id": thread_id,
-                "checkpoint_id": summary.checkpoint_id,
+                "session_id": getattr(handle.metadata, "session_id", None),
+                "checkpoint_id": self._resume_checkpoint_id or None,
                 "resume_source": self._resume_source or "checkpoint",
-                "orchestration_engine": "langgraph",
-                "state_label": summary.state_label,
-                "created_at": summary.created_at,
+                "path_type": "resumed_hitl" if self._resume_source else "",
             },
-        )
+        ):
+            summary = checkpoint_store.get_checkpoint(thread_id=thread_id, checkpoint_id=self._resume_checkpoint_id)
+            if summary is None:
+                raise RuntimeError(f"checkpoint not found: {self._resume_checkpoint_id}")
+            await runtime.emit(
+                handle,
+                "checkpoint.resumed",
+                {
+                    "thread_id": thread_id,
+                    "checkpoint_id": summary.checkpoint_id,
+                    "resume_source": self._resume_source or "checkpoint",
+                    "orchestration_engine": "langgraph",
+                    "state_label": summary.state_label,
+                    "created_at": summary.created_at,
+                },
+            )
 
     async def _emit_checkpoint_created(self, runtime: "HarnessRuntime", handle: "RuntimeRunHandle", thread_id: str) -> None:
-        latest = checkpoint_store.latest_checkpoint(thread_id=thread_id)
-        if latest is None:
-            return
-        await runtime.emit(
-            handle,
-            "checkpoint.created",
-            {
-                "thread_id": latest.thread_id,
-                "checkpoint_id": latest.checkpoint_id,
-                "created_at": latest.created_at,
-                "state_label": latest.state_label,
-                "resume_eligible": latest.resume_eligible,
-                "orchestration_engine": "langgraph",
+        with with_observation(
+            "checkpoint",
+            tracer_name="ragclaw.orchestration",
+            attributes={
+                "run_id": handle.run_id,
+                "thread_id": thread_id,
+                "session_id": getattr(handle.metadata, "session_id", None),
+                "path_type": "",
             },
-        )
+        ):
+            latest = checkpoint_store.latest_checkpoint(thread_id=thread_id)
+            if latest is None:
+                return
+            await runtime.emit(
+                handle,
+                "checkpoint.created",
+                {
+                    "thread_id": latest.thread_id,
+                    "checkpoint_id": latest.checkpoint_id,
+                    "created_at": latest.created_at,
+                    "state_label": latest.state_label,
+                    "resume_eligible": latest.resume_eligible,
+                    "orchestration_engine": "langgraph",
+                },
+            )
 
     async def _emit_hitl_interrupt_if_needed(
         self,
@@ -1050,49 +1214,60 @@ class HarnessLangGraphOrchestrator:
         interrupts = list(result.get("__interrupt__", []) or []) if isinstance(result, dict) else []
         if not interrupts:
             return
-        latest = checkpoint_store.latest_checkpoint(thread_id=thread_id)
-        if latest is None:
-            return
-        raw_payload = getattr(interrupts[0], "value", {}) or {}
-        request, created = checkpoint_store.record_pending_hitl(
-            PendingHitlRequest(
-                request_id="",
-                run_id=str(raw_payload.get("run_id", "") or handle.run_id),
-                thread_id=str(raw_payload.get("thread_id", "") or thread_id),
-                session_id=str(raw_payload.get("session_id")) if raw_payload.get("session_id") is not None else None,
-                checkpoint_id=str(latest.checkpoint_id or raw_payload.get("checkpoint_id", "") or ""),
-                capability_id=str(raw_payload.get("capability_id", "") or ""),
-                capability_type=str(raw_payload.get("capability_type", "") or ""),
-                display_name=str(raw_payload.get("display_name", "") or ""),
-                risk_level=str(raw_payload.get("risk_level", "") or ""),
-                reason=str(raw_payload.get("reason", "") or ""),
-                proposed_input=dict(raw_payload.get("proposed_input", {}) or {}),
-                requested_at=runtime.now(),
+        with with_observation(
+            "hitl",
+            tracer_name="ragclaw.orchestration",
+            attributes={
+                "run_id": handle.run_id,
+                "thread_id": thread_id,
+                "session_id": getattr(handle.metadata, "session_id", None),
+                "resume_source": self._resume_source or "hitl_api",
+                "path_type": "capability_path",
+            },
+        ):
+            latest = checkpoint_store.latest_checkpoint(thread_id=thread_id)
+            if latest is None:
+                return
+            raw_payload = getattr(interrupts[0], "value", {}) or {}
+            request, created = checkpoint_store.record_pending_hitl(
+                PendingHitlRequest(
+                    request_id="",
+                    run_id=str(raw_payload.get("run_id", "") or handle.run_id),
+                    thread_id=str(raw_payload.get("thread_id", "") or thread_id),
+                    session_id=str(raw_payload.get("session_id")) if raw_payload.get("session_id") is not None else None,
+                    checkpoint_id=str(latest.checkpoint_id or raw_payload.get("checkpoint_id", "") or ""),
+                    capability_id=str(raw_payload.get("capability_id", "") or ""),
+                    capability_type=str(raw_payload.get("capability_type", "") or ""),
+                    display_name=str(raw_payload.get("display_name", "") or ""),
+                    risk_level=str(raw_payload.get("risk_level", "") or ""),
+                    reason=str(raw_payload.get("reason", "") or ""),
+                    proposed_input=dict(raw_payload.get("proposed_input", {}) or {}),
+                    requested_at=runtime.now(),
+                )
             )
-        )
-        if not created:
-            return
-        await runtime.emit(
-            handle,
-            "checkpoint.interrupted",
-            {
-                "thread_id": request.thread_id,
-                "checkpoint_id": request.checkpoint_id,
-                "resume_source": self._resume_source or "hitl_api",
-                "orchestration_engine": "langgraph",
-                "state_label": "interrupted",
-                "created_at": latest.created_at,
-            },
-        )
-        await runtime.emit(
-            handle,
-            "hitl.requested",
-            {
-                **request.to_dict(),
-                "orchestration_engine": "langgraph",
-                "resume_source": self._resume_source or "hitl_api",
-            },
-        )
+            if not created:
+                return
+            await runtime.emit(
+                handle,
+                "checkpoint.interrupted",
+                {
+                    "thread_id": request.thread_id,
+                    "checkpoint_id": request.checkpoint_id,
+                    "resume_source": self._resume_source or "hitl_api",
+                    "orchestration_engine": "langgraph",
+                    "state_label": "interrupted",
+                    "created_at": latest.created_at,
+                },
+            )
+            await runtime.emit(
+                handle,
+                "hitl.requested",
+                {
+                    **request.to_dict(),
+                    "orchestration_engine": "langgraph",
+                    "resume_source": self._resume_source or "hitl_api",
+                },
+            )
 
     def _path_kind_from_decision(self, decision: "RoutingDecision") -> str:
         if decision.intent == "knowledge_qa":

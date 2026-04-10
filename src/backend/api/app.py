@@ -20,6 +20,7 @@ from src.backend.api.tokens import router as tokens_router
 from src.backend.capabilities.skills_scanner import refresh_snapshot
 from src.backend.knowledge import knowledge_indexer
 from src.backend.knowledge.memory_indexer import memory_indexer
+from src.backend.observability.otel import configure_otel
 from src.backend.runtime.agent_manager import agent_manager
 from src.backend.runtime.config import get_settings
 
@@ -54,6 +55,7 @@ def _schedule_knowledge_warm_start() -> asyncio.Task[Any]:
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     settings = get_settings()
+    configure_otel(service_name="ragclaw-backend")
     refresh_snapshot(settings.backend_dir)
     agent_manager.initialize(settings.backend_dir)
     memory_indexer.configure(settings.backend_dir)

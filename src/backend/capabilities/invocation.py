@@ -18,6 +18,7 @@ from pydantic import ConfigDict, PrivateAttr
 from src.backend.capabilities.governance import CapabilityGovernor, is_retryable_error
 from src.backend.capabilities.registry import CapabilityRegistry
 from src.backend.capabilities.types import CapabilityInvocation, CapabilityResult, CapabilitySpec
+from src.backend.observability.otel_spans import set_span_attributes, with_observation
 
 
 class StructuredCapabilityTool(Protocol):
@@ -85,13 +86,21 @@ class CapabilityRuntimeContext:
 _CURRENT_CONTEXT: ContextVar[CapabilityRuntimeContext | None] = ContextVar("capability_runtime_context", default=None)
 
 
+def activate_capability_runtime_context(context: CapabilityRuntimeContext):
+    return _CURRENT_CONTEXT.set(context)
+
+
+def reset_capability_runtime_context(token) -> None:
+    _CURRENT_CONTEXT.reset(token)
+
+
 @asynccontextmanager
 async def capability_runtime_scope(context: CapabilityRuntimeContext):
-    token = _CURRENT_CONTEXT.set(context)
+    token = activate_capability_runtime_context(context)
     try:
         yield context
     finally:
-        _CURRENT_CONTEXT.reset(token)
+        reset_capability_runtime_context(token)
 
 
 def current_capability_context() -> CapabilityRuntimeContext | None:
@@ -205,77 +214,110 @@ async def invoke_capability(
         requested_at=context.now() if context is not None else "",
         source="runtime",
     )
-
-    if context is not None:
-        decision = context.governor.check(
-            spec,
-            approval_granted=spec.capability_id in context.approval_overrides,
-        )
-        if not decision.allowed:
-            blocked = decision.to_blocked_result(call_id=call_id)
-            context.governor.record_result(spec, blocked)
-            await context.emit(
-                "capability.blocked",
-                _event_payload(
-                    invocation,
-                    spec,
-                    status=blocked.status,
-                    retry_count=0,
-                    partial=False,
-                    latency_ms=0,
-                    error_type=blocked.error_type,
-                    error_message=blocked.error_message,
-                ),
-            )
-            return blocked
-        context.governor.record_attempt(spec)
-        await context.emit(
-            "capability.started",
-            _event_payload(invocation, spec, status="started", retry_count=0, partial=False, latency_ms=0),
-        )
-
-    max_attempts = max(1, int(spec.retry_policy.max_retries) + 1)
-    for attempt_index in range(max_attempts):
-        started_at = time.perf_counter()
-        try:
-            result = await execute_async(dict(payload))
-        except Exception as exc:  # pragma: no cover - defensive boundary
-            latency_ms = int((time.perf_counter() - started_at) * 1000)
-            result = _exception_result(exc, spec, call_id=call_id, retry_count=attempt_index, latency_ms=latency_ms)
-        else:
-            latency_ms = int((time.perf_counter() - started_at) * 1000)
-            result = _normalize_capability_result(
-                result,
-                call_id=call_id,
-                retry_count=attempt_index,
-                latency_ms=latency_ms,
-            )
-
+    metadata = getattr(getattr(context, "handle", None), "metadata", None)
+    with with_observation(
+        "execute_tool",
+        tracer_name="ragclaw.capabilities",
+        attributes={
+            "run_id": invocation.run_id or None,
+            "thread_id": getattr(metadata, "thread_id", None),
+            "session_id": invocation.session_id,
+            "capability_id": spec.capability_id,
+            "capability_type": spec.capability_type,
+            "tool_name": spec.capability_id,
+            "path_type": "",
+        },
+    ) as span:
         if context is not None:
-            context.governor.record_result(spec, result)
-
-        if result.status in {"success", "partial"}:
-            if context is not None:
-                context.capture_result(spec, invocation, result)
+            decision = context.governor.check(
+                spec,
+                approval_granted=spec.capability_id in context.approval_overrides,
+            )
+            if not decision.allowed:
+                blocked = decision.to_blocked_result(call_id=call_id)
+                context.governor.record_result(spec, blocked)
                 await context.emit(
-                    "capability.completed",
+                    "capability.blocked",
                     _event_payload(
                         invocation,
                         spec,
-                        status=result.status,
-                        retry_count=attempt_index,
-                        partial=result.partial,
-                        latency_ms=result.latency_ms,
-                        output_payload=result.payload,
+                        status=blocked.status,
+                        retry_count=0,
+                        partial=False,
+                        latency_ms=0,
+                        error_type=blocked.error_type,
+                        error_message=blocked.error_message,
                     ),
                 )
-            return result
+                set_span_attributes(span, {"error_type": blocked.error_type or "blocked"})
+                return blocked
+            context.governor.record_attempt(spec)
+            await context.emit(
+                "capability.started",
+                _event_payload(invocation, spec, status="started", retry_count=0, partial=False, latency_ms=0),
+            )
 
-        if result.status == "blocked":
+        max_attempts = max(1, int(spec.retry_policy.max_retries) + 1)
+        for attempt_index in range(max_attempts):
+            started_at = time.perf_counter()
+            try:
+                result = await execute_async(dict(payload))
+            except Exception as exc:  # pragma: no cover - defensive boundary
+                latency_ms = int((time.perf_counter() - started_at) * 1000)
+                result = _exception_result(exc, spec, call_id=call_id, retry_count=attempt_index, latency_ms=latency_ms)
+            else:
+                latency_ms = int((time.perf_counter() - started_at) * 1000)
+                result = _normalize_capability_result(
+                    result,
+                    call_id=call_id,
+                    retry_count=attempt_index,
+                    latency_ms=latency_ms,
+                )
+
             if context is not None:
-                context.capture_result(spec, invocation, result)
+                context.governor.record_result(spec, result)
+
+            if result.status in {"success", "partial"}:
+                if context is not None:
+                    context.capture_result(spec, invocation, result)
+                    await context.emit(
+                        "capability.completed",
+                        _event_payload(
+                            invocation,
+                            spec,
+                            status=result.status,
+                            retry_count=attempt_index,
+                            partial=result.partial,
+                            latency_ms=result.latency_ms,
+                            output_payload=result.payload,
+                        ),
+                    )
+                set_span_attributes(span, {"retry_count": attempt_index})
+                return result
+
+            if result.status == "blocked":
+                if context is not None:
+                    context.capture_result(spec, invocation, result)
+                    await context.emit(
+                        "capability.blocked",
+                        _event_payload(
+                            invocation,
+                            spec,
+                            status=result.status,
+                            retry_count=attempt_index,
+                            partial=False,
+                            latency_ms=result.latency_ms,
+                            error_type=result.error_type,
+                            error_message=result.error_message,
+                        ),
+                    )
+                set_span_attributes(span, {"error_type": result.error_type or "blocked", "retry_count": attempt_index})
+                return result
+
+            can_retry = bool(result.retryable and attempt_index + 1 < max_attempts)
+            if context is not None and can_retry:
                 await context.emit(
-                    "capability.blocked",
+                    "capability.retry",
                     _event_payload(
                         invocation,
                         spec,
@@ -287,55 +329,41 @@ async def invoke_capability(
                         error_message=result.error_message,
                     ),
                 )
+            if can_retry:
+                await asyncio.sleep(max(0.0, float(spec.retry_policy.backoff_seconds or 0.0)))
+                continue
+            if context is not None:
+                context.capture_result(spec, invocation, result)
+                await context.emit(
+                    "capability.failed",
+                    _event_payload(
+                        invocation,
+                        spec,
+                        status=result.status,
+                        retry_count=attempt_index,
+                        partial=False,
+                        latency_ms=result.latency_ms,
+                        error_type=result.error_type,
+                        error_message=result.error_message,
+                    ),
+                )
+            set_span_attributes(span, {"error_type": result.error_type or "capability_failed", "retry_count": attempt_index})
             return result
 
-        can_retry = bool(result.retryable and attempt_index + 1 < max_attempts)
-        if context is not None and can_retry:
-            await context.emit(
-                "capability.retry",
-                _event_payload(
-                    invocation,
-                    spec,
-                    status=result.status,
-                    retry_count=attempt_index,
-                    partial=False,
-                    latency_ms=result.latency_ms,
-                    error_type=result.error_type,
-                    error_message=result.error_message,
-                ),
-            )
-        if can_retry:
-            await asyncio.sleep(max(0.0, float(spec.retry_policy.backoff_seconds or 0.0)))
-            continue
-        if context is not None:
-            context.capture_result(spec, invocation, result)
-            await context.emit(
-                "capability.failed",
-                _event_payload(
-                    invocation,
-                    spec,
-                    status=result.status,
-                    retry_count=attempt_index,
-                    partial=False,
-                    latency_ms=result.latency_ms,
-                    error_type=result.error_type,
-                    error_message=result.error_message,
-                ),
-            )
-        return result
-
-    fallback_latency = 0
-    return CapabilityResult(
-        status="failed",
-        payload={},
-        partial=False,
-        error_type="unknown_error",
-        error_message=f"{spec.capability_id} failed without a final result.",
-        retryable=False,
-        latency_ms=fallback_latency,
-        call_id=call_id,
-        retry_count=max_attempts - 1,
-    )
+        fallback_latency = 0
+        fallback = CapabilityResult(
+            status="failed",
+            payload={},
+            partial=False,
+            error_type="unknown_error",
+            error_message=f"{spec.capability_id} failed without a final result.",
+            retryable=False,
+            latency_ms=fallback_latency,
+            call_id=call_id,
+            retry_count=max_attempts - 1,
+        )
+        set_span_attributes(span, {"error_type": fallback.error_type})
+        return fallback
 
 
 class GovernedCapabilityTool(BaseTool):

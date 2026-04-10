@@ -55,6 +55,7 @@ class GraphState(TypedDict, total=False):
     selected_artifact_ids: list[str]
     selected_evidence_ids: list[str]
     selected_conversation_ids: list[str]
+    studio_managed_run: bool
 
 
 def create_initial_graph_state(
@@ -118,4 +119,5 @@ def create_initial_graph_state(
         selected_artifact_ids=[],
         selected_evidence_ids=[],
         selected_conversation_ids=[],
+        studio_managed_run=False,
     )

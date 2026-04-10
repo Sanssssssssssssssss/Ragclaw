@@ -24,7 +24,7 @@ from src.backend.orchestration.nodes import (
 from src.backend.orchestration.state import GraphState
 
 
-def compile_harness_orchestration_graph(orchestrator):
+def compile_harness_orchestration_graph(orchestrator, *, include_checkpointer: bool = True):
     graph = StateGraph(GraphState)
     graph.add_node("bootstrap", build_bootstrap_node(orchestrator))
     graph.add_node("route", build_route_node(orchestrator))
@@ -89,4 +89,4 @@ def compile_harness_orchestration_graph(orchestrator):
     graph.add_edge("capability_guard", "finalize")
     graph.add_edge("direct_answer", "finalize")
     graph.add_edge("finalize", END)
-    return graph.compile(checkpointer=checkpoint_store.saver)
+    return graph.compile(checkpointer=checkpoint_store.saver if include_checkpointer else None)

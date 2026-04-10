@@ -10,6 +10,7 @@ from typing import Any, AsyncIterator, Callable
 from uuid import uuid4
 
 from src.backend.capabilities.governance import CapabilityBudgetPolicy, CapabilityGovernor
+from src.backend.observability.otel_spans import set_span_attributes, with_observation
 from src.backend.observability.trace_store import RunTracePaths, RunTraceStore
 from src.backend.observability.types import HarnessEvent, HarnessEventName, RunMetadata, RunOutcome
 from src.backend.runtime.policy import SessionSerialQueue
@@ -324,63 +325,86 @@ class HarnessRuntime:
         event_queue: asyncio.Queue[HarnessEvent | None] = asyncio.Queue()
         self._run_queues[handle.run_id] = event_queue
         started_event = self._started_events.get(handle.run_id)
+        span_attributes = {
+            "run_id": handle.run_id,
+            "thread_id": thread_id or getattr(handle.metadata, "thread_id", None),
+            "session_id": session_id,
+            "checkpoint_id": checkpoint_id or None,
+            "resume_source": resume_source or None,
+            "path_type": "",
+            "source": source,
+            "run_status": run_status,
+            "orchestration_engine": orchestration_engine,
+        }
 
-        async def _drive_execution() -> Exception | None:
-            lease = await self._deps.queue.acquire(session_id)
+        with with_observation("harness.run", tracer_name="ragclaw.runtime", attributes=span_attributes) as span:
+            set_span_attributes(
+                span,
+                {
+                    "run_id": handle.run_id,
+                    "thread_id": getattr(handle.metadata, "thread_id", None),
+                    "session_id": getattr(handle.metadata, "session_id", None),
+                },
+            )
+
+            async def _drive_execution() -> Exception | None:
+                lease = await self._deps.queue.acquire(session_id)
+                try:
+                    if lease.queued:
+                        await self.emit(
+                            handle,
+                            "run.queued",
+                            {
+                                "session_id": session_id,
+                                "queued_at": lease.queued_at,
+                            },
+                        )
+                        await lease.wait_until_active(self._deps.now_factory)
+                        await self.emit(
+                            handle,
+                            "run.dequeued",
+                            {
+                                "session_id": session_id,
+                                "queued_at": lease.queued_at,
+                                "dequeued_at": lease.dequeued_at,
+                                "active_started_at": lease.dequeued_at,
+                            },
+                        )
+
+                    await executor.execute(
+                        self,
+                        handle,
+                        message=user_message,
+                        history=list(history or []),
+                    )
+                    completion_event, _outcome = self.complete_run(handle)
+                    event_queue.put_nowait(completion_event)
+                    return None
+                except Exception as exc:
+                    failure_event, _outcome = self.fail_run(handle, error_message=str(exc) or "unknown error")
+                    event_queue.put_nowait(failure_event)
+                    return exc
+                finally:
+                    await self._deps.queue.release(session_id)
+                    self._run_queues.pop(handle.run_id, None)
+                    event_queue.put_nowait(None)
+
+            driver_task = asyncio.create_task(_drive_execution())
             try:
-                if lease.queued:
-                    await self.emit(
-                        handle,
-                        "run.queued",
-                        {
-                            "session_id": session_id,
-                            "queued_at": lease.queued_at,
-                        },
-                    )
-                    await lease.wait_until_active(self._deps.now_factory)
-                    await self.emit(
-                        handle,
-                        "run.dequeued",
-                        {
-                            "session_id": session_id,
-                            "queued_at": lease.queued_at,
-                            "dequeued_at": lease.dequeued_at,
-                            "active_started_at": lease.dequeued_at,
-                        },
-                    )
-
-                await executor.execute(
-                    self,
-                    handle,
-                    message=user_message,
-                    history=list(history or []),
-                )
-                completion_event, _outcome = self.complete_run(handle)
-                event_queue.put_nowait(completion_event)
-                return None
-            except Exception as exc:
-                failure_event, _outcome = self.fail_run(handle, error_message=str(exc) or "unknown error")
-                event_queue.put_nowait(failure_event)
-                return exc
+                if started_event is not None:
+                    yield started_event
+                while True:
+                    event = await event_queue.get()
+                    if event is None:
+                        break
+                    yield event
+                error = await driver_task
+                if error is not None:
+                    set_span_attributes(span, {"error_type": type(error).__name__})
+                if error is not None and not suppress_failures:
+                    raise error
             finally:
-                await self._deps.queue.release(session_id)
                 self._run_queues.pop(handle.run_id, None)
-                event_queue.put_nowait(None)
-
-        driver_task = asyncio.create_task(_drive_execution())
-        try:
-            if started_event is not None:
-                yield started_event
-            while True:
-                event = await event_queue.get()
-                if event is None:
-                    break
-                yield event
-            error = await driver_task
-            if error is not None and not suppress_failures:
-                raise error
-        finally:
-            self._run_queues.pop(handle.run_id, None)
 
 
 def build_harness_runtime(base_dir: Path) -> HarnessRuntime:

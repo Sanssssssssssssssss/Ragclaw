@@ -1,0 +1,11 @@
+{
+  "python_version": "3.13",
+  "dependencies": ["./"],
+  "graphs": {
+    "ragclaw": "./src/backend/orchestration/studio_entry.py:graph"
+  },
+  "env": "./backend/.env",
+  "http": {
+    "app": "./src/backend/api/app.py:app"
+  }
+}

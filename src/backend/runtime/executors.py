@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING, Any
 
 from src.backend.knowledge import knowledge_orchestrator
 from src.backend.knowledge.memory_indexer import memory_indexer
+from src.backend.observability.otel_spans import set_span_attributes, with_observation
 from src.backend.orchestration.executor import HarnessLangGraphOrchestrator
 
 if TYPE_CHECKING:  # pragma: no cover
@@ -123,13 +124,33 @@ class HarnessExecutors:
         message: str,
         history: list[dict[str, Any]],
     ) -> RunSummaryState:
-        graph_state = await self._graph_executor.run(
-            runtime,
-            handle,
-            message=message,
-            history=history,
-        )
-        return RunSummaryState.from_graph_state(graph_state)
+        with with_observation(
+            "invoke_agent",
+            tracer_name="ragclaw.runtime",
+            attributes={
+                "run_id": handle.run_id,
+                "thread_id": getattr(handle.metadata, "thread_id", None),
+                "session_id": getattr(handle.metadata, "session_id", None),
+                "checkpoint_id": getattr(handle.metadata, "checkpoint_id", "") or None,
+                "resume_source": getattr(handle.metadata, "resume_source", "") or None,
+                "path_type": "",
+            },
+        ) as span:
+            graph_state = await self._graph_executor.run(
+                runtime,
+                handle,
+                message=message,
+                history=history,
+            )
+            set_span_attributes(
+                span,
+                {
+                    "path_type": str(graph_state.get("path_kind", "") or ""),
+                    "run_status": str(graph_state.get("checkpoint_meta", {}).get("run_status", "") or getattr(handle.metadata, "run_status", "") or ""),
+                    "recovery_action": str(graph_state.get("recovery_action", "") or ""),
+                },
+            )
+            return RunSummaryState.from_graph_state(graph_state)
 
 
 __all__ = [
