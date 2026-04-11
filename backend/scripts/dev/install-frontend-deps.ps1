@@ -1,7 +1,3 @@
-param(
-    [string]$ApiBaseUrl = "http://127.0.0.1:8015/api"
-)
-
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
@@ -50,8 +46,6 @@ function Add-NodeDirectoryToPath {
 }
 
 Set-Location $frontendDir
-$env:NEXT_PUBLIC_API_BASE_URL = $ApiBaseUrl
-
 $npmCommand = Get-NpmCommand
 Add-NodeDirectoryToPath -NpmCommand $npmCommand
-& $npmCommand run dev
+& $npmCommand install

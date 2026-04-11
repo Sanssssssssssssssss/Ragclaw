@@ -41,17 +41,17 @@
     {
       "label": "Frontend: Install deps",
       "type": "shell",
-      "command": "npm install",
+      "command": "powershell -ExecutionPolicy Bypass -File .\\backend\\scripts\\dev\\install-frontend-deps.ps1",
       "options": {
-        "cwd": "${workspaceFolder}/src/frontend"
+        "cwd": "${workspaceFolder}"
       }
     },
     {
       "label": "Frontend: Run dev server",
       "type": "shell",
-      "command": "npm run dev",
+      "command": "powershell -ExecutionPolicy Bypass -File .\\backend\\scripts\\dev\\start-frontend-dev.ps1",
       "options": {
-        "cwd": "${workspaceFolder}/src/frontend"
+        "cwd": "${workspaceFolder}"
       },
       "isBackground": true,
       "problemMatcher": {
@@ -78,6 +78,38 @@
       "label": "App: Start all",
       "type": "shell",
       "command": "powershell -ExecutionPolicy Bypass -File .\\backend\\scripts\\dev\\start-dev.ps1",
+      "options": {
+        "cwd": "${workspaceFolder}"
+      }
+    },
+    {
+      "label": "Studio: LangGraph dev",
+      "type": "shell",
+      "command": "powershell -ExecutionPolicy Bypass -File .\\backend\\scripts\\dev\\start-langgraph-studio.ps1 -Mode dev -NoBrowser",
+      "options": {
+        "cwd": "${workspaceFolder}"
+      }
+    },
+    {
+      "label": "Studio: LangGraph dev (Console tracing)",
+      "type": "shell",
+      "command": "powershell -ExecutionPolicy Bypass -File .\\backend\\scripts\\dev\\start-langgraph-studio.ps1 -Mode dev -NoBrowser -EnableConsoleTracing",
+      "options": {
+        "cwd": "${workspaceFolder}"
+      }
+    },
+    {
+      "label": "Studio: LangGraph up",
+      "type": "shell",
+      "command": "powershell -ExecutionPolicy Bypass -File .\\backend\\scripts\\dev\\start-langgraph-studio.ps1 -Mode up -NoBrowser",
+      "options": {
+        "cwd": "${workspaceFolder}"
+      }
+    },
+    {
+      "label": "Observability: Focused validation",
+      "type": "shell",
+      "command": "powershell -ExecutionPolicy Bypass -File .\\backend\\scripts\\dev\\validate-observability.ps1",
       "options": {
         "cwd": "${workspaceFolder}"
       }

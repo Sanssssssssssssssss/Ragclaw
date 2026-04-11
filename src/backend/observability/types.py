@@ -78,7 +78,7 @@ CANONICAL_EVENT_NAMES: tuple[HarnessEventName, ...] = (
     "run.failed",
 )
 
-RunSource = Literal["chat_api", "benchmark", "replay", "internal"]
+RunSource = Literal["chat_api", "benchmark", "replay", "internal", "langsmith_studio"]
 RunStatus = Literal["completed", "failed"]
 RetrievalKind = Literal["memory", "knowledge"]
 RetrievalChannel = Literal["memory", "skill", "vector", "bm25", "fused"]

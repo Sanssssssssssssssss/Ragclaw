@@ -100,6 +100,15 @@ export const ChatMessage = memo(function ChatMessage({
           <span className="pixel-tag">
             {runMeta.status}
           </span>
+          {runMeta.orchestration_engine ? (
+            <span className="pixel-tag">{runMeta.orchestration_engine}</span>
+          ) : null}
+          {runMeta.trace_available ? (
+            <span className="pixel-tag">trace</span>
+          ) : null}
+          {runMeta.studio_debuggable ? (
+            <span className="pixel-tag">studio</span>
+          ) : null}
           {runMeta.checkpoint_id ? (
             <span className="mono rounded-[4px] border border-[var(--color-line)] bg-[var(--color-bg)] px-2 py-1 text-[0.84rem] normal-case tracking-normal text-[var(--color-ink-soft)]">
               checkpoint {runMeta.checkpoint_id.slice(0, 8)}

@@ -12,6 +12,8 @@ export type RunMeta = {
   checkpoint_id: string;
   resume_source: string;
   orchestration_engine: string;
+  trace_available?: boolean;
+  studio_debuggable?: boolean;
 };
 
 export type CheckpointEvent = {

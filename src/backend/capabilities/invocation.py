@@ -216,7 +216,7 @@ async def invoke_capability(
     )
     metadata = getattr(getattr(context, "handle", None), "metadata", None)
     with with_observation(
-        "execute_tool",
+        "capability.invoke",
         tracer_name="ragclaw.capabilities",
         attributes={
             "run_id": invocation.run_id or None,
@@ -226,6 +226,8 @@ async def invoke_capability(
             "capability_type": spec.capability_type,
             "tool_name": spec.capability_id,
             "path_type": "",
+            "context_path_type": "",
+            "orchestration_engine": getattr(metadata, "orchestration_engine", "langgraph"),
         },
     ) as span:
         if context is not None:
@@ -260,18 +262,41 @@ async def invoke_capability(
         max_attempts = max(1, int(spec.retry_policy.max_retries) + 1)
         for attempt_index in range(max_attempts):
             started_at = time.perf_counter()
-            try:
-                result = await execute_async(dict(payload))
-            except Exception as exc:  # pragma: no cover - defensive boundary
-                latency_ms = int((time.perf_counter() - started_at) * 1000)
-                result = _exception_result(exc, spec, call_id=call_id, retry_count=attempt_index, latency_ms=latency_ms)
-            else:
-                latency_ms = int((time.perf_counter() - started_at) * 1000)
-                result = _normalize_capability_result(
-                    result,
-                    call_id=call_id,
-                    retry_count=attempt_index,
-                    latency_ms=latency_ms,
+            with with_observation(
+                "tool.execute",
+                tracer_name="ragclaw.capabilities",
+                attributes={
+                    "run_id": invocation.run_id or None,
+                    "thread_id": getattr(metadata, "thread_id", None),
+                    "session_id": invocation.session_id,
+                    "capability_id": spec.capability_id,
+                    "capability_type": spec.capability_type,
+                    "tool_name": spec.capability_id,
+                    "retry_count": attempt_index,
+                    "orchestration_engine": getattr(metadata, "orchestration_engine", "langgraph"),
+                },
+            ) as tool_span:
+                try:
+                    result = await execute_async(dict(payload))
+                except Exception as exc:  # pragma: no cover - defensive boundary
+                    latency_ms = int((time.perf_counter() - started_at) * 1000)
+                    result = _exception_result(exc, spec, call_id=call_id, retry_count=attempt_index, latency_ms=latency_ms)
+                else:
+                    latency_ms = int((time.perf_counter() - started_at) * 1000)
+                    result = _normalize_capability_result(
+                        result,
+                        call_id=call_id,
+                        retry_count=attempt_index,
+                        latency_ms=latency_ms,
+                    )
+                set_span_attributes(
+                    tool_span,
+                    {
+                        "status": result.status,
+                        "partial": result.partial,
+                        "error_type": result.error_type or None,
+                        "latency_ms": result.latency_ms,
+                    },
                 )
 
             if context is not None:
@@ -292,7 +317,15 @@ async def invoke_capability(
                             output_payload=result.payload,
                         ),
                     )
-                set_span_attributes(span, {"retry_count": attempt_index})
+                set_span_attributes(
+                    span,
+                    {
+                        "retry_count": attempt_index,
+                        "status": result.status,
+                        "partial": result.partial,
+                        "latency_ms": result.latency_ms,
+                    },
+                )
                 return result
 
             if result.status == "blocked":
@@ -311,7 +344,14 @@ async def invoke_capability(
                             error_message=result.error_message,
                         ),
                     )
-                set_span_attributes(span, {"error_type": result.error_type or "blocked", "retry_count": attempt_index})
+                set_span_attributes(
+                    span,
+                    {
+                        "error_type": result.error_type or "blocked",
+                        "retry_count": attempt_index,
+                        "status": result.status,
+                    },
+                )
                 return result
 
             can_retry = bool(result.retryable and attempt_index + 1 < max_attempts)
@@ -347,7 +387,15 @@ async def invoke_capability(
                         error_message=result.error_message,
                     ),
                 )
-            set_span_attributes(span, {"error_type": result.error_type or "capability_failed", "retry_count": attempt_index})
+            set_span_attributes(
+                span,
+                {
+                    "error_type": result.error_type or "capability_failed",
+                    "retry_count": attempt_index,
+                    "status": result.status,
+                    "latency_ms": result.latency_ms,
+                },
+            )
             return result
 
         fallback_latency = 0
@@ -362,7 +410,7 @@ async def invoke_capability(
             call_id=call_id,
             retry_count=max_attempts - 1,
         )
-        set_span_attributes(span, {"error_type": fallback.error_type})
+        set_span_attributes(span, {"error_type": fallback.error_type, "status": fallback.status})
         return fallback
 
 

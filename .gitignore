@@ -17,12 +17,16 @@ backend/storage/memory_index/*
 !backend/storage/memory_index/.gitkeep
 backend/storage/knowledge/*
 !backend/storage/knowledge/.gitkeep
+backend/storage/context/*
+backend/storage/langgraph/*
+backend/storage/runs/*
 backend/storage/benchmarks/*
 !backend/storage/benchmarks/.gitkeep
 src/frontend/.next/
 src/frontend/node_modules/
 src/frontend/.npm-cache/
 src/frontend/output/
+.langgraph_api/
 .vscode/*
 !.vscode/settings.json
 !.vscode/tasks.json

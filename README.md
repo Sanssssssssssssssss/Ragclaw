@@ -8,13 +8,13 @@ Ragclaw is a local-first agent and RAG workbench with:
 
 Start here:
 
-- [QUICKSTART.md](/D:/GPT_Project/RAG_Model/QUICKSTART.md)
-- [RUNBOOK.md](/D:/GPT_Project/RAG_Model/RUNBOOK.md)
-- [CODEX_HANDOFF.md](/D:/GPT_Project/RAG_Model/CODEX_HANDOFF.md)
+- [QUICKSTART.md](QUICKSTART.md)
+- [RUNBOOK.md](RUNBOOK.md)
+- [CODEX_HANDOFF.md](CODEX_HANDOFF.md)
 
 Environment setup:
 
-- copy [backend/.env.example](/D:/GPT_Project/RAG_Model/backend/.env.example) to `backend/.env`
+- copy [backend/.env.example](backend/.env.example) to `backend/.env`
 - fill in your own keys locally
 
 One-command local start:
@@ -32,7 +32,18 @@ Default URLs:
 LangSmith Studio and OTel:
 
 - The real LangGraph orchestration graph is exposed through [langgraph.json](E:\GPTProject2\Ragclaw\langgraph.json) and [studio_entry.py](E:\GPTProject2\Ragclaw\src\backend\orchestration\studio_entry.py).
+- Add `LANGSMITH_API_KEY` to `backend/.env` before opening Studio. If you already keep a legacy `LANGCHAIN_API_KEY`, the Studio startup script will reuse it automatically.
+- Studio runs now default into a dedicated LangSmith project named `Ragclaw Studio`. Override it with `RAGCLAW_STUDIO_LANGSMITH_PROJECT` in `backend/.env` or `-ProjectName` on the startup script.
 - Start local Studio development mode with `.\backend\scripts\dev\start-langgraph-studio.ps1 -Mode dev -NoBrowser`
 - Optional production-like local validation uses `.\backend\scripts\dev\start-langgraph-studio.ps1 -Mode up`
+- Enable console OTel while running Studio with `.\backend\scripts\dev\start-langgraph-studio.ps1 -Mode dev -EnableConsoleTracing`
+- Send spans to OTLP with `.\backend\scripts\dev\start-langgraph-studio.ps1 -Mode dev -OtlpEndpoint http://127.0.0.1:4318/v1/traces`
+- The Studio dev script adds `--allow-blocking` by default because LangGraph's local blocking detector can flag harmless synchronous calls from third-party startup code like `os.getcwd`. Use `-StrictNonBlocking` only when you want to audit and chase those warnings.
 - Minimal Studio input can be as small as `{"user_message":"hello","history":[]}`; `run_id`, `thread_id`, and runtime bindings are synthesized from the current harness-backed graph.
+- To inspect the whole system graph in Studio: open the `ragclaw` assistant, go to the graph view to see the node topology, then open a thread/run to inspect node-level state, tool calls, checkpoints, and time-travel state. `Threads` shows persisted thread state, `Runs` shows each execution, and drilling into a node reveals the current graph state plus the context/call traces we already persist.
 - Minimal OTel is off unless enabled with `RAGCLAW_OTEL_ENABLED=1`; send spans to stdout with `RAGCLAW_OTEL_CONSOLE_EXPORTER=1` or to OTLP with `OTEL_EXPORTER_OTLP_ENDPOINT=http://127.0.0.1:4318/v1/traces`
+
+Focused validation:
+
+- Run the observability-focused validation bundle with `.\backend\scripts\dev\validate-observability.ps1`
+- VS Code also exposes `Studio: LangGraph dev`, `Studio: LangGraph dev (Console tracing)`, and `Observability: Focused validation`

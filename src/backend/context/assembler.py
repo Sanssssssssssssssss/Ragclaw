@@ -29,6 +29,7 @@ from src.backend.context.policies import (
 )
 from src.backend.context.recall import conversation_recall
 from src.backend.context.store import context_store
+from src.backend.observability.otel_spans import set_span_attributes, with_observation
 from src.backend.runtime.token_utils import count_tokens
 
 
@@ -133,135 +134,164 @@ class ContextAssembler:
         call_site: str = "",
     ) -> ContextAssembly:
         effective_path = self._effective_path_kind(path_kind, state)
-        budget = budget_for_path(effective_path)
-        source_history = self._history_source(state)
-        history_messages = trim_messages_to_budget(source_history, budget.recent_history)
-        history_trimmed = len(history_messages) < len(source_history)
-
         thread_id = str(state.get("thread_id", "") or state.get("session_id", "") or state.get("run_id", "") or "")
-        working_memory = self._working_memory_payload(state, thread_id=thread_id)
-        episodic_summary = self._episodic_payload(state, thread_id=thread_id)
-        semantic_items, procedural_items = self._memory_hits(
-            state=state,
-            working_memory=working_memory,
-            thread_id=thread_id,
-            path_kind=effective_path,
-        )
-        conversation_items = self._conversation_hits(
-            state=state,
-            working_memory=working_memory,
-            thread_id=thread_id,
-            path_kind=effective_path,
-            history_trimmed=history_trimmed,
-        )
+        checkpoint_meta = dict(state.get("checkpoint_meta", {}) or {})
+        with with_observation(
+            "context.assemble",
+            tracer_name="ragclaw.context",
+            attributes={
+                "run_id": str(state.get("run_id", "") or "") or None,
+                "thread_id": thread_id or None,
+                "session_id": str(state.get("session_id", "") or "") or None,
+                "path_type": effective_path,
+                "context_path_type": effective_path,
+                "call_site": call_site or effective_path,
+                "checkpoint_id": str(checkpoint_meta.get("checkpoint_id", "") or "") or None,
+                "resume_source": str(checkpoint_meta.get("resume_source", "") or "") or None,
+                "orchestration_engine": str(checkpoint_meta.get("orchestration_engine", "") or "langgraph"),
+            },
+        ) as span:
+            budget = budget_for_path(effective_path)
+            source_history = self._history_source(state)
+            history_messages = trim_messages_to_budget(source_history, budget.recent_history)
+            history_trimmed = len(history_messages) < len(source_history)
 
-        working_memory_block = trim_text_to_budget(
-            _format_working_memory_block(working_memory, fields=self._working_memory_fields(effective_path)),
-            budget.working_memory,
-        )
-        episodic_block = trim_text_to_budget(_format_episodic_block(episodic_summary), budget.episodic_summary)
-        semantic_block = trim_text_to_budget(_format_memory_block("Semantic memory", semantic_items), budget.semantic_memory)
-        procedural_block = trim_text_to_budget(
-            _format_memory_block("Procedural memory", procedural_items),
-            budget.procedural_memory,
-        )
-        conversation_block = trim_text_to_budget(_format_conversation_block(conversation_items), budget.conversation_recall)
+            working_memory = self._working_memory_payload(state, thread_id=thread_id)
+            episodic_summary = self._episodic_payload(state, thread_id=thread_id)
+            semantic_items, procedural_items = self._memory_hits(
+                state=state,
+                working_memory=working_memory,
+                thread_id=thread_id,
+                path_kind=effective_path,
+            )
+            conversation_items = self._conversation_hits(
+                state=state,
+                working_memory=working_memory,
+                thread_id=thread_id,
+                path_kind=effective_path,
+                history_trimmed=history_trimmed,
+            )
 
-        artifacts = self._artifact_selector.select_capability_outputs(state, path_kind=effective_path)
-        artifacts_block = trim_text_to_budget(_format_list_block("Capability outputs", artifacts), budget.artifacts)
-        evidence = self._artifact_selector.select_retrieval_evidence(state, path_kind=effective_path)
-        retrieval_block = trim_text_to_budget(
-            _format_list_block("Retrieval evidence", evidence),
-            budget.retrieval_evidence,
-        )
+            working_memory_block = trim_text_to_budget(
+                _format_working_memory_block(working_memory, fields=self._working_memory_fields(effective_path)),
+                budget.working_memory,
+            )
+            episodic_block = trim_text_to_budget(_format_episodic_block(episodic_summary), budget.episodic_summary)
+            semantic_block = trim_text_to_budget(_format_memory_block("Semantic memory", semantic_items), budget.semantic_memory)
+            procedural_block = trim_text_to_budget(
+                _format_memory_block("Procedural memory", procedural_items),
+                budget.procedural_memory,
+            )
+            conversation_block = trim_text_to_budget(_format_conversation_block(conversation_items), budget.conversation_recall)
 
-        budget_used = {
-            "recent_history": self._message_tokens(history_messages),
-            "working_memory": count_tokens(working_memory_block),
-            "episodic_summary": count_tokens(episodic_block),
-            "semantic_memory": count_tokens(semantic_block),
-            "procedural_memory": count_tokens(procedural_block),
-            "conversation_recall": count_tokens(conversation_block),
-            "artifacts": count_tokens(artifacts_block),
-            "retrieval_evidence": count_tokens(retrieval_block),
-            "answer_reserve": budget.answer_reserve,
-        }
+            artifacts = self._artifact_selector.select_capability_outputs(state, path_kind=effective_path)
+            artifacts_block = trim_text_to_budget(_format_list_block("Capability outputs", artifacts), budget.artifacts)
+            evidence = self._artifact_selector.select_retrieval_evidence(state, path_kind=effective_path)
+            retrieval_block = trim_text_to_budget(
+                _format_list_block("Retrieval evidence", evidence),
+                budget.retrieval_evidence,
+            )
 
-        envelope = ContextEnvelope(
-            system_block=self._system_block(effective_path),
-            history_block=self._history_block(history_messages),
-            working_memory_block=working_memory_block,
-            episodic_block=episodic_block,
-            semantic_block=semantic_block,
-            procedural_block=procedural_block,
-            conversation_block=conversation_block,
-            artifact_block=artifacts_block,
-            evidence_block=retrieval_block,
-            budget_report=dict(budget_used),
-        )
+            budget_used = {
+                "recent_history": self._message_tokens(history_messages),
+                "working_memory": count_tokens(working_memory_block),
+                "episodic_summary": count_tokens(episodic_block),
+                "semantic_memory": count_tokens(semantic_block),
+                "procedural_memory": count_tokens(procedural_block),
+                "conversation_recall": count_tokens(conversation_block),
+                "artifacts": count_tokens(artifacts_block),
+                "retrieval_evidence": count_tokens(retrieval_block),
+                "answer_reserve": budget.answer_reserve,
+            }
 
-        dropped_items = list(self._dropped_history_ids(source_history, history_messages))
-        truncation_reasons: list[str] = []
-        if history_trimmed:
-            truncation_reasons.append("recent_history budget")
-        if semantic_items and not semantic_block:
-            truncation_reasons.append("semantic memory budget")
-        if procedural_items and not procedural_block:
-            truncation_reasons.append("procedural memory budget")
-        if conversation_items and not conversation_block:
-            truncation_reasons.append("conversation recall budget")
-        if artifacts and not artifacts_block:
-            truncation_reasons.append("artifact budget")
-        if evidence and not retrieval_block:
-            truncation_reasons.append("retrieval evidence budget")
+            envelope = ContextEnvelope(
+                system_block=self._system_block(effective_path),
+                history_block=self._history_block(history_messages),
+                working_memory_block=working_memory_block,
+                episodic_block=episodic_block,
+                semantic_block=semantic_block,
+                procedural_block=procedural_block,
+                conversation_block=conversation_block,
+                artifact_block=artifacts_block,
+                evidence_block=retrieval_block,
+                budget_report=dict(budget_used),
+            )
 
-        decision = ContextAssemblyDecision(
-            path_type=effective_path,
-            selected_history_ids=_history_ids(source_history, history_messages),
-            selected_memory_ids=tuple(
-                [f"working:{thread_id}", f"episodic:{thread_id}"]
-                + [item.memory_id for item in semantic_items]
-                + [item.memory_id for item in procedural_items]
-            ),
-            selected_artifact_ids=tuple(self._selected_artifact_ids(state, artifacts)),
-            selected_evidence_ids=tuple(self._selected_evidence_ids(state, evidence)),
-            selected_conversation_ids=tuple(item.chunk_id for item in conversation_items),
-            dropped_items=tuple(dropped_items),
-            truncation_reason=", ".join(truncation_reasons),
-        )
+            dropped_items = list(self._dropped_history_ids(source_history, history_messages))
+            truncation_reasons: list[str] = []
+            if history_trimmed:
+                truncation_reasons.append("recent_history budget")
+            if semantic_items and not semantic_block:
+                truncation_reasons.append("semantic memory budget")
+            if procedural_items and not procedural_block:
+                truncation_reasons.append("procedural memory budget")
+            if conversation_items and not conversation_block:
+                truncation_reasons.append("conversation recall budget")
+            if artifacts and not artifacts_block:
+                truncation_reasons.append("artifact budget")
+            if evidence and not retrieval_block:
+                truncation_reasons.append("retrieval evidence budget")
 
-        assembly = ContextAssembly(
-            path_kind=effective_path,
-            history_messages=tuple(history_messages),
-            envelope=envelope,
-            decision=decision,
-            extra_instructions=tuple(
-                block
-                for block in (
-                    envelope.system_block,
-                    envelope.working_memory_block,
-                    envelope.episodic_block,
-                    envelope.semantic_block,
-                    envelope.procedural_block,
-                    envelope.conversation_block,
-                    envelope.artifact_block,
-                    envelope.evidence_block,
-                )
-                if block
-            ),
-            working_memory_block=working_memory_block,
-            episodic_block=episodic_block,
-            semantic_block=semantic_block,
-            procedural_block=procedural_block,
-            conversation_block=conversation_block,
-            artifacts_block=artifacts_block,
-            retrieval_block=retrieval_block,
-            budget=budget,
-            budget_used=budget_used,
-            excluded_from_prompt=DEFAULT_EXCLUDED_FROM_PROMPT,
-        )
-        self._record_assembly(state=state, call_site=call_site or effective_path, assembly=assembly)
-        return assembly
+            decision = ContextAssemblyDecision(
+                path_type=effective_path,
+                selected_history_ids=_history_ids(source_history, history_messages),
+                selected_memory_ids=tuple(
+                    [f"working:{thread_id}", f"episodic:{thread_id}"]
+                    + [item.memory_id for item in semantic_items]
+                    + [item.memory_id for item in procedural_items]
+                ),
+                selected_artifact_ids=tuple(self._selected_artifact_ids(state, artifacts)),
+                selected_evidence_ids=tuple(self._selected_evidence_ids(state, evidence)),
+                selected_conversation_ids=tuple(item.chunk_id for item in conversation_items),
+                dropped_items=tuple(dropped_items),
+                truncation_reason=", ".join(truncation_reasons),
+            )
+
+            assembly = ContextAssembly(
+                path_kind=effective_path,
+                history_messages=tuple(history_messages),
+                envelope=envelope,
+                decision=decision,
+                extra_instructions=tuple(
+                    block
+                    for block in (
+                        envelope.system_block,
+                        envelope.working_memory_block,
+                        envelope.episodic_block,
+                        envelope.semantic_block,
+                        envelope.procedural_block,
+                        envelope.conversation_block,
+                        envelope.artifact_block,
+                        envelope.evidence_block,
+                    )
+                    if block
+                ),
+                working_memory_block=working_memory_block,
+                episodic_block=episodic_block,
+                semantic_block=semantic_block,
+                procedural_block=procedural_block,
+                conversation_block=conversation_block,
+                artifacts_block=artifacts_block,
+                retrieval_block=retrieval_block,
+                budget=budget,
+                budget_used=budget_used,
+                excluded_from_prompt=DEFAULT_EXCLUDED_FROM_PROMPT,
+            )
+            self._record_assembly(state=state, call_site=call_site or effective_path, assembly=assembly)
+            set_span_attributes(
+                span,
+                {
+                    "history_count": len(history_messages),
+                    "semantic_count": len(semantic_items),
+                    "procedural_count": len(procedural_items),
+                    "conversation_count": len(conversation_items),
+                    "artifact_count": len(artifacts),
+                    "evidence_count": len(evidence),
+                    "dropped_count": len(dropped_items),
+                    "truncation_reason": decision.truncation_reason or None,
+                },
+            )
+            return assembly
 
     def _effective_path_kind(self, path_kind: ContextPathKind, state: dict[str, Any]) -> ContextPathKind:
         checkpoint_meta = dict(state.get("checkpoint_meta", {}) or {})

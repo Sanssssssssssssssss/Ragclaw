@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
@@ -157,6 +158,8 @@ class HarnessLangGraphOrchestrator:
     def _bindings_or_raise(self) -> _ExecutionBindings:
         bindings = _CURRENT_EXECUTION_BINDINGS.get()
         if bindings is None:
+            bindings = getattr(self, "_bindings", None)
+        if bindings is None:
             raise RuntimeError("orchestration bindings are not active")
         return bindings
 
@@ -171,17 +174,23 @@ class HarnessLangGraphOrchestrator:
         return {}
 
     def _ensure_studio_bindings(self, state: GraphState, *, config: Any | None = None) -> dict[str, Any]:
-        if _CURRENT_EXECUTION_BINDINGS.get() is not None:
+        if _CURRENT_EXECUTION_BINDINGS.get() is not None or getattr(self, "_bindings", None) is not None:
             return {}
 
         runtime = self._agent.get_harness_runtime()
         configurable = self._studio_configurable(config)
+        normalized_inputs = self._normalized_input_fields(state)
         checkpoint_meta = dict(state.get("checkpoint_meta", {}) or {})
         session_id = state.get("session_id") or configurable.get("session_id")
         checkpoint_id = str(configurable.get("checkpoint_id", "") or checkpoint_meta.get("checkpoint_id", "") or "")
         resume_source = str(configurable.get("resume_source", "") or checkpoint_meta.get("resume_source", "") or "")
         run_status = str(checkpoint_meta.get("run_status", "") or ("resumed" if checkpoint_id else "fresh"))
-        user_message = str(state.get("user_message", "") or configurable.get("user_message", "") or "")
+        user_message = str(
+            normalized_inputs.get("user_message", "")
+            or state.get("user_message", "")
+            or configurable.get("user_message", "")
+            or ""
+        )
         thread_id = str(
             state.get("thread_id", "")
             or configurable.get("thread_id", "")
@@ -227,23 +236,167 @@ class HarnessLangGraphOrchestrator:
 
     def _otel_state_attributes(self, state: GraphState, *, path_type: str = "", **extra: Any) -> dict[str, Any]:
         meta = self._run_context_meta(state)
+        resolved_path_type = path_type or str(state.get("path_kind", "") or "")
         return {
             "run_id": meta["run_id"],
             "thread_id": meta["thread_id"],
             "session_id": meta["session_id"],
-            "path_type": path_type or str(state.get("path_kind", "") or ""),
+            "path_type": resolved_path_type,
+            "context_path_type": resolved_path_type,
             "checkpoint_id": meta["checkpoint_id"] or None,
             "resume_source": meta["resume_source"] or None,
+            "orchestration_engine": meta["orchestration_engine"],
             **extra,
         }
+
+    @contextmanager
+    def observe_graph_node(self, state: GraphState, *, node_name: str) -> Any:
+        with with_observation(
+            "graph.node",
+            tracer_name="ragclaw.orchestration",
+            attributes=self._otel_state_attributes(
+                state,
+                node_name=node_name,
+                run_status=str(dict(state.get("checkpoint_meta", {}) or {}).get("run_status", "") or ""),
+            ),
+        ) as span:
+            yield span
+
+    def _normalized_history_message(self, item: Any) -> dict[str, str] | None:
+        payload: dict[str, Any] | None = None
+        if isinstance(item, dict):
+            payload = dict(item)
+        else:
+            model_dump = getattr(item, "model_dump", None)
+            if callable(model_dump):
+                dumped = model_dump()
+                if isinstance(dumped, dict):
+                    payload = dict(dumped)
+            if payload is None:
+                raw_content = getattr(item, "content", None)
+                raw_type = getattr(item, "type", None)
+                raw_role = getattr(item, "role", None)
+                if raw_content is not None or raw_type is not None or raw_role is not None:
+                    payload = {
+                        "content": raw_content,
+                        "type": raw_type,
+                        "role": raw_role,
+                    }
+        if payload is None:
+            return None
+
+        nested_payload = payload.get("kwargs") or payload.get("data") or payload.get("message")
+        if isinstance(nested_payload, dict):
+            merged_payload = dict(nested_payload)
+            merged_payload.update({key: value for key, value in payload.items() if value is not None})
+            payload = merged_payload
+
+        role = str(payload.get("role", "") or payload.get("type", "") or "").strip().lower()
+        if role in {"human"}:
+            role = "user"
+        if role in {"ai"}:
+            role = "assistant"
+        if not role:
+            return None
+        content = _stringify_content(payload.get("content", payload.get("text", ""))).strip()
+        if not content:
+            return None
+        return {"role": role, "content": content}
+
+    def _append_user_message(self, messages: list[dict[str, str]], user_message: str) -> list[dict[str, str]]:
+        normalized = str(user_message or "").strip()
+        if normalized:
+            messages.append({"role": "user", "content": normalized})
+        return messages
+
+    def _studio_input_messages(self, state: GraphState) -> list[dict[str, str]]:
+        normalized = self._normalized_input_fields(state)
+        messages = list(normalized["history"])
+        return self._append_user_message(messages, normalized["user_message"])
+
+    def _studio_output_messages(self, state: GraphState) -> list[dict[str, str]]:
+        final_answer = str(state.get("final_answer", "") or "").strip()
+        if final_answer:
+            return [{"role": "assistant", "content": final_answer}]
+        recovery_action = str(state.get("recovery_action", "") or "").strip()
+        if recovery_action:
+            return [{"role": "assistant", "content": f"[{recovery_action}]"}]
+        approval_decision = str(state.get("approval_decision", "") or "").strip()
+        if approval_decision:
+            return [{"role": "assistant", "content": f"[HITL {approval_decision}]"}]
+        return self._studio_input_messages(state)
+
+    def _studio_summary_fields(self, state: GraphState) -> dict[str, Any]:
+        user_message = self._user_message(state)
+        final_answer = str(state.get("final_answer", "") or "").strip()
+        output_preview = final_answer or str(state.get("recovery_action", "") or state.get("approval_decision", "") or "").strip()
+        return {
+            "messages": self._studio_output_messages(state),
+            "input_preview": user_message,
+            "output_preview": output_preview,
+        }
+
+    def _normalized_input_fields(self, state: GraphState) -> dict[str, Any]:
+        explicit_user_message = str(state.get("user_message", "") or state.get("message", "") or "").strip()
+        raw_history = state.get("history")
+        if isinstance(raw_history, list):
+            history = [item for item in (self._normalized_history_message(entry) for entry in raw_history) if item is not None]
+        else:
+            history = []
+
+        if not history:
+            raw_messages = state.get("messages")
+            if isinstance(raw_messages, list):
+                normalized_messages = [
+                    item
+                    for item in (self._normalized_history_message(entry) for entry in raw_messages)
+                    if item is not None
+                ]
+                if normalized_messages:
+                    if not explicit_user_message:
+                        for index in range(len(normalized_messages) - 1, -1, -1):
+                            candidate = normalized_messages[index]
+                            if candidate["role"] == "user":
+                                explicit_user_message = candidate["content"].strip()
+                                history = normalized_messages[:index]
+                                break
+                    if not history:
+                        history = normalized_messages
+
+        if explicit_user_message:
+            if history and history[-1]["role"] == "user" and history[-1]["content"].strip() == explicit_user_message:
+                history = history[:-1]
+        elif history:
+            last_item = history[-1]
+            if last_item["role"] == "user":
+                explicit_user_message = last_item["content"].strip()
+                history = history[:-1]
+
+        return {
+            "user_message": explicit_user_message,
+            "history": history,
+            "augmented_history": list(history),
+        }
+
+    def _user_message(self, state: GraphState) -> str:
+        return str(state.get("user_message", "") or state.get("message", "") or "").strip()
 
     async def bootstrap_node(self, state: GraphState, *, config: Any | None = None) -> dict[str, Any]:
         studio_updates = self._ensure_studio_bindings(state, config=config)
         bindings = self._bindings_or_raise()
+        normalized_inputs = self._normalized_input_fields(state)
+        resolved_run_id = str(studio_updates.get("run_id", state.get("run_id", "") or bindings.handle.run_id) or bindings.handle.run_id)
+        resolved_session_id = studio_updates.get("session_id", state.get("session_id", getattr(bindings.handle.metadata, "session_id", None)))
+        resolved_thread_id = str(
+            studio_updates.get("thread_id", state.get("thread_id", "") or getattr(bindings.handle.metadata, "thread_id", "") or self._thread_id_for(bindings.handle))
+        )
+        resolved_studio_managed_run = bool(
+            studio_updates.get("studio_managed_run", state.get("studio_managed_run", False) or getattr(bindings.handle.metadata, "source", "") == "langsmith_studio")
+        )
         checkpoint_meta = {
             **dict(state.get("checkpoint_meta", {}) or {}),
             **dict(studio_updates.get("checkpoint_meta", {}) or {}),
-            "thread_id": studio_updates.get("thread_id") or state.get("thread_id", ""),
+            "thread_id": resolved_thread_id,
             "checkpoint_id": self._resume_checkpoint_id or str(state.get("checkpoint_meta", {}).get("checkpoint_id", "") or ""),
             "resume_source": self._resume_source or str(state.get("checkpoint_meta", {}).get("resume_source", "") or ""),
             "run_status": "resumed" if self._resume_checkpoint_id else str(state.get("checkpoint_meta", {}).get("run_status", "") or "fresh"),
@@ -252,8 +405,8 @@ class HarnessLangGraphOrchestrator:
         base_state = {
             **dict(state),
             **dict(studio_updates),
+            **normalized_inputs,
             "checkpoint_meta": checkpoint_meta,
-            "augmented_history": list(state.get("history", [])),
             "rag_mode": self._agent._runtime_rag_mode(),
             "governor_snapshot": bindings.runtime.governor_for(bindings.handle.run_id).snapshot(),
             "turn_id": self._current_turn_id(state),
@@ -264,11 +417,15 @@ class HarnessLangGraphOrchestrator:
             turn_id=base_state["turn_id"],
         )
         return {
-            "run_id": studio_updates.get("run_id", state.get("run_id", "")),
-            "session_id": studio_updates.get("session_id", state.get("session_id")),
-            "thread_id": studio_updates.get("thread_id", state.get("thread_id", "")),
-            "studio_managed_run": bool(studio_updates.get("studio_managed_run", state.get("studio_managed_run", False))),
-            "augmented_history": list(state.get("history", [])),
+            "run_id": resolved_run_id,
+            "session_id": resolved_session_id,
+            "thread_id": resolved_thread_id,
+            "studio_managed_run": resolved_studio_managed_run,
+            "messages": self._studio_input_messages({**dict(state), **normalized_inputs}),
+            "input_preview": normalized_inputs["user_message"],
+            "user_message": normalized_inputs["user_message"],
+            "history": list(normalized_inputs["history"]),
+            "augmented_history": list(normalized_inputs["augmented_history"]),
             "rag_mode": self._agent._runtime_rag_mode(),
             "governor_snapshot": bindings.runtime.governor_for(bindings.handle.run_id).snapshot(),
             "checkpoint_meta": checkpoint_meta,
@@ -286,7 +443,7 @@ class HarnessLangGraphOrchestrator:
             call_type="router_call",
             turn_id=turn_id,
         )
-        strategy, decision = await self._agent.resolve_routing(state["user_message"], list(route_context.history_messages))
+        strategy, decision = await self._agent.resolve_routing(self._user_message(state), list(route_context.history_messages))
         await bindings.runtime.emit(
             bindings.handle,
             "route.decided",
@@ -335,9 +492,10 @@ class HarnessLangGraphOrchestrator:
             call_type="capability_selection_call",
             turn_id=turn_id,
         )
-        skill = self._agent.decide_skill(state["user_message"], list(skill_context.history_messages), strategy, decision)
+        user_message = self._user_message(state)
+        skill = self._agent.decide_skill(user_message, list(skill_context.history_messages), strategy, decision)
         if skill.use_skill:
-            await self._activate_skill_capability(message=state["user_message"], routing_decision=decision, skill_decision=skill)
+            await self._activate_skill_capability(message=user_message, routing_decision=decision, skill_decision=skill)
         await bindings.runtime.emit(
             bindings.handle,
             "skill.decided",
@@ -373,7 +531,7 @@ class HarnessLangGraphOrchestrator:
                 _payload, updates = self._write_context_snapshot(state=state, result=result, turn_id=result["turn_id"])
                 return {"memory_retrieval": [], **updates}
             await bindings.runtime.emit(bindings.handle, "retrieval.started", {"kind": "memory", "stage": "memory", "title": "Memory retrieval", "message": ""})
-            retrievals = self._memory_retrieve(state["user_message"])
+            retrievals = self._memory_retrieve(self._user_message(state))
             set_span_attributes(span, {"retrieval_count": len(retrievals)})
             if not retrievals:
                 result = {"memory_retrieval": [], "turn_id": self._current_turn_id(state)}
@@ -416,11 +574,15 @@ class HarnessLangGraphOrchestrator:
         )
         call_ids = self._context_call_ids(state, answer_call_id)
         messages = list(assembly.history_messages)
-        messages.append({"role": "user", "content": state["user_message"]})
+        messages = self._append_user_message(messages, self._user_message(state))
         extra_instructions = list(assembly.extra_instructions)
         if strategy is not None:
             extra_instructions.extend(strategy.to_instructions())
-        answer, usage = await self._stream_model_answer(messages, extra_instructions=extra_instructions or None)
+        answer, usage = await self._stream_model_answer(
+            messages,
+            extra_instructions=extra_instructions or None,
+            path_type=assembly.path_kind,
+        )
         result = {
             "final_answer": answer,
             "answer_usage": usage,
@@ -456,7 +618,7 @@ class HarnessLangGraphOrchestrator:
         ) as span:
             await bindings.runtime.emit(bindings.handle, "retrieval.started", {"kind": "knowledge", "stage": "knowledge", "title": "Knowledge retrieval", "message": ""})
             result = None
-            async for event in self._knowledge_astream(state["user_message"]):
+            async for event in self._knowledge_astream(self._user_message(state)):
                 if event.get("type") == "orchestrated_result":
                     result = event["result"]
             if result is not None:
@@ -499,7 +661,7 @@ class HarnessLangGraphOrchestrator:
         )
         call_ids = self._context_call_ids(state, call_id)
         messages = list(assembly.history_messages)
-        messages.append({"role": "user", "content": state["user_message"]})
+        messages = self._append_user_message(messages, self._user_message(state))
         extra_instructions = list(assembly.extra_instructions)
         if result:
             extra_instructions.extend(self._agent._knowledge_answer_instructions(result))
@@ -508,6 +670,7 @@ class HarnessLangGraphOrchestrator:
             extra_instructions=extra_instructions or None,
             system_prompt_override=self._agent._knowledge_system_prompt(),
             stream_deltas=False,
+            path_type=assembly.path_kind,
         )
         result_payload = {
             "final_answer": answer,
@@ -581,7 +744,7 @@ class HarnessLangGraphOrchestrator:
         if decision is not None and decision.allowed_tools:
             allowed_names = set(decision.allowed_tools)
             tools = [tool for tool in tools if getattr(tool, "name", "") in allowed_names]
-        explicit_id, explicit_payload = self._explicit_capability_selection(state["user_message"], tools) if tools else ("", None)
+        explicit_id, explicit_payload = self._explicit_capability_selection(self._user_message(state), tools) if tools else ("", None)
         result = {
             "selected_capabilities": [str(getattr(tool, "name", "") or "") for tool in tools],
             "explicit_capability_id": explicit_id,
@@ -598,7 +761,7 @@ class HarnessLangGraphOrchestrator:
             return {"interrupt_request": None, "approval_decision": ""}
 
         with with_observation(
-            "hitl",
+            "hitl.decision",
             tracer_name="ragclaw.orchestration",
             attributes=self._otel_state_attributes(
                 state,
@@ -892,7 +1055,7 @@ class HarnessLangGraphOrchestrator:
             return {**result_payload, **updates}
         return await self._invoke_tool_path(
             state=state,
-            message=state["user_message"],
+            message=self._user_message(state),
             strategy=state.get("execution_strategy"),
             skill_decision=state.get("skill_decision"),
             allowed_tools=tools,
@@ -1075,7 +1238,7 @@ class HarnessLangGraphOrchestrator:
         if state.get("needs_answer_synthesis"):
             final_answer = await self._stream_tool_result_fallback(
                 state=state,
-                user_message=state["user_message"],
+                user_message=self._user_message(state),
                 recorded_tools=recorded_tools,
                 strategy=state.get("execution_strategy"),
             )
@@ -1133,7 +1296,10 @@ class HarnessLangGraphOrchestrator:
 
     async def finalize_node(self, state: GraphState, *, config: Any | None = None) -> dict[str, Any]:
         bindings = self._bindings_or_raise()
-        result = {"governor_snapshot": bindings.runtime.governor_for(bindings.handle.run_id).snapshot()}
+        result = {
+            "governor_snapshot": bindings.runtime.governor_for(bindings.handle.run_id).snapshot(),
+            **self._studio_summary_fields(state),
+        }
         _payload, updates = self._write_context_snapshot(state=state, result=result, turn_id=self._current_turn_id(state))
         if state.get("studio_managed_run"):
             try:
@@ -1150,7 +1316,7 @@ class HarnessLangGraphOrchestrator:
 
     async def _emit_resume_events(self, runtime: "HarnessRuntime", handle: "RuntimeRunHandle", thread_id: str) -> None:
         with with_observation(
-            "checkpoint",
+            "checkpoint.resume",
             tracer_name="ragclaw.orchestration",
             attributes={
                 "run_id": handle.run_id,
@@ -1159,6 +1325,8 @@ class HarnessLangGraphOrchestrator:
                 "checkpoint_id": self._resume_checkpoint_id or None,
                 "resume_source": self._resume_source or "checkpoint",
                 "path_type": "resumed_hitl" if self._resume_source else "",
+                "context_path_type": "resumed_hitl" if self._resume_source else "",
+                "orchestration_engine": "langgraph",
             },
         ):
             summary = checkpoint_store.get_checkpoint(thread_id=thread_id, checkpoint_id=self._resume_checkpoint_id)
@@ -1179,18 +1347,21 @@ class HarnessLangGraphOrchestrator:
 
     async def _emit_checkpoint_created(self, runtime: "HarnessRuntime", handle: "RuntimeRunHandle", thread_id: str) -> None:
         with with_observation(
-            "checkpoint",
+            "checkpoint.create",
             tracer_name="ragclaw.orchestration",
             attributes={
                 "run_id": handle.run_id,
                 "thread_id": thread_id,
                 "session_id": getattr(handle.metadata, "session_id", None),
                 "path_type": "",
+                "context_path_type": "",
+                "orchestration_engine": "langgraph",
             },
-        ):
+        ) as span:
             latest = checkpoint_store.latest_checkpoint(thread_id=thread_id)
             if latest is None:
                 return
+            set_span_attributes(span, {"checkpoint_id": latest.checkpoint_id})
             await runtime.emit(
                 handle,
                 "checkpoint.created",
@@ -1215,7 +1386,7 @@ class HarnessLangGraphOrchestrator:
         if not interrupts:
             return
         with with_observation(
-            "hitl",
+            "hitl.request",
             tracer_name="ragclaw.orchestration",
             attributes={
                 "run_id": handle.run_id,
@@ -1223,8 +1394,10 @@ class HarnessLangGraphOrchestrator:
                 "session_id": getattr(handle.metadata, "session_id", None),
                 "resume_source": self._resume_source or "hitl_api",
                 "path_type": "capability_path",
+                "context_path_type": "capability_path",
+                "orchestration_engine": "langgraph",
             },
-        ):
+        ) as span:
             latest = checkpoint_store.latest_checkpoint(thread_id=thread_id)
             if latest is None:
                 return
@@ -1247,6 +1420,7 @@ class HarnessLangGraphOrchestrator:
             )
             if not created:
                 return
+            set_span_attributes(span, {"checkpoint_id": request.checkpoint_id or latest.checkpoint_id, "capability_id": request.capability_id, "capability_type": request.capability_type})
             await runtime.emit(
                 handle,
                 "checkpoint.interrupted",
@@ -1311,7 +1485,7 @@ class HarnessLangGraphOrchestrator:
         spec = selected_specs[0]
         proposed_input = state.get("explicit_capability_payload")
         if not isinstance(proposed_input, dict) or not proposed_input:
-            proposed_input = self._approval_proposed_input(spec.capability_id, state["user_message"])
+            proposed_input = self._approval_proposed_input(spec.capability_id, self._user_message(state))
         return {
             "run_id": state["run_id"],
             "thread_id": state.get("thread_id", ""),
@@ -1338,30 +1512,67 @@ class HarnessLangGraphOrchestrator:
             return {"code": normalized}
         return {"message": normalized}
 
-    async def _stream_model_answer(self, messages: list[dict[str, str]], *, extra_instructions: list[str] | None = None, system_prompt_override: str | None = None, stream_deltas: bool = True) -> tuple[str, dict[str, int] | None]:
+    async def _stream_model_answer(
+        self,
+        messages: list[dict[str, str]],
+        *,
+        extra_instructions: list[str] | None = None,
+        system_prompt_override: str | None = None,
+        stream_deltas: bool = True,
+        path_type: str = "",
+    ) -> tuple[str, dict[str, int] | None]:
         bindings = self._bindings_or_raise()
-        started = False
-        final_answer = ""
-        usage = None
-        async for event in self._execution.astream_model_answer(messages, extra_instructions=extra_instructions, system_prompt_override=system_prompt_override):
-            event_type = str(event.get("type", "") or "")
-            if event_type == "token":
-                if not started and stream_deltas:
-                    await bindings.runtime.emit(bindings.handle, "answer.started", AnswerRecord(content="", segment_index=bindings.runtime.current_segment_index(bindings.handle), final=False).to_dict())
-                    started = True
-                content = str(event.get("content", "") or "")
-                if content:
-                    final_answer += content
+        with with_observation(
+            "answer.synthesis",
+            tracer_name="ragclaw.orchestration",
+            attributes=self._otel_state_attributes(
+                {
+                    "run_id": bindings.handle.run_id,
+                    "session_id": getattr(bindings.handle.metadata, "session_id", None),
+                    "thread_id": getattr(bindings.handle.metadata, "thread_id", None),
+                    "checkpoint_meta": {
+                        "checkpoint_id": getattr(bindings.handle.metadata, "checkpoint_id", ""),
+                        "resume_source": getattr(bindings.handle.metadata, "resume_source", ""),
+                        "orchestration_engine": getattr(bindings.handle.metadata, "orchestration_engine", "langgraph"),
+                    },
+                    "path_kind": path_type,
+                },
+                path_type=path_type,
+                message_count=len(messages),
+                stream_deltas=stream_deltas,
+                system_override=bool(system_prompt_override),
+            ),
+        ) as span:
+            started = False
+            final_answer = ""
+            usage = None
+            async for event in self._execution.astream_model_answer(messages, extra_instructions=extra_instructions, system_prompt_override=system_prompt_override):
+                event_type = str(event.get("type", "") or "")
+                if event_type == "token":
+                    if not started and stream_deltas:
+                        await bindings.runtime.emit(bindings.handle, "answer.started", AnswerRecord(content="", segment_index=bindings.runtime.current_segment_index(bindings.handle), final=False).to_dict())
+                        started = True
+                    content = str(event.get("content", "") or "")
+                    if content:
+                        final_answer += content
+                        if stream_deltas:
+                            await bindings.runtime.emit(bindings.handle, "answer.delta", AnswerRecord(content=content, segment_index=bindings.runtime.current_segment_index(bindings.handle), final=False).to_dict())
+                elif event_type == "done":
+                    final_answer = str(event.get("content", "") or "").strip() or final_answer.strip()
+                    usage = event.get("usage")
+                    if not started and stream_deltas:
+                        await bindings.runtime.emit(bindings.handle, "answer.started", AnswerRecord(content="", segment_index=bindings.runtime.current_segment_index(bindings.handle), final=False).to_dict())
                     if stream_deltas:
-                        await bindings.runtime.emit(bindings.handle, "answer.delta", AnswerRecord(content=content, segment_index=bindings.runtime.current_segment_index(bindings.handle), final=False).to_dict())
-            elif event_type == "done":
-                final_answer = str(event.get("content", "") or "").strip() or final_answer.strip()
-                usage = event.get("usage")
-                if not started and stream_deltas:
-                    await bindings.runtime.emit(bindings.handle, "answer.started", AnswerRecord(content="", segment_index=bindings.runtime.current_segment_index(bindings.handle), final=False).to_dict())
-                if stream_deltas:
-                    await bindings.runtime.emit(bindings.handle, "answer.completed", AnswerRecord(content=final_answer, segment_index=bindings.runtime.current_segment_index(bindings.handle), final=True, input_tokens=int(usage.get("input_tokens", 0) or 0) if isinstance(usage, dict) and usage.get("input_tokens") is not None else None, output_tokens=int(usage.get("output_tokens", 0) or 0) if isinstance(usage, dict) and usage.get("output_tokens") is not None else None).to_dict())
-        return final_answer, usage
+                        await bindings.runtime.emit(bindings.handle, "answer.completed", AnswerRecord(content=final_answer, segment_index=bindings.runtime.current_segment_index(bindings.handle), final=True, input_tokens=int(usage.get("input_tokens", 0) or 0) if isinstance(usage, dict) and usage.get("input_tokens") is not None else None, output_tokens=int(usage.get("output_tokens", 0) or 0) if isinstance(usage, dict) and usage.get("output_tokens") is not None else None).to_dict())
+            set_span_attributes(
+                span,
+                {
+                    "output_tokens": int(usage.get("output_tokens", 0) or 0) if isinstance(usage, dict) and usage.get("output_tokens") is not None else None,
+                    "input_tokens": int(usage.get("input_tokens", 0) or 0) if isinstance(usage, dict) and usage.get("input_tokens") is not None else None,
+                    "answer_length": len(final_answer),
+                },
+            )
+            return final_answer, usage
 
     async def _emit_final_answer(self, content: str, *, usage: dict[str, int] | None = None) -> None:
         bindings = self._bindings_or_raise()
@@ -1526,7 +1737,7 @@ class HarnessLangGraphOrchestrator:
         state["context_call_ids"] = self._context_call_ids(state, call_id)
         fallback_messages = list(assembly.history_messages)
         fallback_messages.append({"role": "assistant", "content": self._execution.tool_results_context(recorded_tools)})
-        fallback_messages.append({"role": "user", "content": user_message})
+        fallback_messages = self._append_user_message(fallback_messages, user_message)
         instructions = [
             "The tool calls already succeeded. Do not call more tools.",
             "Answer the user's original request directly using the provided tool results.",
@@ -1535,7 +1746,11 @@ class HarnessLangGraphOrchestrator:
         instructions.extend(assembly.extra_instructions)
         if strategy is not None:
             instructions.extend(strategy.to_instructions())
-        answer, _usage = await self._stream_model_answer(fallback_messages, extra_instructions=instructions)
+        answer, _usage = await self._stream_model_answer(
+            fallback_messages,
+            extra_instructions=instructions,
+            path_type="capability_path",
+        )
         if answer:
             return answer
         fallback = "Based on the completed capability results, here is the consolidated answer:\n\n" + "\n\n".join(

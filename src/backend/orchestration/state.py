@@ -12,6 +12,10 @@ GraphPathKind = Literal["direct_answer", "knowledge_qa", "capability_path"]
 
 
 class GraphState(TypedDict, total=False):
+    messages: list[dict[str, Any]]
+    message: str
+    input_preview: str
+    output_preview: str
     run_id: str
     session_id: str | None
     thread_id: str

@@ -239,7 +239,15 @@ function normalizeRunMeta(value: unknown): RunMeta | null {
     thread_id: String(item.thread_id ?? ""),
     checkpoint_id: String(item.checkpoint_id ?? ""),
     resume_source: String(item.resume_source ?? ""),
-    orchestration_engine: String(item.orchestration_engine ?? "")
+    orchestration_engine: String(item.orchestration_engine ?? ""),
+    trace_available:
+      item.trace_available == null
+        ? Boolean(item.thread_id ?? item.checkpoint_id)
+        : Boolean(item.trace_available),
+    studio_debuggable:
+      item.studio_debuggable == null
+        ? String(item.orchestration_engine ?? "") === "langgraph"
+        : Boolean(item.studio_debuggable)
   };
 }
 

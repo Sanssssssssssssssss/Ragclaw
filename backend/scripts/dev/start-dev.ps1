@@ -26,6 +26,34 @@ if (-not (Test-Path $powershellExe)) {
     $powershellExe = "powershell.exe"
 }
 
+function Get-NpmCommand {
+    $candidates = @()
+
+    foreach ($commandName in @("npm.cmd", "npm")) {
+        $command = Get-Command $commandName -ErrorAction SilentlyContinue
+        if ($command) {
+            return $command.Source
+        }
+    }
+
+    if ($env:ProgramFiles) {
+        $candidates += (Join-Path $env:ProgramFiles "nodejs\\npm.cmd")
+    }
+
+    $programFilesX86 = [Environment]::GetEnvironmentVariable("ProgramFiles(x86)")
+    if ($programFilesX86) {
+        $candidates += (Join-Path $programFilesX86 "nodejs\\npm.cmd")
+    }
+
+    foreach ($candidate in $candidates | Select-Object -Unique) {
+        if (Test-Path $candidate) {
+            return $candidate
+        }
+    }
+
+    throw "npm was not found. Install Node.js LTS or restart VS Code so the updated PATH is picked up."
+}
+
 function Get-ListeningProcessDetails {
     param(
         [int]$Port
@@ -151,9 +179,10 @@ function Ensure-FrontendEnvironment {
     }
 
     Write-Host "[setup] Installing frontend dependencies..." -ForegroundColor Cyan
+    $npmCommand = Get-NpmCommand
     Push-Location $frontendDir
     try {
-        npm install
+        & $npmCommand install
     }
     finally {
         Pop-Location

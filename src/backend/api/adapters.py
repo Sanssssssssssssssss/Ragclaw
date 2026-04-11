@@ -64,14 +64,18 @@ class LegacyChatAccumulator:
         return legacy_events
 
     def _set_run_meta(self, payload: dict[str, Any]) -> dict[str, Any]:
+        orchestration_engine = str(
+            payload.get("orchestration_engine", "") or self.run_meta.get("orchestration_engine", "") or ""
+        )
+        thread_id = str(payload.get("thread_id", "") or self.run_meta.get("thread_id", "") or "")
         next_meta = {
             "status": str(payload.get("run_status", "") or self.run_meta.get("status") or "fresh"),
-            "thread_id": str(payload.get("thread_id", "") or self.run_meta.get("thread_id", "") or ""),
+            "thread_id": thread_id,
             "checkpoint_id": str(payload.get("checkpoint_id", "") or self.run_meta.get("checkpoint_id", "") or ""),
             "resume_source": str(payload.get("resume_source", "") or self.run_meta.get("resume_source", "") or ""),
-            "orchestration_engine": str(
-                payload.get("orchestration_engine", "") or self.run_meta.get("orchestration_engine", "") or ""
-            ),
+            "orchestration_engine": orchestration_engine,
+            "trace_available": bool(thread_id),
+            "studio_debuggable": orchestration_engine == "langgraph",
         }
         self.run_meta = next_meta
         self.current_segment["run_meta"] = dict(next_meta)

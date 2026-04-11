@@ -7,6 +7,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from types import SimpleNamespace
 
+from langchain_core.messages import AIMessage, HumanMessage
+
 BACKEND_DIR = Path(__file__).resolve().parents[1]
 PROJECT_ROOT = BACKEND_DIR.parent
 if str(BACKEND_DIR) not in sys.path:
@@ -149,6 +151,64 @@ class ModelCallContextTraceTests(unittest.IsolatedAsyncioTestCase):
             {item.call_type for item in calls},
             {"router_call", "capability_selection_call", "final_answer_call"},
         )
+
+    async def test_bootstrap_normalizes_studio_messages_input_before_routing(self) -> None:
+        orchestrator = HarnessLangGraphOrchestrator(
+            _FakeAgentManager(self.base_dir),
+            execution_support=_FakeExecution(),
+        )
+        orchestrator._bindings = _ExecutionBindings(  # type: ignore[attr-defined]
+            runtime=_FakeRuntime(segment_index=5, now_value="2026-04-10T09:00:00Z"),
+            handle=_FakeHandle(_FakeMetadata(run_id="run-studio", session_id="session-studio")),
+            context=SimpleNamespace(),
+        )
+        studio_state = {
+            "run_id": "run-studio",
+            "session_id": "session-studio",
+            "thread_id": "thread-studio",
+            "messages": [
+                AIMessage(content="Earlier answer"),
+                HumanMessage(content="Please answer from Studio input."),
+            ],
+            "working_memory": {},
+            "episodic_summary": {},
+            "checkpoint_meta": {"updated_at": "2026-04-10T09:00:00Z", "run_status": "fresh"},
+        }
+
+        bootstrapped = await orchestrator.bootstrap_node(studio_state)
+        routed = await orchestrator.route_node({**studio_state, **bootstrapped})
+
+        self.assertEqual(bootstrapped["user_message"], "Please answer from Studio input.")
+        self.assertEqual(bootstrapped["history"], [{"role": "assistant", "content": "Earlier answer"}])
+        self.assertEqual(routed["path_kind"], "direct_answer")
+        self.assertEqual(routed["turn_id"], "run-studio:5")
+
+    async def test_finalize_exposes_assistant_summary_for_studio_list(self) -> None:
+        orchestrator = HarnessLangGraphOrchestrator(
+            _FakeAgentManager(self.base_dir),
+            execution_support=_FakeExecution(),
+        )
+        orchestrator._bindings = _ExecutionBindings(  # type: ignore[attr-defined]
+            runtime=_FakeRuntime(segment_index=6, now_value="2026-04-10T10:00:00Z"),
+            handle=_FakeHandle(_FakeMetadata(run_id="run-summary", session_id="session-summary")),
+            context=SimpleNamespace(),
+        )
+        state = {
+            "run_id": "run-summary",
+            "session_id": "session-summary",
+            "thread_id": "thread-summary",
+            "user_message": "Summarize the run.",
+            "history": [],
+            "final_answer": "Final answer",
+            "answer_finalized": True,
+            "checkpoint_meta": {"updated_at": "2026-04-10T10:00:00Z", "run_status": "fresh"},
+        }
+
+        result = await orchestrator.finalize_node(state)
+
+        self.assertEqual(result["input_preview"], "Summarize the run.")
+        self.assertEqual(result["output_preview"], "Final answer")
+        self.assertEqual(result["messages"], [{"role": "assistant", "content": "Final answer"}])
 
 
 if __name__ == "__main__":

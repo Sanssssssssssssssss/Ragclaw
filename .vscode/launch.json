@@ -21,8 +21,22 @@
       "name": "Frontend: Next.js",
       "type": "node-terminal",
       "request": "launch",
-      "command": "npm run dev",
-      "cwd": "${workspaceFolder}/src/frontend"
+      "command": "powershell -ExecutionPolicy Bypass -File .\\backend\\scripts\\dev\\start-frontend-dev.ps1",
+      "cwd": "${workspaceFolder}"
+    },
+    {
+      "name": "Studio: LangGraph dev",
+      "type": "node-terminal",
+      "request": "launch",
+      "command": "powershell -ExecutionPolicy Bypass -File .\\backend\\scripts\\dev\\start-langgraph-studio.ps1 -Mode dev -NoBrowser",
+      "cwd": "${workspaceFolder}"
+    },
+    {
+      "name": "Studio: LangGraph dev (Console tracing)",
+      "type": "node-terminal",
+      "request": "launch",
+      "command": "powershell -ExecutionPolicy Bypass -File .\\backend\\scripts\\dev\\start-langgraph-studio.ps1 -Mode dev -NoBrowser -EnableConsoleTracing",
+      "cwd": "${workspaceFolder}"
     },
     {
       "name": "Open Frontend in Edge",
