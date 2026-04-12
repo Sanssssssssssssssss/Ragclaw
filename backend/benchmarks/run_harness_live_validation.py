@@ -26,6 +26,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from benchmarks.storage_layout import harness_live_output_path
+from benchmarks.execution_metadata import attach_execution_metadata
 from benchmarks.local_http_fixture import serve_local_http_routes, substitute_web_base_url
 from src.backend.capabilities import build_tools_and_registry
 from src.backend.capabilities.types import CapabilityResult
@@ -964,6 +965,15 @@ async def run_live_validation(
             "case_file": str(CASE_FILE),
         },
     }
+    payload = attach_execution_metadata(
+        payload,
+        config={
+            "case_ids": list(case_ids or []),
+            "tag": tag,
+            "limit": limit,
+            "case_file": str(CASE_FILE),
+        },
+    )
     if output_path is not None:
         path = Path(output_path)
         path.parent.mkdir(parents=True, exist_ok=True)

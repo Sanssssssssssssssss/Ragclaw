@@ -59,6 +59,9 @@ class FakeSessionManager:
         run_meta=None,
         checkpoint_events=None,
         hitl_events=None,
+        message_id=None,
+        turn_id=None,
+        run_id=None,
     ) -> dict[str, object]:
         payload = {
             "session_id": session_id,
@@ -70,6 +73,9 @@ class FakeSessionManager:
             "run_meta": run_meta,
             "checkpoint_events": checkpoint_events,
             "hitl_events": hitl_events,
+            "message_id": message_id,
+            "turn_id": turn_id,
+            "run_id": run_id,
         }
         self.saved_messages.append(payload)
         return payload

@@ -34,6 +34,14 @@ src/frontend/output/
 !.vscode/extensions.json
 .idea/
 *.log
+artifacts/
+artifacts/downloads/
+artifacts/postgres16*/
+artifacts/postgres_logs/
+artifacts/pgdata*/
+artifacts/traces/
+artifacts/load/
+artifacts/coverage/
 AGENTS.md
 1.py
 backend/temp_*.txt

@@ -47,6 +47,7 @@ class HarnessLiveValidationTests(unittest.IsolatedAsyncioTestCase):
             stored = json.loads(output_path.read_text(encoding="utf-8"))
             self.assertEqual(stored["summary"]["total_cases"], 1)
             self.assertEqual(stored["summary"]["passed_cases"], 1)
+            self.assertIn("execution_metadata", stored)
             self.assertEqual(payload["cases"][0]["case_id"], "live_direct_answer")
 
     async def test_live_validation_queue_case_smoke(self) -> None:

@@ -95,6 +95,11 @@ async def rename_session(session_id: str, payload: RenameSessionRequest) -> dict
     return _session_manager_or_raise().rename_session(session_id, payload.title)
 
 
+@router.post("/sessions/{session_id}/archive")
+async def archive_session(session_id: str) -> dict[str, Any]:
+    return _session_manager_or_raise().archive_session(session_id)
+
+
 @router.delete("/sessions/{session_id}")
 async def delete_session(session_id: str) -> dict[str, bool]:
     _session_manager_or_raise().delete_session(session_id)

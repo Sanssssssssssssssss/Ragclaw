@@ -11,6 +11,7 @@ if str(BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(BACKEND_DIR))
 
 from src.backend.knowledge.indexer import KnowledgeIndexer
+from src.backend.knowledge.orchestrator import KnowledgeOrchestrator
 from src.backend.knowledge.opendataloader_pdf import _build_pdf_chunks
 from src.backend.knowledge.orchestrator import knowledge_orchestrator
 from src.backend.knowledge.types import Evidence, HybridRetrievalResult
@@ -23,6 +24,7 @@ class KnowledgeMultiformatIndexingTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self) -> None:
         self.indexer = KnowledgeIndexer()
         self.indexer.configure(BACKEND_DIR)
+        knowledge_orchestrator.astream = KnowledgeOrchestrator.astream.__get__(knowledge_orchestrator, KnowledgeOrchestrator)
 
     def test_pdf_chunks_include_page_metadata(self) -> None:
         payload = json.loads(FIXTURE_PATH.read_text(encoding="utf-8"))

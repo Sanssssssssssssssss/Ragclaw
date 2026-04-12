@@ -1,0 +1,90 @@
+{
+  "title": "Ragclaw Observability",
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "10s",
+  "panels": [
+    {
+      "type": "stat",
+      "title": "Active Runs",
+      "gridPos": { "h": 4, "w": 6, "x": 0, "y": 0 },
+      "targets": [
+        { "expr": "ragclaw_active_runs", "refId": "A" }
+      ]
+    },
+    {
+      "type": "stat",
+      "title": "Pending HITL",
+      "gridPos": { "h": 4, "w": 6, "x": 6, "y": 0 },
+      "targets": [
+        { "expr": "ragclaw_pending_hitl", "refId": "A" }
+      ]
+    },
+    {
+      "type": "stat",
+      "title": "Run Error Rate (5m)",
+      "gridPos": { "h": 4, "w": 6, "x": 12, "y": 0 },
+      "targets": [
+        {
+          "expr": "sum(rate(ragclaw_runs_failed_total[5m])) / clamp_min(sum(rate(ragclaw_runs_started_total[5m])), 1e-9)",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "type": "stat",
+      "title": "Retrieval Calls (5m)",
+      "gridPos": { "h": 4, "w": 6, "x": 18, "y": 0 },
+      "targets": [
+        { "expr": "sum(rate(ragclaw_retrieval_calls_total[5m]))", "refId": "A" }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Run Throughput",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 4 },
+      "targets": [
+        { "expr": "sum(rate(ragclaw_runs_started_total[1m]))", "legendFormat": "started", "refId": "A" },
+        { "expr": "sum(rate(ragclaw_runs_completed_total[1m]))", "legendFormat": "completed", "refId": "B" },
+        { "expr": "sum(rate(ragclaw_runs_failed_total[1m]))", "legendFormat": "failed", "refId": "C" }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Run Latency",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 4 },
+      "targets": [
+        { "expr": "histogram_quantile(0.5, sum by (le) (rate(ragclaw_run_latency_seconds_bucket[5m])))", "legendFormat": "p50", "refId": "A" },
+        { "expr": "histogram_quantile(0.95, sum by (le) (rate(ragclaw_run_latency_seconds_bucket[5m])))", "legendFormat": "p95", "refId": "B" },
+        { "expr": "histogram_quantile(0.99, sum by (le) (rate(ragclaw_run_latency_seconds_bucket[5m])))", "legendFormat": "p99", "refId": "C" }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Queue Wait",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 12 },
+      "targets": [
+        { "expr": "histogram_quantile(0.5, sum by (le) (rate(ragclaw_queue_wait_seconds_bucket[5m])))", "legendFormat": "p50", "refId": "A" },
+        { "expr": "histogram_quantile(0.95, sum by (le) (rate(ragclaw_queue_wait_seconds_bucket[5m])))", "legendFormat": "p95", "refId": "B" }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Tool Calls By Status",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 12 },
+      "targets": [
+        { "expr": "sum by (tool, status) (rate(ragclaw_tool_calls_total[5m]))", "legendFormat": "{{tool}} {{status}}", "refId": "A" }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Tokens And Cost",
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 20 },
+      "targets": [
+        { "expr": "sum by (model, type) (rate(ragclaw_tokens_total[5m]))", "legendFormat": "{{model}} {{type}}", "refId": "A" },
+        { "expr": "sum(rate(ragclaw_cost_usd_total[5m]))", "legendFormat": "usd/sec", "refId": "B" }
+      ]
+    }
+  ]
+}

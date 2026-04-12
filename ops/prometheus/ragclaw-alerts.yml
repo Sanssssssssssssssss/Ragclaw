@@ -1,0 +1,47 @@
+groups:
+  - name: ragclaw-runtime
+    rules:
+      - alert: RagclawHighRunErrorRate
+        expr: sum(rate(ragclaw_runs_failed_total[10m])) / clamp_min(sum(rate(ragclaw_runs_started_total[10m])), 1e-9) > 0.05
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: Ragclaw run error rate is elevated
+          description: More than 5% of runs have failed over the last 10 minutes.
+
+      - alert: RagclawHighP95Latency
+        expr: histogram_quantile(0.95, sum by (le) (rate(ragclaw_run_latency_seconds_bucket[10m]))) > 15
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: Ragclaw p95 run latency is high
+          description: The p95 run latency has been above 15 seconds for 15 minutes.
+
+      - alert: RagclawHighQueueWait
+        expr: histogram_quantile(0.95, sum by (le) (rate(ragclaw_queue_wait_seconds_bucket[10m]))) > 5
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: Ragclaw queue wait is high
+          description: The p95 queue wait has exceeded 5 seconds for 10 minutes.
+
+      - alert: RagclawActiveRunsStuck
+        expr: ragclaw_active_runs > 20
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: Ragclaw active runs remain elevated
+          description: Active runs have stayed above 20 for more than 15 minutes.
+
+      - alert: RagclawPendingHitlBacklog
+        expr: ragclaw_pending_hitl > 10
+        for: 10m
+        labels:
+          severity: critical
+        annotations:
+          summary: Ragclaw HITL backlog is growing
+          description: More than 10 HITL requests have remained pending for 10 minutes.

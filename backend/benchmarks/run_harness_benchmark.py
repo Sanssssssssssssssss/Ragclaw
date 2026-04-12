@@ -14,6 +14,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from benchmarks.harness_benchmark_lib import run_selected_benchmark
+from benchmarks.execution_metadata import attach_execution_metadata
 from benchmarks.storage_layout import harness_output_path
 
 
@@ -42,7 +43,7 @@ async def run_benchmark(
     use_llm_judge: bool = True,
     use_live_llm_decisions: bool = True,
 ) -> dict:
-    return await run_selected_benchmark(
+    payload = await run_selected_benchmark(
         suite=suite,
         extra_case_files=case_files,
         tag=tag,
@@ -51,6 +52,20 @@ async def run_benchmark(
         use_llm_judge=use_llm_judge,
         use_live_llm_decisions=use_live_llm_decisions,
     )
+    enriched = attach_execution_metadata(
+        payload,
+        config={
+            "suite": suite,
+            "tag": tag,
+            "limit": limit,
+            "use_llm_judge": use_llm_judge,
+            "use_live_llm_decisions": use_live_llm_decisions,
+            "extra_case_files": list(case_files or []),
+        },
+    )
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text(json.dumps(enriched, ensure_ascii=False, indent=2), encoding="utf-8")
+    return enriched
 
 
 def main(argv: list[str] | None = None) -> int:

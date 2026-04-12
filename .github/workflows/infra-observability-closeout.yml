@@ -1,0 +1,112 @@
+name: Infra Observability Closeout
+
+on:
+  push:
+    branches:
+      - main
+      - "codex/**"
+  pull_request:
+
+jobs:
+  local-first-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Create virtual environment
+        shell: powershell
+        run: |
+          python -m venv backend/.venv
+          backend\.venv\Scripts\python.exe -m pip install --upgrade pip
+          backend\.venv\Scripts\python.exe -m pip install -r backend/requirements.txt
+
+      - name: Full backend test discovery
+        shell: powershell
+        run: |
+          backend\.venv\Scripts\python.exe -m unittest discover backend/tests
+
+      - name: Focused observability validation
+        shell: powershell
+        run: |
+          powershell -ExecutionPolicy Bypass -File .\backend\scripts\dev\validate-observability.ps1 -SkipStudioSmoke
+
+      - name: Harness benchmark smoke
+        shell: powershell
+        run: |
+          $artifactDir = "artifacts\ci\local"
+          New-Item -ItemType Directory -Force $artifactDir | Out-Null
+          backend\.venv\Scripts\python.exe backend\benchmarks\run_harness_benchmark.py --suite contract --limit 3 --deterministic-only --stub-decisions --output (Join-Path $artifactDir "harness_benchmark.json")
+
+      - name: Harness live validation smoke
+        shell: powershell
+        run: |
+          $artifactDir = "artifacts\ci\local"
+          New-Item -ItemType Directory -Force $artifactDir | Out-Null
+          backend\.venv\Scripts\python.exe backend\benchmarks\run_harness_live_validation.py --limit 3 --output (Join-Path $artifactDir "live_validation.json")
+
+      - name: Upload local-first artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: local-first-artifacts
+          path: artifacts/ci/local
+          if-no-files-found: warn
+
+  external-matrix-linux:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    env:
+      RAGCLAW_TEST_POSTGRES_DSN: postgresql://postgres@127.0.0.1:5432/postgres
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Create virtual environment
+        run: |
+          python -m venv backend/.venv
+          backend/.venv/bin/python -m pip install --upgrade pip
+          backend/.venv/bin/python -m pip install -r backend/requirements.txt
+
+      - name: Postgres repository parity tests
+        run: |
+          backend/.venv/bin/python -m unittest backend.tests.test_postgres_trace_store backend.tests.test_postgres_session_repository backend.tests.test_runtime_backends
+
+      - name: Session repository parity smoke
+        run: |
+          mkdir -p artifacts/ci/external
+          backend/.venv/bin/python backend/benchmarks/run_session_repository_parity.py --postgres-dsn "$RAGCLAW_TEST_POSTGRES_DSN" --output artifacts/ci/external/session_repository_parity.json
+
+      - name: External infrastructure matrix
+        run: |
+          mkdir -p artifacts/ci/external
+          if docker version >/dev/null 2>&1; then
+            backend/.venv/bin/python backend/benchmarks/run_external_infra_matrix.py --mode docker --require-external-infra --postgres-dsn "$RAGCLAW_TEST_POSTGRES_DSN" --output artifacts/ci/external/external_infra_matrix.json
+          else
+            backend/.venv/bin/python backend/benchmarks/run_external_infra_matrix.py --postgres-dsn "$RAGCLAW_TEST_POSTGRES_DSN" --output artifacts/ci/external/external_infra_matrix.json
+          fi
+
+      - name: Upload external matrix artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: external-matrix-artifacts
+          path: artifacts/ci/external
+          if-no-files-found: warn

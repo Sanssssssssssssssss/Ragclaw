@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -13,9 +14,9 @@ from src.backend.decision.prompt_builder import build_knowledge_system_prompt
 from src.backend.decision.skill_gate import SkillDecision, SkillGate
 from src.backend.knowledge import knowledge_orchestrator
 from src.backend.knowledge.memory_indexer import memory_indexer
+from src.backend.runtime.backends import RuntimeBackends, build_runtime_backends
 from src.backend.runtime.config import get_settings, runtime_config
 from src.backend.runtime.execution_support import HarnessExecutionSupport
-from src.backend.runtime.session_manager import SessionManager
 
 KNOWLEDGE_SKILL_PATTERNS = (
     re.compile(r"知识库"),
@@ -128,7 +129,9 @@ def _compact_guard_text(text: str) -> str:
 class AgentManager:
     def __init__(self) -> None:
         self.base_dir: Path | None = None
-        self.session_manager: SessionManager | None = None
+        self.session_manager = None
+        self.runtime_backends: RuntimeBackends | None = None
+        self.hitl_repository = None
         self.tools = []
         self._capability_registry: CapabilityRegistry | None = None
         self._lightweight_router = LightweightLLMRouter()
@@ -137,12 +140,15 @@ class AgentManager:
 
     def initialize(self, base_dir: Path) -> None:
         self.base_dir = base_dir
-        self.session_manager = SessionManager(base_dir)
+        self.runtime_backends = build_runtime_backends(
+            base_dir,
+            now_factory=lambda: datetime.now(timezone.utc).isoformat(),
+        )
+        self.session_manager = self.runtime_backends.session_repository
+        self.hitl_repository = self.runtime_backends.hitl_repository
         self.tools, self._capability_registry = build_tools_and_registry(base_dir)
-        from src.backend.orchestration.checkpointing import checkpoint_store  # pylint: disable=import-outside-toplevel
         from src.backend.context.store import context_store  # pylint: disable=import-outside-toplevel
 
-        checkpoint_store.configure_for_base_dir(base_dir)
         context_store.configure_for_base_dir(base_dir)
         knowledge_orchestrator.configure(base_dir, self._build_chat_model)
         self._harness_runtime = None
@@ -153,7 +159,7 @@ class AgentManager:
         if self._harness_runtime is None:
             from src.backend.runtime.runtime import build_harness_runtime  # pylint: disable=import-outside-toplevel
 
-            self._harness_runtime = build_harness_runtime(self.base_dir)
+            self._harness_runtime = build_harness_runtime(self.base_dir, backends=self.runtime_backends)
         return self._harness_runtime
 
     def create_harness_executor(
@@ -1246,6 +1252,7 @@ class AgentManager:
         runtime = self.get_harness_runtime()
         executor = self.create_harness_executor()
         accumulator = LegacyChatAccumulator()
+        last_done_signature: tuple[str, str] | None = None
         async for harness_event in runtime.run_with_executor(
             user_message=message,
             session_id=None,
@@ -1255,7 +1262,18 @@ class AgentManager:
             suppress_failures=True,
         ):
             for event_type, data in accumulator.consume(harness_event):
-                yield {"type": event_type, **data}
+                if event_type.startswith("checkpoint_") or event_type.startswith("hitl_"):
+                    continue
+                payload = {"type": event_type, **data}
+                if event_type == "done":
+                    signature = (
+                        str(payload.get("content", "") or ""),
+                        str(payload.get("usage", "") or ""),
+                    )
+                    if signature == last_done_signature:
+                        continue
+                    last_done_signature = signature
+                yield payload
 
     async def generate_title(self, first_user_message: str) -> str:
         prompt = (

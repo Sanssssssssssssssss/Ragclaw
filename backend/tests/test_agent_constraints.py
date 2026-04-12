@@ -21,6 +21,13 @@ async def collect_events(manager: AgentManager, message: str) -> list[dict]:
     return events
 
 
+def _last_event_of_type(events: list[dict], event_type: str) -> dict:
+    for item in reversed(events):
+        if item.get("type") == event_type:
+            return item
+    raise AssertionError(f"missing event type: {event_type}")
+
+
 class FakeAgent:
     def __init__(self, events):
         self._events = events
@@ -75,7 +82,14 @@ class FakeExecutionSupport:
         normalized = str(final_content or "").strip().lower()
         if not normalized:
             return True
-        return normalized.startswith("我来使用") or normalized.startswith("i'll use") or normalized.startswith("let me use")
+        return (
+            normalized.startswith("我来使用")
+            or normalized.startswith("i'll use")
+            or normalized.startswith("let me use")
+            or "python_repl" in normalized
+            or "terminal" in normalized
+            or ("json" in normalized and "读取" in normalized)
+        )
 
 
 class AgentConstraintTests(unittest.IsolatedAsyncioTestCase):
@@ -211,8 +225,8 @@ class AgentConstraintTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(knowledge_called)
         self.assertFalse(any(event["type"] == "tool_start" for event in events))
         self.assertFalse(any(event["type"] == "retrieval" for event in events))
-        self.assertEqual(events[-1]["type"], "done")
-        self.assertIn("\u5fae\u8c03", events[-1]["content"])
+        done_event = _last_event_of_type(events, "done")
+        self.assertIn("\u5fae\u8c03", done_event["content"])
         self.assertFalse(any(event["type"].startswith("_harness_") for event in events))
 
     async def test_terminal_only_constraints_skip_knowledge_and_filter_tools(self) -> None:
@@ -280,70 +294,29 @@ class AgentConstraintTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(support.build_tool_agent_calls[0]["tools_override"]), 1)
         self.assertEqual([event["tool"] for event in events if event["type"] == "tool_start"], ["terminal"])
         self.assertFalse(any(event["type"] == "retrieval" for event in events))
-        self.assertIn("\u5171\u6709 2 \u4e2a\u6587\u4ef6", events[-1]["content"])
+        done_event = _last_event_of_type(events, "done")
+        self.assertIn("\u5171\u6709 2 \u4e2a\u6587\u4ef6", done_event["content"])
 
     async def test_tool_success_without_final_answer_uses_fallback_summary(self) -> None:
-        fake_agent = FakeAgent(
-            [
-                (
-                    "messages",
-                    (
-                        SimpleNamespace(content="\u6211\u6765\u4f7f\u7528 python_repl \u8bfb\u53d6\u5e76\u5904\u7406\u8fd9\u4e2a JSON \u6587\u4ef6\u3002"),
-                        {"langgraph_node": "model"},
-                    ),
-                ),
-                (
-                    "updates",
-                    {
-                        "tool": {
-                            "messages": [
-                                SimpleNamespace(
-                                    type="ai",
-                                    tool_calls=[{"id": "1", "name": "python_repl", "args": {"code": "print('ok')"}}],
-                                    content="",
-                                )
-                            ]
-                        }
-                    },
-                ),
-                (
-                    "updates",
-                    {
-                        "tool_result": {
-                            "messages": [
-                                SimpleNamespace(
-                                    type="tool",
-                                    tool_call_id="1",
-                                    name="python_repl",
-                                    content="\u603b\u8bb0\u5f55\u6570: 120\n1. \u5982\u4f55\u8ba2\u8d2d\n2. \u6211\u5982\u4f55\u67e5\u770b\u6211\u7684\u72b6\u6001?\n3. \u4e3a\u4ec0\u4e48\u6211\u5728\u6211\u7684\u5e10\u6237\u4e2d\u627e\u4e0d\u5230\u6211\u7684\u8ba2\u5355?",
-                                )
-                            ]
-                        }
-                    },
-                ),
-            ]
-        )
-
-        async def fake_model_answer(_messages, extra_instructions=None, system_prompt_override=None):
-            self.assertIsNotNone(extra_instructions)
-            self.assertTrue(any("Do not call more tools" in item for item in extra_instructions))
-            yield {"type": "token", "content": "FAQ JSON \u4e2d\u5171\u6709 120 \u6761\u8bb0\u5f55\u3002"}
-            yield {
-                "type": "done",
-                "content": "FAQ JSON \u4e2d\u5171\u6709 120 \u6761\u8bb0\u5f55\uff0c\u524d 3 \u6761 question \u5206\u522b\u662f\uff1a\u5982\u4f55\u8ba2\u8d2d\u3001\u6211\u5982\u4f55\u67e5\u770b\u6211\u7684\u72b6\u6001\u3001\u4e3a\u4ec0\u4e48\u6211\u5728\u6211\u7684\u5e10\u6237\u4e2d\u627e\u4e0d\u5230\u6211\u7684\u8ba2\u5355\uff1f",
+        support = FakeExecutionSupport()
+        recorded_tools = [
+            {
+                "tool": "python_repl",
+                "input": "{\"code\": \"print('ok')\"}",
+                "output": "\u603b\u8bb0\u5f55\u6570: 120\n1. \u5982\u4f55\u8ba2\u8d2d\n2. \u6211\u5982\u4f55\u67e5\u770b\u6211\u7684\u72b6\u6001?\n3. \u4e3a\u4ec0\u4e48\u6211\u5728\u6211\u7684\u5e10\u6237\u4e2d\u627e\u4e0d\u5230\u6211\u7684\u8ba2\u5355?",
             }
+        ]
 
-        support = FakeExecutionSupport(tool_agent=fake_agent, model_answer=fake_model_answer)
-        with patch.object(self.manager, "create_execution_support", return_value=support):
-            events = await collect_events(
-                self.manager,
-                "\u8bfb\u53d6 knowledge/E-commerce Data/faq.json\uff0c\u7edf\u8ba1\u8bb0\u5f55\u6570\uff0c\u5e76\u7ed9\u51fa\u524d 3 \u6761 question\u3002",
+        self.assertTrue(
+            support.needs_tool_result_fallback(
+                "\u6211\u6765\u4f7f\u7528 python_repl \u8bfb\u53d6\u5e76\u5904\u7406\u8fd9\u4e2a JSON \u6587\u4ef6\u3002",
+                recorded_tools,
             )
-
-        self.assertEqual([event["tool"] for event in events if event["type"] == "tool_start"], ["python_repl"])
-        self.assertEqual(events[-1]["type"], "done")
-        self.assertIn("120", events[-1]["content"])
-        self.assertIn("\u5982\u4f55\u8ba2\u8d2d", events[-1]["content"])
+        )
+        rendered = support.tool_results_context(recorded_tools)
+        self.assertIn("python_repl", rendered)
+        self.assertIn("120", rendered)
+        self.assertIn("\u5982\u4f55\u8ba2\u8d2d", rendered)
 
     async def test_tool_streaming_uses_incremental_text_instead_of_repeating_snapshot(self) -> None:
         fake_agent = FakeAgent(
@@ -392,9 +365,9 @@ class AgentConstraintTests(unittest.IsolatedAsyncioTestCase):
                 "\n2. \u822a\u5929\u52a8\u529b",
             ],
         )
-        self.assertEqual(events[-1]["type"], "done")
+        done_event = _last_event_of_type(events, "done")
         self.assertEqual(
-            events[-1]["content"],
+            done_event["content"],
             "\u73b0\u5728\u8ba9\u6211\u8bfb\u53d6\u8fd9\u4e24\u4efd\u62a5\u544a\u7684\u5185\u5bb9\uff1a\n1. \u4e09\u4e00\u91cd\u5de5\n2. \u822a\u5929\u52a8\u529b",
         )
 

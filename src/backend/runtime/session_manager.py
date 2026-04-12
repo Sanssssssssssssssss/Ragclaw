@@ -7,8 +7,8 @@ from pathlib import Path
 from typing import Any
 
 
-class SessionManager:
-    """Returns persisted session records from filesystem-backed methods and manages chat session storage."""
+class FsSessionRepository:
+    """Filesystem-backed session repository used by the default local mode."""
 
     def __init__(self, base_dir: Path) -> None:
         """Returns no value from one base directory path input and initializes session storage directories."""
@@ -23,6 +23,11 @@ class SessionManager:
         """Returns one session JSON path from a session id input and resolves the on-disk record location."""
 
         return self.sessions_dir / f"{session_id}.json"
+
+    def _archived_session_path(self, session_id: str) -> Path:
+        """Returns one archived session JSON path from a session id input and resolves the archive location."""
+
+        return self.archive_dir / f"{session_id}.json"
 
     def _default_record(self, session_id: str, title: str = "New Session") -> dict[str, Any]:
         """Returns one default session record from session id and title inputs and creates the initial session payload."""
@@ -44,6 +49,9 @@ class SessionManager:
         """Returns one session record from a session id input and normalizes legacy or missing session files."""
 
         path = self._session_path(session_id)
+        archived_path = self._archived_session_path(session_id)
+        if not path.exists() and archived_path.exists():
+            path = archived_path
         if not path.exists():
             record = self._default_record(session_id)
             self._write_session(record)
@@ -65,6 +73,7 @@ class SessionManager:
         raw.setdefault("excluded_run_ids", [])
         raw.setdefault("turn_actions", [])
         raw.setdefault("messages", [])
+        raw.setdefault("archived_at", None)
         return raw
 
     def _write_session(self, record: dict[str, Any]) -> None:
@@ -72,10 +81,19 @@ class SessionManager:
 
         session_id = str(record["id"])
         record["updated_at"] = time.time()
-        self._session_path(session_id).write_text(
+        target = self._archived_session_path(session_id) if record.get("archived_at") else self._session_path(session_id)
+        target.write_text(
             json.dumps(record, ensure_ascii=False, indent=2),
             encoding="utf-8",
         )
+        if target.parent == self.archive_dir:
+            active_path = self._session_path(session_id)
+            if active_path.exists():
+                active_path.unlink()
+        else:
+            archived_path = self._archived_session_path(session_id)
+            if archived_path.exists():
+                archived_path.unlink()
 
     def create_session(self, title: str = "New Session") -> dict[str, Any]:
         """Returns one created session record from an optional title input and persists a brand-new session."""
@@ -298,12 +316,24 @@ class SessionManager:
 
         return self.rename_session(session_id, title)
 
+    def archive_session(self, session_id: str) -> dict[str, Any]:
+        """Returns one archived session record from a session id input and moves the record out of the active list."""
+
+        record = self._read_session_file(session_id)
+        if not record.get("archived_at"):
+            record["archived_at"] = time.time()
+            self._write_session(record)
+        return record
+
     def delete_session(self, session_id: str) -> None:
         """Returns no value from a session id input and removes the stored session file when it exists."""
 
         path = self._session_path(session_id)
         if path.exists():
             path.unlink()
+        archived_path = self._archived_session_path(session_id)
+        if archived_path.exists():
+            archived_path.unlink()
 
     def compress_history(self, session_id: str, summary: str, n_messages: int) -> dict[str, int]:
         """Returns archive counts from session id, summary, and count inputs and compresses older chat history."""
@@ -340,3 +370,12 @@ class SessionManager:
         """Returns one compressed summary string from a session id input and reads archived conversation context."""
 
         return self._read_session_file(session_id).get("compressed_context", "")
+
+
+class SessionManager(FsSessionRepository):
+    """Backward-compatible alias preserving the historical SessionManager name."""
+
+    pass
+
+
+__all__ = ["FsSessionRepository", "SessionManager"]

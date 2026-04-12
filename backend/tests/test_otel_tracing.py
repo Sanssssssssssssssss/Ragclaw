@@ -8,6 +8,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
+from fastapi.testclient import TestClient
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
 BACKEND_DIR = Path(__file__).resolve().parents[1]
@@ -399,6 +400,27 @@ class OTelTracingTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("checkpoint.resume", span_names)
         self.assertIn("hitl.request", span_names)
         self.assertIn("hitl.decision", span_names)
+
+    async def test_http_request_span_is_emitted(self) -> None:
+        from src.backend.api import app as backend_app
+
+        with (
+            patch.object(backend_app, "refresh_snapshot"),
+            patch.object(backend_app.agent_manager, "initialize"),
+            patch.object(backend_app.memory_indexer, "configure"),
+            patch.object(backend_app.memory_indexer, "rebuild_index"),
+            patch.object(backend_app.knowledge_indexer, "configure"),
+            patch.object(backend_app, "_schedule_knowledge_warm_start"),
+        ):
+            with TestClient(backend_app.app) as client:
+                response = client.get("/health")
+
+        self.assertEqual(response.status_code, 200)
+        spans = self.exporter.get_finished_spans()
+        request_span = next(span for span in spans if span.name == "http.request")
+        self.assertEqual(request_span.attributes["http.method"], "GET")
+        self.assertEqual(request_span.attributes["url.path"], "/health")
+        self.assertEqual(request_span.attributes["http.status_code"], 200)
 
 
 if __name__ == "__main__":

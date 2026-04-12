@@ -10,10 +10,12 @@ from typing import Any, AsyncIterator, Callable
 from uuid import uuid4
 
 from src.backend.capabilities.governance import CapabilityBudgetPolicy, CapabilityGovernor
+from src.backend.observability.metrics import record_harness_event
 from src.backend.observability.otel_spans import set_span_attributes, with_observation
-from src.backend.observability.trace_store import RunTracePaths, RunTraceStore
+from src.backend.observability.trace_store import RunTracePaths
 from src.backend.observability.types import HarnessEvent, HarnessEventName, RunMetadata, RunOutcome
-from src.backend.runtime.policy import SessionSerialQueue
+from src.backend.runtime.backends import QueueBackend, RunTraceRepository, RuntimeBackends, build_runtime_backends
+from src.backend.runtime.policy import QueueLease, QueueLeaseLostError
 
 
 def _utc_now_iso() -> str:
@@ -26,8 +28,8 @@ def _default_run_id() -> str:
 
 @dataclass(frozen=True)
 class RuntimeDependencies:
-    trace_store: RunTraceStore
-    queue: SessionSerialQueue
+    trace_store: RunTraceRepository
+    queue: QueueBackend
     capability_budget_policy: CapabilityBudgetPolicy = field(default_factory=CapabilityBudgetPolicy)
     now_factory: Callable[[], str] = _utc_now_iso
     run_id_factory: Callable[[], str] = _default_run_id
@@ -78,6 +80,8 @@ class HarnessRuntime:
         self._run_queues: dict[str, asyncio.Queue[HarnessEvent | None]] = {}
         self._started_events: dict[str, HarnessEvent] = {}
         self._run_governors: dict[str, CapabilityGovernor] = {}
+        self._run_leases: dict[str, QueueLease] = {}
+        self._run_lease_errors: dict[str, QueueLeaseLostError] = {}
 
     def now(self) -> str:
         return self._deps.now_factory()
@@ -149,6 +153,7 @@ class HarnessRuntime:
         return state.segment_index
 
     def record_event(self, run_id: str, name: HarnessEventName, payload: dict[str, Any]) -> HarnessEvent:
+        self._raise_if_lease_lost(run_id)
         event = HarnessEvent(
             event_id=self._deps.event_id_factory(),
             run_id=run_id,
@@ -157,6 +162,7 @@ class HarnessRuntime:
             payload=dict(payload),
         )
         self._deps.trace_store.append_event(event)
+        record_harness_event(event)
         return event
 
     def record_internal_event(self, run_id: str, name: HarnessEventName, payload: dict[str, Any]) -> HarnessEvent:
@@ -170,12 +176,42 @@ class HarnessRuntime:
             raise KeyError(f"unknown capability governor for run_id={run_id}")
         return governor
 
+    def _raise_if_lease_lost(self, run_id: str) -> None:
+        error = self._run_lease_errors.get(run_id)
+        if error is not None:
+            raise error
+
+    async def _ensure_lease_active(self, run_id: str) -> None:
+        self._raise_if_lease_lost(run_id)
+        lease = self._run_leases.get(run_id)
+        if lease is None or not lease.session_id:
+            return
+        is_active = await self._deps.queue.is_active(lease)
+        if is_active:
+            return
+        error = self._run_lease_errors.setdefault(
+            run_id,
+            QueueLeaseLostError(
+                f"Lease is no longer active for run_id={run_id} session_id={lease.session_id} lease_id={lease.lease_id}"
+            ),
+        )
+        raise error
+
+    def _cleanup_run_resources(self, run_id: str) -> None:
+        self._run_states.pop(run_id, None)
+        self._started_events.pop(run_id, None)
+        self._run_governors.pop(run_id, None)
+        self._run_leases.pop(run_id, None)
+        self._run_lease_errors.pop(run_id, None)
+
     async def emit(
         self,
         handle: RuntimeRunHandle,
         name: HarnessEventName,
         payload: dict[str, Any],
     ) -> HarnessEvent:
+        if name != "run.queued":
+            await self._ensure_lease_active(handle.run_id)
         event = self.record_event(handle.run_id, name, payload)
         self._apply_event_to_state(handle.run_id, name, payload)
         queue = self._run_queues.get(handle.run_id)
@@ -252,9 +288,7 @@ class HarnessRuntime:
             orchestration_engine=state.orchestration_engine,
         )
         self._deps.trace_store.finalize_run(handle.run_id, outcome)
-        self._run_states.pop(handle.run_id, None)
-        self._started_events.pop(handle.run_id, None)
-        self._run_governors.pop(handle.run_id, None)
+        self._cleanup_run_resources(handle.run_id)
         return event, outcome
 
     def fail_run(self, handle: RuntimeRunHandle, *, error_message: str) -> tuple[HarnessEvent, RunOutcome]:
@@ -292,9 +326,7 @@ class HarnessRuntime:
             orchestration_engine=state.orchestration_engine,
         )
         self._deps.trace_store.finalize_run(handle.run_id, outcome)
-        self._run_states.pop(handle.run_id, None)
-        self._started_events.pop(handle.run_id, None)
-        self._run_governors.pop(handle.run_id, None)
+        self._cleanup_run_resources(handle.run_id)
         return event, outcome
 
     async def run_with_executor(
@@ -348,7 +380,28 @@ class HarnessRuntime:
             )
 
             async def _drive_execution() -> Exception | None:
-                lease = await self._deps.queue.acquire(session_id)
+                lease = await self._deps.queue.acquire(session_id, owner_id=handle.run_id)
+                self._run_leases[handle.run_id] = lease
+                lease_monitor_stop = asyncio.Event()
+
+                async def _monitor_lease() -> None:
+                    if lease.session_id is None or lease.heartbeat_interval_seconds is None:
+                        return
+                    while not lease_monitor_stop.is_set():
+                        try:
+                            await asyncio.wait_for(
+                                lease_monitor_stop.wait(),
+                                timeout=lease.heartbeat_interval_seconds,
+                            )
+                            return
+                        except TimeoutError:
+                            try:
+                                await lease.heartbeat()
+                            except QueueLeaseLostError as exc:
+                                self._run_lease_errors.setdefault(handle.run_id, exc)
+                                return
+
+                heartbeat_task = asyncio.create_task(_monitor_lease())
                 try:
                     if lease.queued:
                         await self.emit(
@@ -360,6 +413,7 @@ class HarnessRuntime:
                             },
                         )
                         await lease.wait_until_active(self._deps.now_factory)
+                        self._run_leases[handle.run_id] = lease
                         await self.emit(
                             handle,
                             "run.dequeued",
@@ -368,24 +422,34 @@ class HarnessRuntime:
                                 "queued_at": lease.queued_at,
                                 "dequeued_at": lease.dequeued_at,
                                 "active_started_at": lease.dequeued_at,
+                                "lease_id": lease.lease_id,
+                                "fencing_token": lease.fencing_token,
                             },
                         )
 
+                    await self._ensure_lease_active(handle.run_id)
                     await executor.execute(
                         self,
                         handle,
                         message=user_message,
                         history=list(history or []),
                     )
+                    await self._ensure_lease_active(handle.run_id)
                     completion_event, _outcome = self.complete_run(handle)
                     event_queue.put_nowait(completion_event)
                     return None
+                except QueueLeaseLostError as exc:
+                    self._run_lease_errors.setdefault(handle.run_id, exc)
+                    self._cleanup_run_resources(handle.run_id)
+                    return exc
                 except Exception as exc:
                     failure_event, _outcome = self.fail_run(handle, error_message=str(exc) or "unknown error")
                     event_queue.put_nowait(failure_event)
                     return exc
                 finally:
-                    await self._deps.queue.release(session_id)
+                    lease_monitor_stop.set()
+                    await heartbeat_task
+                    await self._deps.queue.release(lease)
                     self._run_queues.pop(handle.run_id, None)
                     event_queue.put_nowait(None)
 
@@ -407,14 +471,11 @@ class HarnessRuntime:
                 self._run_queues.pop(handle.run_id, None)
 
 
-def build_harness_runtime(base_dir: Path) -> HarnessRuntime:
-    from src.backend.orchestration.checkpointing import checkpoint_store  # pylint: disable=import-outside-toplevel
-
-    checkpoint_store.configure_for_base_dir(base_dir)
-    runs_dir = Path(base_dir) / "storage" / "runs"
+def build_harness_runtime(base_dir: Path, *, backends: RuntimeBackends | None = None) -> HarnessRuntime:
+    runtime_backends = backends or build_runtime_backends(base_dir, now_factory=_utc_now_iso)
     return HarnessRuntime(
         RuntimeDependencies(
-            trace_store=RunTraceStore(runs_dir),
-            queue=SessionSerialQueue(_utc_now_iso),
+            trace_store=runtime_backends.trace_repository,
+            queue=runtime_backends.queue_backend,
         )
     )

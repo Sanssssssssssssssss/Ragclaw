@@ -331,6 +331,20 @@ class LangGraphCheckpointStore:
             ).fetchone()
             return self._request_from_row(row)
 
+    def list_pending_hitl(self, *, limit: int = 50) -> list[PendingHitlRequest]:
+        with self._lock:
+            rows = self._conn_or_raise().execute(
+                """
+                SELECT *
+                FROM hitl_requests
+                WHERE status = 'pending'
+                ORDER BY requested_at DESC
+                LIMIT ?
+                """,
+                (max(1, int(limit)),),
+            ).fetchall()
+            return [item for item in (self._request_from_row(row) for row in rows) if item is not None]
+
     def list_hitl_requests(self, *, thread_id: str, limit: int = 25) -> list[PendingHitlRequest]:
         with self._lock:
             rows = self._conn_or_raise().execute(

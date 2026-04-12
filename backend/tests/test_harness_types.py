@@ -41,9 +41,14 @@ class HarnessTypesTests(unittest.TestCase):
             {
                 "run_id": "run-123",
                 "session_id": "session-1",
+                "thread_id": None,
                 "user_message": "hello",
                 "source": "chat_api",
                 "started_at": "2026-04-02T12:00:00Z",
+                "orchestration_engine": "",
+                "checkpoint_id": "",
+                "resume_source": "",
+                "run_status": "fresh",
             },
         )
 

@@ -11,6 +11,9 @@ Start here:
 - [QUICKSTART.md](QUICKSTART.md)
 - [RUNBOOK.md](RUNBOOK.md)
 - [CODEX_HANDOFF.md](CODEX_HANDOFF.md)
+- [docs/ops/runbook.md](docs/ops/runbook.md)
+- [docs/ops/observability.md](docs/ops/observability.md)
+- [docs/ops/benchmarking.md](docs/ops/benchmarking.md)
 
 Environment setup:
 
@@ -28,6 +31,7 @@ Default URLs:
 - Frontend: [http://127.0.0.1:3000](http://127.0.0.1:3000)
 - Backend: [http://127.0.0.1:8015](http://127.0.0.1:8015)
 - Health: [http://127.0.0.1:8015/health](http://127.0.0.1:8015/health)
+- Metrics: [http://127.0.0.1:8015/metrics](http://127.0.0.1:8015/metrics)
 
 LangSmith Studio and OTel:
 
@@ -46,4 +50,9 @@ LangSmith Studio and OTel:
 Focused validation:
 
 - Run the observability-focused validation bundle with `.\backend\scripts\dev\validate-observability.ps1`
+- Run the repo-native local-only matrix with `.\backend\.venv\Scripts\python.exe backend\benchmarks\run_infra_runtime_matrix.py --mode local-only --output artifacts\closeout\latest\infra_runtime_matrix.json --load-runs 12 --load-concurrency 4 --same-session-runs 8 --same-session-concurrency 2 --soak-seconds 10 --soak-concurrency 4 --include-dualwrite --include-redis --postgres-dsn postgresql://postgres@127.0.0.1:35432/postgres`
+- Run the external-infra drill harness with `.\backend\.venv\Scripts\python.exe backend\benchmarks\run_external_infra_matrix.py --mode direct --allow-local-postgres-restart --postgres-dsn postgresql://postgres@127.0.0.1:35432/postgres --output artifacts\closeout\latest\external_infra_matrix.json`
+- Run filesystem-to-Postgres session parity with `.\backend\.venv\Scripts\python.exe backend\benchmarks\run_session_repository_parity.py --postgres-dsn postgresql://postgres@127.0.0.1:35432/postgres --output artifacts\closeout\latest\session_repository_parity.json`
+- The infra harnesses now always emit `machine_capabilities.json`; if Docker / Redis / Postgres controls are missing, they leave blocked artifacts instead of silently skipping drills
+- CI workflow for the split local/external matrix lives at `.github/workflows/infra-observability-closeout.yml`
 - VS Code also exposes `Studio: LangGraph dev`, `Studio: LangGraph dev (Console tracing)`, and `Observability: Focused validation`
